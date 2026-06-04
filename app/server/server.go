@@ -2,10 +2,11 @@ package server
 
 import (
 	"io"
-	"log/slog"
 	"net"
 	"os"
 	"strings"
+
+	"github.com/charmbracelet/log"
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/settings"
@@ -45,7 +46,7 @@ func Run(cfg settings.Settings) error {
 	}
 }
 
-func logFrame(logger *slog.Logger, frame wire.Frame) {
+func logFrame(logger *log.Logger, frame wire.Frame) {
 	logger.Info(
 		"received frame",
 		"type", string(frame.Type),

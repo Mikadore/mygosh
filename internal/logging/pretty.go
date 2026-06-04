@@ -31,6 +31,19 @@ type PrettyHandler struct {
 	mu     *sync.Mutex
 }
 
+func NewLogger(w io.Writer, level string, json bool) *slog.Logger {
+	if !enabledLevel(level) {
+		return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	}
+
+	parsed := parseLevel(level)
+	opts := &slog.HandlerOptions{Level: parsed}
+	if json {
+		return slog.New(slog.NewJSONHandler(w, opts))
+	}
+	return slog.New(NewPrettyHandler(w, opts))
+}
+
 func NewPrettyHandler(w io.Writer, opts *slog.HandlerOptions) *PrettyHandler {
 	var level slog.Leveler
 	if opts != nil {
@@ -40,6 +53,28 @@ func NewPrettyHandler(w io.Writer, opts *slog.HandlerOptions) *PrettyHandler {
 		w:     w,
 		level: level,
 		mu:    &sync.Mutex{},
+	}
+}
+
+func enabledLevel(level string) bool {
+	level = strings.ToUpper(strings.TrimSpace(level))
+	return level != "" && level != "NONE"
+}
+
+func parseLevel(level string) slog.Level {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "INFO":
+		return slog.LevelInfo
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	case "FATAL":
+		return slog.LevelError + 4
+	default:
+		return slog.LevelInfo
 	}
 }
 

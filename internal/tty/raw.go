@@ -11,8 +11,8 @@ import (
 )
 
 type Size struct {
-	Width	int
-	Height	int
+	Width  int
+	Height int
 }
 
 type RawTTY struct {

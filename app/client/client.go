@@ -10,12 +10,16 @@ import (
 
 	"github.com/charmbracelet/log"
 
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
+
+type ConnectArgs struct {
+	Address string
+	Command string
+}
 
 func makeAddr(addr string, port int) string {
 	_, p, err := net.SplitHostPort(addr)
@@ -26,24 +30,23 @@ func makeAddr(addr string, port int) string {
 	}
 }
 
-func Run(cfg settings.Settings) error {
-	logger := logging.NewLogger(os.Stderr, cfg.Log.Level, cfg.Log.JSON)
-	if cfg.Connect.Address == "" {
+func RunClient(cfg settings.Settings, args ConnectArgs) error {
+	if args.Address == "" {
 		return eris.New("connect address is required")
 	}
 
-	conn, err := net.Dial("tcp", makeAddr(cfg.Connect.Address, cfg.Core.Port))
+	conn, err := net.Dial("tcp", makeAddr(args.Address, cfg.Core.Port))
 	if err != nil {
-		return eris.Wrapf(err, "connect to %s", cfg.Connect.Address)
+		return eris.Wrapf(err, "connect to %s", args.Address)
 	}
 	defer conn.Close()
-	logger.Info("connected", "addr", conn.RemoteAddr())
+	log.Info("connected", "addr", conn.RemoteAddr())
 
 	framed := wire.NewConn(conn)
-	return forwardTTY(logger, framed)
+	return forwardTTY(framed)
 }
 
-func forwardTTY(logger *log.Logger, framed *wire.Conn) error {
+func forwardTTY(framed *wire.Conn) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -53,7 +56,7 @@ func forwardTTY(logger *log.Logger, framed *wire.Conn) error {
 	}
 	defer func() {
 		if err := raw.Restore(); err != nil {
-			logger.Warn("restore terminal failed", "err", err)
+			log.Warn("restore terminal failed", "err", err)
 		}
 	}()
 

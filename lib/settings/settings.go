@@ -12,11 +12,10 @@ import (
 const ConfigFile = "mygosh.toml"
 
 type Settings struct {
-	ConfigFile string          `mapstructure:"-"`
-	Verbosity  int             `mapstructure:"-"`
-	Core       CoreSettings    `mapstructure:"core"`
-	Log        LogSettings     `mapstructure:"log"`
-	Connect    ConnectSettings `mapstructure:"-"`
+	ConfigFile string       `mapstructure:"-"`
+	Verbosity  int          `mapstructure:"-"`
+	Core       CoreSettings `mapstructure:"core"`
+	Log        LogSettings  `mapstructure:"log"`
 }
 
 type CoreSettings struct {
@@ -27,11 +26,6 @@ type CoreSettings struct {
 type LogSettings struct {
 	Level string `mapstructure:"level"`
 	JSON  bool   `mapstructure:"json"`
-}
-
-type ConnectSettings struct {
-	Address string
-	Command string
 }
 
 func Load(verbosity int) (Settings, error) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mikadore/mygosh/app/client"
 	"github.com/Mikadore/mygosh/app/server"
+	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/rotisserie/eris"
 	"github.com/spf13/cobra"
@@ -34,6 +35,7 @@ func newRootCommand() *cobra.Command {
 				return err
 			}
 			cfg = loaded
+			logging.Configure(cfg.Log)
 			return nil
 		},
 	}
@@ -44,7 +46,7 @@ func newRootCommand() *cobra.Command {
 		Short: "run the mygosh server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return server.Run(cfg)
+			return server.RunServer(cfg)
 		},
 	})
 
@@ -53,11 +55,11 @@ func newRootCommand() *cobra.Command {
 		Short: "connect to a mygosh server",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg.Connect.Address = args[0]
+			connectArgs := client.ConnectArgs{Address: args[0]}
 			if len(args) > 1 {
-				cfg.Connect.Command = strings.Join(args[1:], " ")
+				connectArgs.Command = strings.Join(args[1:], " ")
 			}
-			return client.Run(cfg)
+			return client.RunClient(cfg, connectArgs)
 		},
 	})
 

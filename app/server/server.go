@@ -3,19 +3,16 @@ package server
 import (
 	"io"
 	"net"
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/log"
 
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
 
-func Run(cfg settings.Settings) error {
-	logger := logging.NewLogger(os.Stderr, cfg.Log.Level, cfg.Log.JSON)
+func RunServer(cfg settings.Settings) error {
 	addr := cfg.ListenAddress()
 
 	listener, err := net.Listen("tcp", addr)
@@ -23,14 +20,14 @@ func Run(cfg settings.Settings) error {
 		return eris.Wrapf(err, "listen on %s", addr)
 	}
 	defer listener.Close()
-	logger.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
+	log.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
 
 	conn, err := listener.Accept()
 	if err != nil {
 		return eris.Wrap(err, "accept connection")
 	}
 	defer conn.Close()
-	logger.Info("accepted connection", "remote", conn.RemoteAddr())
+	log.Info("accepted connection", "remote", conn.RemoteAddr())
 
 	framed := wire.NewConn(conn)
 	for {
@@ -42,12 +39,12 @@ func Run(cfg settings.Settings) error {
 			return eris.Wrap(err, "receive frame")
 		}
 
-		logFrame(logger, frame)
+		logFrame(frame)
 	}
 }
 
-func logFrame(logger *log.Logger, frame wire.Frame) {
-	logger.Info(
+func logFrame(frame wire.Frame) {
+	log.Info(
 		"received frame",
 		"type", string(frame.Type),
 		"bytes", len(frame.Payload),

@@ -2,31 +2,35 @@ package logging
 
 import (
 	"io"
+	"os"
 	"strings"
 
 	"github.com/charmbracelet/log"
+
+	"github.com/Mikadore/mygosh/lib/settings"
 )
 
-func NewLogger(w io.Writer, level string, json bool) *log.Logger {
-	if !enabledLevel(level) {
-		return log.New(io.Discard)
+func Configure(cfg settings.LogSettings) {
+	output := io.Writer(os.Stderr)
+	if !enabledLevel(cfg.Level) {
+		output = io.Discard
 	}
 
 	formatter := log.TextFormatter
-	if json {
+	if cfg.JSON {
 		formatter = log.JSONFormatter
 	}
 
-	parsed, err := log.ParseLevel(strings.ToLower(strings.TrimSpace(level)))
+	parsed, err := log.ParseLevel(strings.ToLower(strings.TrimSpace(cfg.Level)))
 	if err != nil {
 		parsed = log.InfoLevel
 	}
 
-	return log.NewWithOptions(w, log.Options{
+	log.SetDefault(log.NewWithOptions(output, log.Options{
 		Level:           parsed,
 		Formatter:       formatter,
 		ReportTimestamp: true,
-	})
+	}))
 }
 
 func enabledLevel(level string) bool {

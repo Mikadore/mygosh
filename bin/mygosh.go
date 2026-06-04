@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/Mikadore/mygosh/app/client"
 	"github.com/Mikadore/mygosh/app/server"
@@ -14,13 +17,15 @@ import (
 )
 
 func main() {
-	if err := newRootCommand().Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	if err := newRootCommand(ctx).Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, eris.ToString(err, false))
 		os.Exit(1)
 	}
 }
 
-func newRootCommand() *cobra.Command {
+func newRootCommand(ctx context.Context) *cobra.Command {
 	var verbosity int
 	var cfg settings.Settings
 
@@ -46,7 +51,7 @@ func newRootCommand() *cobra.Command {
 		Short: "run the mygosh server",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return server.RunServer(cfg)
+			return server.RunServer(ctx, cfg)
 		},
 	})
 
@@ -59,7 +64,7 @@ func newRootCommand() *cobra.Command {
 			if len(args) > 1 {
 				connectArgs.Command = strings.Join(args[1:], " ")
 			}
-			return client.RunClient(cfg, connectArgs)
+			return client.RunClient(ctx, cfg, connectArgs)
 		},
 	})
 

@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/charmbracelet/log"
 
@@ -30,7 +28,7 @@ func makeAddr(addr string, port int) string {
 	}
 }
 
-func RunClient(cfg settings.Settings, args ConnectArgs) error {
+func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) error {
 	if args.Address == "" {
 		return eris.New("connect address is required")
 	}
@@ -42,13 +40,14 @@ func RunClient(cfg settings.Settings, args ConnectArgs) error {
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 
-	framed := wire.NewConn(conn)
-	return forwardTTY(framed)
+	stream, err := wire.Handshake(conn, true)
+	if err != nil {
+		return eris.Wrap(err, "Handshake failed")
+	}
+	return forwardTTY(ctx, stream)
 }
 
-func forwardTTY(framed *wire.Conn) error {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+func forwardTTY(ctx context.Context, framed *wire.NoiseStream) error {
 
 	raw, err := tty.HookRaw(ctx, os.Stdin)
 	if err != nil {
@@ -64,10 +63,10 @@ func forwardTTY(framed *wire.Conn) error {
 	for {
 		n, err := raw.Read(buff)
 		if err != nil {
-			_ = framed.Send(wire.FrameErr, []byte(err.Error()))
+			_ = framed.Send( []byte(err.Error()))
 			return eris.Wrap(err, "read terminal")
 		}
-		if err := framed.Send(wire.FrameData, buff[:n]); err != nil {
+		if err := framed.Send( buff[:n]); err != nil {
 			return eris.Wrap(err, "send terminal frame")
 		}
 	}

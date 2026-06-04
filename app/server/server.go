@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"net"
 	"strings"
@@ -12,7 +13,7 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-func RunServer(cfg settings.Settings) error {
+func RunServer(ctx context.Context, cfg settings.Settings) error {
 	addr := cfg.ListenAddress()
 
 	listener, err := net.Listen("tcp", addr)
@@ -29,9 +30,12 @@ func RunServer(cfg settings.Settings) error {
 	defer conn.Close()
 	log.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	framed := wire.NewConn(conn)
+	stream, err := wire.Handshake(conn, false)
+	if err != nil {
+		return eris.Wrap(err, "Handshake Failed")
+	}
 	for {
-		frame, err := framed.Receive()
+		frame, err := stream.Receive()
 		if err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
@@ -43,13 +47,12 @@ func RunServer(cfg settings.Settings) error {
 	}
 }
 
-func logFrame(frame wire.Frame) {
+func logFrame(frame []byte) {
 	log.Info(
 		"received frame",
-		"type", string(frame.Type),
-		"bytes", len(frame.Payload),
-		"text", printableString(frame.Payload),
-		"hex", hexBytes(frame.Payload),
+		"bytes", len(frame),
+		"text", printableString(frame),
+		"hex", hexBytes(frame),
 	)
 }
 

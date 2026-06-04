@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Mikadore/mygosh/internal/logging"
-	"github.com/Mikadore/mygosh/internal/settings"
-	"github.com/Mikadore/mygosh/internal/wire"
+	"github.com/Mikadore/mygosh/lib/logging"
+	"github.com/Mikadore/mygosh/lib/settings"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
 

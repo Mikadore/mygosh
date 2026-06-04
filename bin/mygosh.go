@@ -5,9 +5,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Mikadore/mygosh/internal/client"
-	"github.com/Mikadore/mygosh/internal/server"
-	"github.com/Mikadore/mygosh/internal/settings"
+	"github.com/Mikadore/mygosh/app/client"
+	"github.com/Mikadore/mygosh/app/server"
+	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/rotisserie/eris"
 	"github.com/spf13/cobra"
 )

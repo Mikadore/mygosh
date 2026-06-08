@@ -1,4 +1,4 @@
-package wire
+package transport
 
 import (
 	"net"

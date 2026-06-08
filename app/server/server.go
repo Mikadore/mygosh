@@ -8,7 +8,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
-	"github.com/Mikadore/mygosh/lib/wire"
+	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 )
 
@@ -29,10 +29,10 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	defer conn.Close()
 	log.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	stream, err := wire.Handshake(conn, false)
+	stream, err := transport.Handshake(conn, false)
 	if err != nil {
 		return eris.Wrap(err, "Handshake Failed")
 	}
-	transport := wire.NewTransport(stream)
+	transport := transport.NewTransport(stream)
 	return session.NewServerSession(transport, cfg.Core.Shell).Run(ctx)
 }

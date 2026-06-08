@@ -10,17 +10,17 @@ import (
 	"syscall"
 
 	"github.com/Mikadore/mygosh/lib/tty"
-	"github.com/Mikadore/mygosh/lib/wire"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/Mikadore/mygosh/lib/transport/wirepb"
 	"github.com/rotisserie/eris"
 )
 
 type ServerSession struct {
-	transport *wire.Transport
+	transport *transport.Transport
 	shell     string
 }
 
-func NewServerSession(transport *wire.Transport, shell string) *ServerSession {
+func NewServerSession(transport *transport.Transport, shell string) *ServerSession {
 	return &ServerSession{
 		transport: transport,
 		shell:     shell,

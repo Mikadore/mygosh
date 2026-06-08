@@ -1,10 +1,10 @@
-package wire
+package transport
 
 import (
 	"bytes"
 	"testing"
 
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/transport/wirepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )

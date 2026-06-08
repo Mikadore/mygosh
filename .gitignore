@@ -1,3 +1,5 @@
 /mygosh
 /mygosh-server
 *.test
+
+/build

@@ -4,45 +4,113 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
-func TestTransportRoundTripsMessageType(t *testing.T) {
-	types := []MsgType{
-		MsgOpen,
-		MsgOpenOk,
-		MsgData,
-		MsgErr,
-		MsgResize,
-		MsgClose,
-		MsgExitStatus,
+func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
+	tests := []struct {
+		name     string
+		envelope *wirepb.Envelope
+	}{
+		{
+			name: "open",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_Open{
+					Open: &wirepb.OpenRequest{
+						Term: "xterm-256color",
+						Rows: 24,
+						Cols: 80,
+					},
+				},
+			},
+		},
+		{
+			name: "open ok",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_OpenOk{
+					OpenOk: &wirepb.OpenResponse{SessionId: "session-1"},
+				},
+			},
+		},
+		{
+			name: "data",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_Data{
+					Data: &wirepb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
+				},
+			},
+		},
+		{
+			name: "err",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_Err{
+					Err: &wirepb.Error{Code: "failed", Message: "failed"},
+				},
+			},
+		},
+		{
+			name: "resize",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_Resize{
+					Resize: &wirepb.Resize{Rows: 40, Cols: 120},
+				},
+			},
+		},
+		{
+			name: "close",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_Close{
+					Close: &wirepb.Close{Reason: "stdin closed"},
+				},
+			},
+		},
+		{
+			name: "exit status",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_ExitStatus{
+					ExitStatus: &wirepb.ExitStatus{Code: 12},
+				},
+			},
+		},
 	}
 
-	for _, msgType := range types {
-		t.Run(MsgTypeName(msgType), func(t *testing.T) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			transport := NewTransport(NewFramed(&buf))
 
-			require.NoError(t, transport.SendMessage(msgType, nil))
+			require.NoError(t, transport.Send(tt.envelope))
 
-			msg, err := transport.ReceiveMessage()
+			got, err := transport.Receive()
 			require.NoError(t, err)
-			require.Equal(t, msgType, msg.Type)
+			require.True(t, proto.Equal(tt.envelope, got), "expected %v, got %v", tt.envelope, got)
 		})
 	}
 }
 
-func TestMsgDataPayloadIsUnchanged(t *testing.T) {
+func TestTransportRejectsNilEnvelope(t *testing.T) {
+	var buf bytes.Buffer
+	transport := NewTransport(NewFramed(&buf))
+
+	require.Error(t, transport.Send(nil))
+}
+
+func TestDataPayloadIsUnchanged(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(NewFramed(&buf))
 	payload := []byte{0x00, 0x01, 'h', 'i', 0xff}
 
-	require.NoError(t, transport.SendData(payload))
+	require.NoError(t, transport.Send(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_Data{
+			Data: &wirepb.Data{Data: payload},
+		},
+	}))
 
-	msg, err := transport.ReceiveMessage()
+	got, err := transport.Receive()
 	require.NoError(t, err)
-	require.Equal(t, MsgData, msg.Type)
-	require.Equal(t, payload, msg.Payload)
+	require.Equal(t, payload, got.GetData().GetData())
 }
 
 func TestTransportRejectsEmptyPacket(t *testing.T) {
@@ -50,56 +118,47 @@ func TestTransportRejectsEmptyPacket(t *testing.T) {
 	framed := NewFramed(&buf)
 	require.NoError(t, framed.Send(nil))
 
-	_, err := NewTransport(NewFramed(&buf)).ReceiveMessage()
+	_, err := NewTransport(NewFramed(&buf)).Receive()
 	require.Error(t, err)
 }
 
-func TestTransportRoundTripsOpenEvent(t *testing.T) {
+func TestTransportRejectsEnvelopeWithoutKind(t *testing.T) {
 	var buf bytes.Buffer
-	transport := NewTransport(NewFramed(&buf))
-	req := OpenRequest{
-		Term: "xterm-256color",
-		Rows: 24,
-		Cols: 80,
-	}
-
-	require.NoError(t, transport.SendOpen(req))
-
-	event, err := transport.ReceiveEvent()
+	framed := NewFramed(&buf)
+	packet, err := proto.Marshal(&wirepb.Envelope{})
 	require.NoError(t, err)
-	require.Equal(t, OpenEvent{Request: req}, event)
+	require.NoError(t, framed.Send(packet))
+
+	_, err = NewTransport(NewFramed(&buf)).Receive()
+	require.Error(t, err)
 }
 
-func TestTransportRoundTripsResizeEvent(t *testing.T) {
+func TestTransportRejectsInvalidResize(t *testing.T) {
 	var buf bytes.Buffer
-	transport := NewTransport(NewFramed(&buf))
-	resize := Resize{Rows: 40, Cols: 120}
-
-	require.NoError(t, transport.SendResize(resize))
-
-	event, err := transport.ReceiveEvent()
+	framed := NewFramed(&buf)
+	packet, err := proto.Marshal(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_Resize{
+			Resize: &wirepb.Resize{
+				Rows: 0,
+				Cols: 80,
+			},
+		},
+	})
 	require.NoError(t, err)
-	require.Equal(t, ResizeEvent{Resize: resize}, event)
+	require.NoError(t, framed.Send(packet))
+
+	_, err = NewTransport(NewFramed(&buf)).Receive()
+	require.Error(t, err)
 }
 
-func TestTransportReceivesDataEventWithoutTransformingPayload(t *testing.T) {
-	var buf bytes.Buffer
-	transport := NewTransport(NewFramed(&buf))
-	payload := []byte{0x00, 0x01, 'h', 'i', 0xff}
-
-	require.NoError(t, transport.SendData(payload))
-
-	event, err := transport.ReceiveEvent()
-	require.NoError(t, err)
-	require.Equal(t, DataEvent{Bytes: payload}, event)
-}
-
-func TestTransportRejectsUnknownMessageTypeEvent(t *testing.T) {
+func TestTransportRejectsInvalidError(t *testing.T) {
 	var buf bytes.Buffer
 	transport := NewTransport(NewFramed(&buf))
 
-	require.NoError(t, transport.SendMessage(MsgType(99), nil))
-
-	_, err := transport.ReceiveEvent()
+	err := transport.Send(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_Err{
+			Err: &wirepb.Error{Code: "missing-message"},
+		},
+	})
 	require.Error(t, err)
 }

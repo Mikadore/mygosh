@@ -11,6 +11,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/Mikadore/mygosh/lib/wire"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 )
 
@@ -35,14 +36,22 @@ func (s *ServerSession) Run(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, s.shell)
 	cmd.Env = sessionEnv(req)
 
-	vtty, err := tty.CreateVTTY(tty.Size{Width: int(req.Cols), Height: int(req.Rows)}, cmd)
+	vtty, err := tty.CreateVTTY(tty.Size{Width: int(req.GetCols()), Height: int(req.GetRows())}, cmd)
 	if err != nil {
-		_ = s.transport.SendErr(wire.ErrorPayload{Code: "pty-start-failed", Message: err.Error()})
+		_ = s.transport.Send(&wirepb.Envelope{
+			Kind: &wirepb.Envelope_Err{
+				Err: &wirepb.Error{Code: "pty-start-failed", Message: err.Error()},
+			},
+		})
 		return eris.Wrap(err, "create server PTY")
 	}
 	defer vtty.Close()
 
-	if err := s.transport.SendOpenOK(wire.OpenResponse{}); err != nil {
+	if err := s.transport.Send(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_OpenOk{
+			OpenOk: &wirepb.OpenResponse{},
+		},
+	}); err != nil {
 		return eris.Wrap(err, "send open response")
 	}
 
@@ -53,23 +62,30 @@ func (s *ServerSession) Run(ctx context.Context) error {
 	return <-errs
 }
 
-func (s *ServerSession) receiveOpen() (wire.OpenRequest, error) {
-	event, err := s.transport.ReceiveEvent()
+func (s *ServerSession) receiveOpen() (*wirepb.OpenRequest, error) {
+	envelope, err := s.transport.Receive()
 	if err != nil {
-		return wire.OpenRequest{}, eris.Wrap(err, "receive open request")
+		return nil, eris.Wrap(err, "receive open request")
 	}
 
-	open, ok := event.(wire.OpenEvent)
+	open, ok := envelope.Kind.(*wirepb.Envelope_Open)
 	if !ok {
-		_ = s.transport.SendErr(wire.ErrorPayload{Code: "expected-open", Message: "expected open request"})
-		return wire.OpenRequest{}, eris.Errorf("expected open request, got %T", event)
+		_ = s.transport.Send(&wirepb.Envelope{
+			Kind: &wirepb.Envelope_Err{
+				Err: &wirepb.Error{Code: "expected-open", Message: "expected open request"},
+			},
+		})
+		return nil, eris.Errorf("expected open request, got %T", envelope.Kind)
 	}
 
-	req := open.Request
-	if req.Rows == 0 {
+	req := open.Open
+	if req == nil {
+		req = &wirepb.OpenRequest{}
+	}
+	if req.GetRows() == 0 {
 		req.Rows = 24
 	}
-	if req.Cols == 0 {
+	if req.GetCols() == 0 {
 		req.Cols = 80
 	}
 	return req, nil
@@ -80,14 +96,22 @@ func (s *ServerSession) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	for {
 		n, err := vtty.Read(buf)
 		if n > 0 {
-			if sendErr := s.transport.SendData(buf[:n]); sendErr != nil {
+			if sendErr := s.transport.Send(&wirepb.Envelope{
+				Kind: &wirepb.Envelope_Data{
+					Data: &wirepb.Data{Data: buf[:n]},
+				},
+			}); sendErr != nil {
 				return eris.Wrap(sendErr, "send PTY output")
 			}
 		}
 		if err != nil {
 			if terminalClosed(err) {
 				code, waitErr := waitExit(cmd)
-				if sendErr := s.transport.SendExitStatus(wire.ExitStatus{Code: code}); sendErr != nil {
+				if sendErr := s.transport.Send(&wirepb.Envelope{
+					Kind: &wirepb.Envelope_ExitStatus{
+						ExitStatus: &wirepb.ExitStatus{Code: int32(code)},
+					},
+				}); sendErr != nil {
 					return eris.Wrap(sendErr, "send exit status")
 				}
 				if waitErr != nil {
@@ -102,7 +126,7 @@ func (s *ServerSession) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 
 func (s *ServerSession) receiveInput(vtty *tty.VTTY) error {
 	for {
-		event, err := s.transport.ReceiveEvent()
+		envelope, err := s.transport.Receive()
 		if err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
@@ -110,29 +134,33 @@ func (s *ServerSession) receiveInput(vtty *tty.VTTY) error {
 			return eris.Wrap(err, "receive client event")
 		}
 
-		switch event := event.(type) {
-		case wire.DataEvent:
-			if err := writeFull(vtty, event.Bytes); err != nil {
+		switch kind := envelope.Kind.(type) {
+		case *wirepb.Envelope_Data:
+			if err := writeFull(vtty, kind.Data.GetData()); err != nil {
 				return eris.Wrap(err, "write PTY input")
 			}
-		case wire.ResizeEvent:
-			if err := vtty.Resize(tty.Size{Width: int(event.Resize.Cols), Height: int(event.Resize.Rows)}); err != nil {
+		case *wirepb.Envelope_Resize:
+			if err := vtty.Resize(tty.Size{Width: int(kind.Resize.GetCols()), Height: int(kind.Resize.GetRows())}); err != nil {
 				return eris.Wrap(err, "resize PTY")
 			}
-		case wire.CloseEvent:
+		case *wirepb.Envelope_Close:
 			return nil
 		default:
-			msg := eris.Errorf("unexpected client event %T", event)
-			_ = s.transport.SendErr(wire.ErrorPayload{Code: "unexpected-event", Message: msg.Error()})
+			msg := eris.Errorf("unexpected client event %T", kind)
+			_ = s.transport.Send(&wirepb.Envelope{
+				Kind: &wirepb.Envelope_Err{
+					Err: &wirepb.Error{Code: "unexpected-event", Message: msg.Error()},
+				},
+			})
 			return msg
 		}
 	}
 }
 
-func sessionEnv(req wire.OpenRequest) []string {
+func sessionEnv(req *wirepb.OpenRequest) []string {
 	env := os.Environ()
-	if strings.TrimSpace(req.Term) != "" {
-		env = append(env, "TERM="+req.Term)
+	if strings.TrimSpace(req.GetTerm()) != "" {
+		env = append(env, "TERM="+req.GetTerm())
 	}
 	return env
 }

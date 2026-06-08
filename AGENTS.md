@@ -21,9 +21,9 @@ Guidance for agents working in this repository.
 - Prefer small, composable layers over large all-in-one abstractions.
 - Keep TCP ownership in `app/client` and `app/server`; do not hide sockets inside `NoiseStream`.
 - Keep `NoiseStream` focused on encrypted packet send/receive.
-- Keep message envelopes simple: `1 byte type + payload`.
-- Keep `MsgData` payloads raw bytes.
-- Use CBOR for structured message payloads when needed.
+- Keep message envelopes simple: one protobuf `oneof` envelope per frame.
+- Keep terminal data contents raw bytes and return terminal bytes unchanged.
+- Use protobuf for message serialization and protovalidate for schema validation where applicable.
 - Use `github.com/rotisserie/eris` for wrapped errors.
 - Use `github.com/charmbracelet/log` for logging.
 - Do not target Windows.
@@ -41,7 +41,7 @@ Guidance for agents working in this repository.
 - Prefer focused tests in `lib/wire` for protocol behavior before changing app-level flows.
 - Use `github.com/stretchr/testify/require` for new tests.
 - For bidirectional protocol tests, prefer `net.Pipe` with deadlines over `bytes.Buffer`.
-- Keep an explicit test that `MsgData` bytes are not transformed.
+- Keep an explicit test that terminal data bytes are not transformed.
 
 ## Manual Smoke Test
 
@@ -61,4 +61,3 @@ Guidance for agents working in this repository.
 - Defer escape sequences like `~.` until the terminal loop is stable.
 - Defer auth and reconnect/resume until the message layer and PTY loop are boring.
 - When in doubt, choose the smallest change that improves the PTY path without closing off future auth/reconnect work.
-

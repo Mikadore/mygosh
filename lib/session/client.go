@@ -9,6 +9,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/Mikadore/mygosh/lib/wire"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 	"golang.org/x/term"
 )
@@ -35,10 +36,14 @@ func (s *ClientSession) Run(ctx context.Context) error {
 	defer raw.Restore()
 
 	size := currentTerminalSize(s.input)
-	if err := s.transport.SendOpen(wire.OpenRequest{
-		Term: terminalName(),
-		Rows: uint16(size.Height),
-		Cols: uint16(size.Width),
+	if err := s.transport.Send(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_Open{
+			Open: &wirepb.OpenRequest{
+				Term: terminalName(),
+				Rows: uint32(size.Height),
+				Cols: uint32(size.Width),
+			},
+		},
 	}); err != nil {
 		return eris.Wrap(err, "send open request")
 	}
@@ -56,18 +61,18 @@ func (s *ClientSession) Run(ctx context.Context) error {
 }
 
 func (s *ClientSession) waitOpenOK() error {
-	event, err := s.transport.ReceiveEvent()
+	envelope, err := s.transport.Receive()
 	if err != nil {
 		return eris.Wrap(err, "receive open response")
 	}
 
-	switch event := event.(type) {
-	case wire.OpenOKEvent:
+	switch kind := envelope.Kind.(type) {
+	case *wirepb.Envelope_OpenOk:
 		return nil
-	case wire.ErrEvent:
-		return eris.Errorf("server rejected open: %s", event.Error.Message)
+	case *wirepb.Envelope_Err:
+		return eris.Errorf("server rejected open: %s", kind.Err.GetMessage())
 	default:
-		return eris.Errorf("expected open response, got %T", event)
+		return eris.Errorf("expected open response, got %T", kind)
 	}
 }
 
@@ -76,13 +81,21 @@ func (s *ClientSession) forwardInput(raw *tty.RawTTY) error {
 	for {
 		n, err := raw.Read(buf)
 		if n > 0 {
-			if sendErr := s.transport.SendData(buf[:n]); sendErr != nil {
+			if sendErr := s.transport.Send(&wirepb.Envelope{
+				Kind: &wirepb.Envelope_Data{
+					Data: &wirepb.Data{Data: buf[:n]},
+				},
+			}); sendErr != nil {
 				return eris.Wrap(sendErr, "send terminal data")
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return s.transport.SendClose(wire.Close{Reason: "stdin closed"})
+				return s.transport.Send(&wirepb.Envelope{
+					Kind: &wirepb.Envelope_Close{
+						Close: &wirepb.Close{Reason: "stdin closed"},
+					},
+				})
 			}
 			return eris.Wrap(err, "read terminal")
 		}
@@ -96,9 +109,13 @@ func (s *ClientSession) forwardResizes(ctx context.Context, raw *tty.RawTTY) err
 			if !ok {
 				return nil
 			}
-			if err := s.transport.SendResize(wire.Resize{
-				Rows: uint16(size.Height),
-				Cols: uint16(size.Width),
+			if err := s.transport.Send(&wirepb.Envelope{
+				Kind: &wirepb.Envelope_Resize{
+					Resize: &wirepb.Resize{
+						Rows: uint32(size.Height),
+						Cols: uint32(size.Width),
+					},
+				},
 			}); err != nil {
 				return eris.Wrap(err, "send terminal resize")
 			}
@@ -110,7 +127,7 @@ func (s *ClientSession) forwardResizes(ctx context.Context, raw *tty.RawTTY) err
 
 func (s *ClientSession) receiveOutput() error {
 	for {
-		event, err := s.transport.ReceiveEvent()
+		envelope, err := s.transport.Receive()
 		if err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
@@ -118,22 +135,23 @@ func (s *ClientSession) receiveOutput() error {
 			return eris.Wrap(err, "receive session event")
 		}
 
-		switch event := event.(type) {
-		case wire.DataEvent:
-			if err := writeFull(s.output, event.Bytes); err != nil {
+		switch kind := envelope.Kind.(type) {
+		case *wirepb.Envelope_Data:
+			if err := writeFull(s.output, kind.Data.GetData()); err != nil {
 				return eris.Wrap(err, "write terminal output")
 			}
-		case wire.ExitStatusEvent:
-			if event.Status.Code == 0 {
+		case *wirepb.Envelope_ExitStatus:
+			code := kind.ExitStatus.GetCode()
+			if code == 0 {
 				return nil
 			}
-			return eris.Errorf("remote process exited with status %d", event.Status.Code)
-		case wire.CloseEvent:
+			return eris.Errorf("remote process exited with status %d", code)
+		case *wirepb.Envelope_Close:
 			return nil
-		case wire.ErrEvent:
-			return eris.Errorf("server error: %s", event.Error.Message)
+		case *wirepb.Envelope_Err:
+			return eris.Errorf("server error: %s", kind.Err.GetMessage())
 		default:
-			return eris.Errorf("unexpected server event %T", event)
+			return eris.Errorf("unexpected server event %T", kind)
 		}
 	}
 }

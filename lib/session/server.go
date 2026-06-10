@@ -9,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/Mikadore/mygosh/lib/transport/wirepb"
+	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/rotisserie/eris"
 )
 
@@ -49,7 +49,7 @@ func (s *ServerSession) Run(ctx context.Context) error {
 
 	if err := s.transport.Send(&wirepb.Envelope{
 		Kind: &wirepb.Envelope_OpenOk{
-			OpenOk: &wirepb.OpenResponse{},
+			OpenOk: &wirepb.OpenResponse{SessionId: "session-1"},
 		},
 	}); err != nil {
 		return eris.Wrap(err, "send open response")

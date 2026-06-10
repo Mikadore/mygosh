@@ -6,10 +6,15 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
+)
+
+var staticServerKeypair = keys.MustParseKeypairBase64(
+	"bXlnb3NoLXByaXZhdGUta2V5LXYxAAAABngyNTUxOQAAACDTsZU23gLTnfEZuTrZ4nmElhwUwR5sKgOWtUvr2o3laAAAACDdNf3zpMwLg6OsnTLfuRittrBU0X9DQAw0XvLjDYXO+AAAAAA=",
 )
 
 func RunServer(ctx context.Context, cfg settings.Settings) error {
@@ -29,7 +34,7 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	defer conn.Close()
 	log.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	stream, err := transport.Handshake(conn, false)
+	stream, err := transport.HandshakeServer(conn, staticServerKeypair)
 	if err != nil {
 		return eris.Wrap(err, "Handshake Failed")
 	}

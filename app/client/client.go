@@ -44,10 +44,11 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 
-	stream, err := transport.Handshake(conn, true)
+	stream, err := transport.HandshakeClient(conn)
 	if err != nil {
 		return eris.Wrap(err, "Handshake failed")
 	}
+	log.Info("server identity", "fingerprint", stream.PeerStaticKey.FingerprintSHA256())
 	transport := transport.NewTransport(stream)
 	return session.NewClientSession(transport, os.Stdin, os.Stdout).Run(ctx)
 }

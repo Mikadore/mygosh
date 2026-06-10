@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/charmbracelet/log"
 	"github.com/flynn/noise"
 	"github.com/rotisserie/eris"
@@ -15,12 +16,13 @@ import (
 const MaxPayloadSize = 32 * 1024
 
 type NoiseStream struct {
-	conn    net.Conn
-	writeMu sync.Mutex
-	tx      *noise.CipherState
-	tx_mux  sync.Mutex
-	rx      *noise.CipherState
-	rx_mux  sync.Mutex
+	conn          net.Conn
+	writeMu       sync.Mutex
+	tx            *noise.CipherState
+	tx_mux        sync.Mutex
+	rx            *noise.CipherState
+	rx_mux        sync.Mutex
+	PeerStaticKey keys.PublicKey
 }
 
 func (ns *NoiseStream) Receive() ([]byte, error) {
@@ -95,25 +97,41 @@ func (ns *NoiseStream) SetWriteDeadline(t time.Time) error {
 	return ns.conn.SetWriteDeadline(t)
 }
 
-func Handshake(conn net.Conn, initiator bool) (*NoiseStream, error) {
-	var ns NoiseStream
-
-	ns = NoiseStream{
-		conn: conn,
+func HandshakeClient(conn net.Conn) (*NoiseStream, error) {
+	config, err := createConfig(true, nil)
+	if err != nil {
+		return nil, err
 	}
+	stream, err := handshake(conn, config)
+	if err != nil {
+		return nil, err
+	}
+	if stream.PeerStaticKey.IsZero() {
+		return nil, eris.New("noise handshake did not yield a server static key")
+	}
+	return stream, nil
+}
 
-	config := CreateConfig(initiator)
+func HandshakeServer(conn net.Conn, staticKey keys.Keypair) (*NoiseStream, error) {
+	config, err := createConfig(false, &staticKey)
+	if err != nil {
+		return nil, err
+	}
+	return handshake(conn, config)
+}
+
+func handshake(conn net.Conn, config noise.Config) (*NoiseStream, error) {
+	ns := NoiseStream{conn: conn}
 	state, err := noise.NewHandshakeState(config)
-
 	if err != nil {
 		return &ns, eris.Wrap(err, "Failed to create noise handshake state")
 	}
 
-	log.Info("running handshake", "initiator", initiator)
+	log.Info("running handshake", "initiator", config.Initiator)
 
 	// If not initiating, first read from conn then write
 	shouldWrite := 1
-	if initiator {
+	if config.Initiator {
 		// as initiator, write first then read
 		shouldWrite = 0
 	}
@@ -133,7 +151,7 @@ func Handshake(conn net.Conn, initiator bool) (*NoiseStream, error) {
 			}
 
 			if first != nil && second != nil {
-				ns.setCipherStates(first, second, initiator)
+				ns.setCipherStates(first, second, config.Initiator)
 				break
 			}
 		} else {
@@ -146,9 +164,12 @@ func Handshake(conn net.Conn, initiator bool) (*NoiseStream, error) {
 			if err != nil {
 				return &ns, eris.Wrap(err, "Handshake error")
 			}
+			if err := ns.capturePeerStatic(state); err != nil {
+				return &ns, err
+			}
 
 			if first != nil && second != nil {
-				ns.setCipherStates(first, second, initiator)
+				ns.setCipherStates(first, second, config.Initiator)
 				break
 			}
 		}
@@ -157,7 +178,7 @@ func Handshake(conn net.Conn, initiator bool) (*NoiseStream, error) {
 	return &ns, nil
 }
 
-func CreateConfig(initiator bool) noise.Config {
+func createConfig(initiator bool, staticKey *keys.Keypair) (noise.Config, error) {
 	cs := NOISE_CIPHERSUITE
 
 	prologue := bytes.Join([][]byte{
@@ -167,12 +188,45 @@ func CreateConfig(initiator bool) noise.Config {
 		cs.Name(),
 	}, []byte(" "))
 
-	return noise.Config{
+	config := noise.Config{
 		CipherSuite: cs,
-		Pattern:     noise.HandshakeNN,
+		Pattern:     noise.HandshakeNX,
 		Prologue:    prologue,
 		Initiator:   initiator,
 	}
+
+	if staticKey != nil {
+		if err := staticKey.Validate(); err != nil {
+			return noise.Config{}, eris.Wrap(err, "invalid static keypair")
+		}
+		if staticKey.Algorithm != keys.AlgorithmX25519 {
+			return noise.Config{}, eris.Errorf("noise static key must use %s, got %s", keys.AlgorithmX25519, staticKey.Algorithm)
+		}
+		config.StaticKeypair = noise.DHKey{
+			Public:  append([]byte(nil), staticKey.Public[:]...),
+			Private: append([]byte(nil), staticKey.Private[:]...),
+		}
+	}
+
+	return config, nil
+}
+
+func (ns *NoiseStream) capturePeerStatic(state *noise.HandshakeState) error {
+	peerStatic := state.PeerStatic()
+	if len(peerStatic) == 0 {
+		return nil
+	}
+
+	var public [32]byte
+	if len(peerStatic) != len(public) {
+		return eris.Errorf("noise peer static key length %d does not match expected length %d", len(peerStatic), len(public))
+	}
+	copy(public[:], peerStatic)
+	ns.PeerStaticKey = keys.PublicKey{
+		Algorithm: keys.AlgorithmX25519,
+		Bytes:     public,
+	}
+	return nil
 }
 
 const MYGOSH_NOISE_MAGIC string = "mygosh"

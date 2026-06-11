@@ -8,7 +8,6 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-
 type Decoder struct {
 	buf []byte
 	off int
@@ -68,6 +67,31 @@ func (c *Decoder) Take(n uint32) []byte {
 	start := c.off
 	c.off += int(n)
 	return c.buf[start:c.off]
+}
+
+func (c *Decoder) Byte() byte {
+	b := c.Take(1)
+	if c.err != nil {
+		return 0
+	}
+	return b[0]
+}
+
+func (c *Decoder) Bool() bool {
+	b := c.Byte()
+	if c.err != nil {
+		return false
+	}
+
+	switch b {
+	case 0:
+		return false
+	case 1:
+		return true
+	default:
+		c.err = eris.Errorf("invalid bool byte %d at offset %d", b, c.off-1)
+		return false
+	}
 }
 
 func (c *Decoder) U32() uint32 {

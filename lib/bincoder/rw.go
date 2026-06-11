@@ -10,6 +10,43 @@ import (
 
 var ORDER binary.ByteOrder = binary.BigEndian
 
+func ReadByte(r io.Reader) (byte, error) {
+	var buf [1]byte
+	if _, err := io.ReadFull(r, buf[:]); err != nil {
+		return 0, err
+	}
+	return buf[0], nil
+}
+
+func WriteByte(w io.Writer, b byte) error {
+	var buf [1]byte
+	buf[0] = b
+	return writeFull(w, buf[:])
+}
+
+func ReadBool(r io.Reader) (bool, error) {
+	b, err := ReadByte(r)
+	if err != nil {
+		return false, err
+	}
+
+	switch b {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, eris.Errorf("invalid bool byte %d", b)
+	}
+}
+
+func WriteBool(w io.Writer, v bool) error {
+	if v {
+		return WriteByte(w, 1)
+	}
+	return WriteByte(w, 0)
+}
+
 // Always does a `io.ReadFull` of 4 bytes and returns a `uint32`
 func ReadU32(r io.Reader) (uint32, error) {
 	var buf [4]byte

@@ -38,6 +38,24 @@ func (e *Encoder) Write(b []byte) {
 	_, e.err = e.buf.Write(b)
 }
 
+func (e *Encoder) Byte(b byte) {
+	if e.err != nil {
+		return
+	}
+
+	var buf [1]byte
+	buf[0] = b
+	e.Write(buf[:])
+}
+
+func (e *Encoder) Bool(v bool) {
+	if v {
+		e.Byte(1)
+		return
+	}
+	e.Byte(0)
+}
+
 func (e *Encoder) U32(n uint32) {
 	if e.err != nil {
 		return

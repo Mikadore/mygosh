@@ -9,6 +9,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/flynn/noise v1.1.0
 	github.com/rotisserie/eris v0.5.4
+	github.com/samber/lo v1.53.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1

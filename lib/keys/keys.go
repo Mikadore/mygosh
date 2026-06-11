@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -17,18 +18,18 @@ const (
 	AlgorithmEd25519 Algorithm = "ed25519"
 )
 
-const keyMaterialSize = 32
+const x25519KeyMaterialSize = 32
 const privateKeyMagic = "mygosh-private-key-v1"
 
 type PublicKey struct {
 	Algorithm Algorithm
-	Bytes     [keyMaterialSize]byte
+	Bytes     []byte
 }
 
 type Keypair struct {
 	Algorithm Algorithm
-	Public    [keyMaterialSize]byte
-	Private   [keyMaterialSize]byte
+	Public    []byte
+	Private   []byte
 	Comment   string
 }
 
@@ -44,8 +45,8 @@ func Generate(alg Algorithm) (Keypair, error) {
 }
 
 func GenerateX25519() (Keypair, error) {
-	var private [keyMaterialSize]byte
-	if _, err := rand.Read(private[:]); err != nil {
+	private := make([]byte, x25519KeyMaterialSize)
+	if _, err := rand.Read(private); err != nil {
 		return Keypair{}, eris.Wrap(err, "generate x25519 private key")
 	}
 
@@ -64,7 +65,7 @@ func GenerateX25519() (Keypair, error) {
 func (k Keypair) PublicKey() PublicKey {
 	return PublicKey{
 		Algorithm: k.Algorithm,
-		Bytes:     k.Public,
+		Bytes:     cloneBytes(k.Public),
 	}
 }
 
@@ -75,11 +76,18 @@ func (k Keypair) Validate() error {
 
 	switch k.Algorithm {
 	case AlgorithmX25519:
+		if err := validateKeyLength(k.Public, x25519KeyMaterialSize, "public"); err != nil {
+			return err
+		}
+		if err := validateKeyLength(k.Private, x25519KeyMaterialSize, "private"); err != nil {
+			return err
+		}
+
 		derived, err := deriveX25519Public(k.Private)
 		if err != nil {
 			return err
 		}
-		if derived != k.Public {
+		if !bytes.Equal(derived, k.Public) {
 			return eris.New("x25519 keypair public key does not match private key")
 		}
 		return nil
@@ -98,8 +106,8 @@ func (k Keypair) MarshalBinary() ([]byte, error) {
 	enc := bincoder.NewEncoder()
 	enc.Write([]byte(privateKeyMagic))
 	enc.UTF8String(string(k.Algorithm))
-	enc.Bytes(k.Public[:])
-	enc.Bytes(k.Private[:])
+	enc.Bytes(k.Public)
+	enc.Bytes(k.Private)
 	enc.UTF8String(k.Comment)
 	if err := enc.Err(); err != nil {
 		return nil, eris.Wrap(err, "encode private key")
@@ -123,20 +131,10 @@ func ParseKeypair(b []byte) (Keypair, error) {
 		return Keypair{}, err
 	}
 
-	public, err := copyKeyMaterial(publicBytes, "public")
-	if err != nil {
-		return Keypair{}, err
-	}
-
-	private, err := copyKeyMaterial(privateBytes, "private")
-	if err != nil {
-		return Keypair{}, err
-	}
-
 	keypair := Keypair{
 		Algorithm: alg,
-		Public:    public,
-		Private:   private,
+		Public:    cloneBytes(publicBytes),
+		Private:   cloneBytes(privateBytes),
 		Comment:   comment,
 	}
 	if err := keypair.Validate(); err != nil {
@@ -170,12 +168,20 @@ func MustParseKeypairBase64(s string) Keypair {
 }
 
 func (k PublicKey) FingerprintSHA256() string {
-	sum := sha256.Sum256(k.Bytes[:])
+	sum := sha256.Sum256(k.Bytes)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
 func (k PublicKey) IsZero() bool {
-	return k.Bytes == [keyMaterialSize]byte{}
+	if len(k.Bytes) == 0 {
+		return true
+	}
+	for _, b := range k.Bytes {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func validateAlgorithm(alg Algorithm) error {
@@ -187,21 +193,28 @@ func validateAlgorithm(alg Algorithm) error {
 	}
 }
 
-func copyKeyMaterial(b []byte, label string) ([keyMaterialSize]byte, error) {
-	var out [keyMaterialSize]byte
-	if len(b) != keyMaterialSize {
-		return out, eris.Errorf("%s key length %d does not match expected length %d", label, len(b), keyMaterialSize)
+func cloneBytes(b []byte) []byte {
+	if len(b) == 0 {
+		return nil
 	}
-	copy(out[:], b)
-	return out, nil
+	return append([]byte(nil), b...)
 }
 
-func deriveX25519Public(private [keyMaterialSize]byte) ([keyMaterialSize]byte, error) {
-	var public [keyMaterialSize]byte
-	derived, err := curve25519.X25519(private[:], curve25519.Basepoint)
-	if err != nil {
-		return public, eris.Wrap(err, "derive x25519 public key")
+func validateKeyLength(b []byte, want int, label string) error {
+	if len(b) != want {
+		return eris.Errorf("%s key length %d does not match expected length %d", label, len(b), want)
 	}
-	copy(public[:], derived)
-	return public, nil
+	return nil
+}
+
+func deriveX25519Public(private []byte) ([]byte, error) {
+	if err := validateKeyLength(private, x25519KeyMaterialSize, "private"); err != nil {
+		return nil, eris.Wrap(err, "derive x25519 public key")
+	}
+
+	derived, err := curve25519.X25519(private, curve25519.Basepoint)
+	if err != nil {
+		return nil, eris.Wrap(err, "derive x25519 public key")
+	}
+	return cloneBytes(derived), nil
 }

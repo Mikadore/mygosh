@@ -136,12 +136,10 @@ func handshake(conn net.Conn, config noise.Config) (*NoiseStream, error) {
 		shouldWrite = 0
 	}
 
-	msg := make([]byte, 0, 256)
-
 	for msg_seq := 0; ; msg_seq += 1 {
 
 		if msg_seq%2 == shouldWrite {
-			msg, first, second, err := state.WriteMessage(msg[:0], nil)
+			msg, first, second, err := state.WriteMessage(nil, nil)
 			if err != nil {
 				return &ns, eris.Wrap(err, "Handshake error")
 			}
@@ -155,12 +153,12 @@ func handshake(conn net.Conn, config noise.Config) (*NoiseStream, error) {
 				break
 			}
 		} else {
-			msg, err := ns.recvChunk()
+			wireMsg, err := ns.recvChunk()
 			if err != nil {
 				return &ns, eris.Wrapf(err, "failed to receive handshake message %v", state.MessageIndex())
 			}
 
-			msg, first, second, err := state.ReadMessage(nil, msg)
+			_, first, second, err := state.ReadMessage(nil, wireMsg)
 			if err != nil {
 				return &ns, eris.Wrap(err, "Handshake error")
 			}
@@ -203,8 +201,8 @@ func createConfig(initiator bool, staticKey *keys.Keypair) (noise.Config, error)
 			return noise.Config{}, eris.Errorf("noise static key must use %s, got %s", keys.AlgorithmX25519, staticKey.Algorithm)
 		}
 		config.StaticKeypair = noise.DHKey{
-			Public:  append([]byte(nil), staticKey.Public[:]...),
-			Private: append([]byte(nil), staticKey.Private[:]...),
+			Public:  append([]byte(nil), staticKey.Public...),
+			Private: append([]byte(nil), staticKey.Private...),
 		}
 	}
 
@@ -217,14 +215,12 @@ func (ns *NoiseStream) capturePeerStatic(state *noise.HandshakeState) error {
 		return nil
 	}
 
-	var public [32]byte
-	if len(peerStatic) != len(public) {
-		return eris.Errorf("noise peer static key length %d does not match expected length %d", len(peerStatic), len(public))
+	if len(peerStatic) != 32 {
+		return eris.Errorf("noise peer static key length %d does not match expected length %d", len(peerStatic), 32)
 	}
-	copy(public[:], peerStatic)
 	ns.PeerStaticKey = keys.PublicKey{
 		Algorithm: keys.AlgorithmX25519,
-		Bytes:     public,
+		Bytes:     append([]byte(nil), peerStatic...),
 	}
 	return nil
 }

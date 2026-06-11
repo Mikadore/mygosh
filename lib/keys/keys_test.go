@@ -42,15 +42,31 @@ func TestParseKeypairRejectsMismatchedX25519Public(t *testing.T) {
 	enc.Write([]byte(privateKeyMagic))
 	enc.UTF8String(string(AlgorithmX25519))
 
-	badPublic := keypair.Public
+	badPublic := append([]byte(nil), keypair.Public...)
 	badPublic[0] ^= 0xff
-	enc.Bytes(badPublic[:])
-	enc.Bytes(keypair.Private[:])
+	enc.Bytes(badPublic)
+	enc.Bytes(keypair.Private)
 	enc.UTF8String("")
 	require.NoError(t, enc.Err())
 
 	_, err = ParseKeypair(enc.Result())
 	require.ErrorContains(t, err, "public key does not match private key")
+}
+
+func TestParseKeypairRejectsWrongX25519KeyLength(t *testing.T) {
+	keypair, err := GenerateX25519()
+	require.NoError(t, err)
+
+	enc := bincoder.NewEncoder()
+	enc.Write([]byte(privateKeyMagic))
+	enc.UTF8String(string(AlgorithmX25519))
+	enc.Bytes(keypair.Public[:31])
+	enc.Bytes(keypair.Private)
+	enc.UTF8String("")
+	require.NoError(t, enc.Err())
+
+	_, err = ParseKeypair(enc.Result())
+	require.ErrorContains(t, err, "public key length 31 does not match expected length 32")
 }
 
 func TestPublicKeyFingerprintSHA256(t *testing.T) {

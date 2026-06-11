@@ -2,6 +2,7 @@ package keys
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -18,8 +19,12 @@ const (
 	AlgorithmEd25519 Algorithm = "ed25519"
 )
 
-const x25519KeyMaterialSize = 32
-const privateKeyMagic = "mygosh-private-key-v1"
+const (
+	x25519KeyMaterialSize = 32
+	ed25519PublicKeySize  = ed25519.PublicKeySize
+	ed25519SeedSize       = ed25519.SeedSize
+	privateKeyMagic       = "mygosh-private-key-v1"
+)
 
 type PublicKey struct {
 	Algorithm Algorithm
@@ -38,7 +43,7 @@ func Generate(alg Algorithm) (Keypair, error) {
 	case AlgorithmX25519:
 		return GenerateX25519()
 	case AlgorithmEd25519:
-		return Keypair{}, eris.Errorf("generate %s keypair: not implemented", alg)
+		return GenerateEd25519()
 	default:
 		return Keypair{}, eris.Errorf("generate keypair: unsupported algorithm %q", alg)
 	}
@@ -59,6 +64,19 @@ func GenerateX25519() (Keypair, error) {
 		Algorithm: AlgorithmX25519,
 		Public:    public,
 		Private:   private,
+	}, nil
+}
+
+func GenerateEd25519() (Keypair, error) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return Keypair{}, eris.Wrap(err, "generate ed25519 key")
+	}
+
+	return Keypair{
+		Algorithm: AlgorithmEd25519,
+		Public:    cloneBytes(public),
+		Private:   cloneBytes(private.Seed()),
 	}, nil
 }
 
@@ -92,6 +110,20 @@ func (k Keypair) Validate() error {
 		}
 		return nil
 	case AlgorithmEd25519:
+		if err := validateKeyLength(k.Public, ed25519PublicKeySize, "public"); err != nil {
+			return err
+		}
+		if err := validateKeyLength(k.Private, ed25519SeedSize, "private"); err != nil {
+			return err
+		}
+
+		derived, err := deriveEd25519Public(k.Private)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(derived, k.Public) {
+			return eris.New("ed25519 keypair public key does not match private key")
+		}
 		return nil
 	default:
 		return eris.Errorf("validate keypair: unsupported algorithm %q", k.Algorithm)
@@ -217,4 +249,13 @@ func deriveX25519Public(private []byte) ([]byte, error) {
 		return nil, eris.Wrap(err, "derive x25519 public key")
 	}
 	return cloneBytes(derived), nil
+}
+
+func deriveEd25519Public(seed []byte) ([]byte, error) {
+	if err := validateKeyLength(seed, ed25519SeedSize, "private"); err != nil {
+		return nil, eris.Wrap(err, "derive ed25519 public key")
+	}
+
+	private := ed25519.NewKeyFromSeed(seed)
+	return cloneBytes(private.Public().(ed25519.PublicKey)), nil
 }

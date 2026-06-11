@@ -8,7 +8,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/transport/wirepb"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )

@@ -19,6 +19,7 @@ type Settings struct {
 }
 
 type CoreSettings struct {
+	Host  string `mapstructure:"host"`
 	Port  int    `mapstructure:"port"`
 	Shell string `mapstructure:"shell"`
 }
@@ -32,6 +33,7 @@ func Load(verbosity int) (Settings, error) {
 	reader := viper.New()
 	reader.SetConfigFile(ConfigFile)
 	reader.SetConfigType("toml")
+	reader.SetDefault("core.host", "localhost")
 	reader.SetDefault("core.port", 42022)
 	reader.SetDefault("core.shell", "/bin/sh")
 	reader.SetDefault("log.level", "")
@@ -48,6 +50,7 @@ func Load(verbosity int) (Settings, error) {
 
 	cfg.ConfigFile = ConfigFile
 	cfg.Verbosity = verbosity
+	cfg.Core.Host = strings.TrimSpace(cfg.Core.Host)
 	cfg.Log.Level = strings.ToUpper(strings.TrimSpace(cfg.Log.Level))
 	if cfg.Log.Level == "WARNING" {
 		cfg.Log.Level = "WARN"
@@ -66,10 +69,13 @@ func Load(verbosity int) (Settings, error) {
 }
 
 func (s Settings) ListenAddress() string {
-	return net.JoinHostPort("localhost", strconv.Itoa(s.Core.Port))
+	return net.JoinHostPort(s.Core.Host, strconv.Itoa(s.Core.Port))
 }
 
 func (s Settings) Validate() error {
+	if strings.TrimSpace(s.Core.Host) == "" {
+		return eris.New("core.host must not be empty")
+	}
 	if s.Core.Port < 1 || s.Core.Port > 65535 {
 		return eris.Errorf("core.port must be between 1 and 65535, got %d", s.Core.Port)
 	}

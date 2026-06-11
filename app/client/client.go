@@ -41,6 +41,10 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	if err != nil {
 		return eris.Wrapf(err, "connect to %s", args.Address)
 	}
+	//TODO: implement comprehensive connection lifecycle
+	// and integrate connection closing/termination with
+	// logging and application error handling
+	//nolint:errcheck
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 

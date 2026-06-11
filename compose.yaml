@@ -1,0 +1,14 @@
+services:
+  server:
+    image: mygosh-server:dev
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    init: true
+    ports:
+      - "42022:42022"
+    environment:
+      MYGOSH_LISTEN_HOST: 0.0.0.0
+    volumes:
+      - ./mygosh.toml:/usr/share/mygosh/mygosh.toml:ro
+      - ./docker/server/entrypoint.d:/docker-entrypoint.d:ro

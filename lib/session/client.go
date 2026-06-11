@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/Mikadore/mygosh/lib/transport"
-	"github.com/Mikadore/mygosh/lib/transport/wirepb"
+	"github.com/Mikadore/mygosh/lib/tty"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 	"golang.org/x/term"
 )
@@ -33,6 +33,9 @@ func (s *ClientSession) Run(ctx context.Context) error {
 	if err != nil {
 		return eris.Wrap(err, "hook raw terminal")
 	}
+	//TODO: implement comprehensive application lifecycle
+	// and integrate with logging and error handling
+	//nolint:errcheck
 	defer raw.Restore()
 
 	size := currentTerminalSize(s.input)

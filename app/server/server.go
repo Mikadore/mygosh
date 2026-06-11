@@ -24,6 +24,10 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	if err != nil {
 		return eris.Wrapf(err, "listen on %s", addr)
 	}
+	//TODO: implement comprehensive connection lifecycle
+	// and integrate connection closing/termination with
+	// logging and application error handling
+	//nolint:errcheck
 	defer listener.Close()
 	log.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
 
@@ -31,6 +35,10 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	if err != nil {
 		return eris.Wrap(err, "accept connection")
 	}
+	//TODO: implement comprehensive connection lifecycle
+	// and integrate connection closing/termination with
+	// logging and application error handling
+	//nolint:errcheck
 	defer conn.Close()
 	log.Info("accepted connection", "remote", conn.RemoteAddr())
 

@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"buf.build/go/protovalidate"
-	"github.com/Mikadore/mygosh/lib/transport/wirepb"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 	"google.golang.org/protobuf/proto"
 )

@@ -47,9 +47,10 @@ func newRootCommand(ctx context.Context) *cobra.Command {
 	root.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "increase log verbosity (-v INFO, -vv DEBUG)")
 
 	root.AddCommand(&cobra.Command{
-		Use:   "serve",
-		Short: "run the mygosh server",
-		Args:  cobra.NoArgs,
+		Use:     "server",
+		Aliases: []string{"serve"},
+		Short:   "run the mygosh server",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return server.RunServer(ctx, cfg)
 		},

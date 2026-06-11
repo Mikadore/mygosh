@@ -10,8 +10,8 @@ import (
 	"syscall"
 
 	"github.com/Mikadore/mygosh/lib/transport"
-	"github.com/Mikadore/mygosh/lib/transport/wirepb"
 	"github.com/Mikadore/mygosh/lib/tty"
+	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 )
 
@@ -45,6 +45,9 @@ func (s *ServerSession) Run(ctx context.Context) error {
 		})
 		return eris.Wrap(err, "create server PTY")
 	}
+	//TODO: implement comprehensive application lifecycle
+	// and integrate with logging and error handling
+	//nolint:errcheck
 	defer vtty.Close()
 
 	if err := s.transport.Send(&wirepb.Envelope{

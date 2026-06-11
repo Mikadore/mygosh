@@ -1,4 +1,5 @@
 [core]
+host = "localhost"
 port = 42022
 shell = "/bin/bash"
 
@@ -8,4 +9,3 @@ level = "DEBUG"
 
 # Output logs as JSON
 json = false
-

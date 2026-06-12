@@ -2,9 +2,9 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: mygosh/wire/v1/auth.proto
+// source: mygosh/auth/v1/auth.proto
 
-package wirepb
+package authpb
 
 import (
 	_ "buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go/buf/validate"
@@ -33,7 +33,7 @@ type HostAuthInit struct {
 
 func (x *HostAuthInit) Reset() {
 	*x = HostAuthInit{}
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[0]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -45,7 +45,7 @@ func (x *HostAuthInit) String() string {
 func (*HostAuthInit) ProtoMessage() {}
 
 func (x *HostAuthInit) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[0]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,7 +58,7 @@ func (x *HostAuthInit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HostAuthInit.ProtoReflect.Descriptor instead.
 func (*HostAuthInit) Descriptor() ([]byte, []int) {
-	return file_mygosh_wire_v1_auth_proto_rawDescGZIP(), []int{0}
+	return file_mygosh_auth_v1_auth_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *HostAuthInit) GetMygoshAuthVersion() string {
@@ -93,7 +93,7 @@ type ServerAuth struct {
 
 func (x *ServerAuth) Reset() {
 	*x = ServerAuth{}
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[1]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -105,7 +105,7 @@ func (x *ServerAuth) String() string {
 func (*ServerAuth) ProtoMessage() {}
 
 func (x *ServerAuth) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[1]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -118,7 +118,7 @@ func (x *ServerAuth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerAuth.ProtoReflect.Descriptor instead.
 func (*ServerAuth) Descriptor() ([]byte, []int) {
-	return file_mygosh_wire_v1_auth_proto_rawDescGZIP(), []int{1}
+	return file_mygosh_auth_v1_auth_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ServerAuth) GetServerHostKey() []byte {
@@ -155,7 +155,7 @@ type ClientAuthRequest struct {
 
 func (x *ClientAuthRequest) Reset() {
 	*x = ClientAuthRequest{}
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[2]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +167,7 @@ func (x *ClientAuthRequest) String() string {
 func (*ClientAuthRequest) ProtoMessage() {}
 
 func (x *ClientAuthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_wire_v1_auth_proto_msgTypes[2]
+	mi := &file_mygosh_auth_v1_auth_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +180,7 @@ func (x *ClientAuthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientAuthRequest.ProtoReflect.Descriptor instead.
 func (*ClientAuthRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_wire_v1_auth_proto_rawDescGZIP(), []int{2}
+	return file_mygosh_auth_v1_auth_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ClientAuthRequest) GetUsername() string {
@@ -218,11 +218,11 @@ func (x *ClientAuthRequest) GetSignature() []byte {
 	return nil
 }
 
-var File_mygosh_wire_v1_auth_proto protoreflect.FileDescriptor
+var File_mygosh_auth_v1_auth_proto protoreflect.FileDescriptor
 
-const file_mygosh_wire_v1_auth_proto_rawDesc = "" +
+const file_mygosh_auth_v1_auth_proto_rawDesc = "" +
 	"\n" +
-	"\x19mygosh/wire/v1/auth.proto\x12\x0emygosh.wire.v1\x1a\x1bbuf/validate/validate.proto\"\xab\x01\n" +
+	"\x19mygosh/auth/v1/auth.proto\x12\x0emygosh.auth.v1\x1a\x1bbuf/validate/validate.proto\"\xab\x01\n" +
 	"\fHostAuthInit\x127\n" +
 	"\x13mygosh_auth_version\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x11mygoshAuthVersion\x12*\n" +
 	"\fclient_nonce\x18\x02 \x01(\fB\a\xbaH\x04z\x02h R\vclientNonce\x126\n" +
@@ -237,27 +237,27 @@ const file_mygosh_wire_v1_auth_proto_rawDesc = "" +
 	"\aservice\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\aservice\x12A\n" +
 	"\x19client_public_key_or_cert\x18\x03 \x01(\fB\a\xbaH\x04z\x02\x10\x01R\x15clientPublicKeyOrCert\x12-\n" +
 	"\x0eclient_sig_alg\x18\x04 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\fclientSigAlg\x12%\n" +
-	"\tsignature\x18\x05 \x01(\fB\a\xbaH\x04z\x02\x10\x01R\tsignatureB3Z1github.com/Mikadore/mygosh/lib/wire/wirepb;wirepbb\x06proto3"
+	"\tsignature\x18\x05 \x01(\fB\a\xbaH\x04z\x02\x10\x01R\tsignatureB3Z1github.com/Mikadore/mygosh/lib/auth/authpb;authpbb\x06proto3"
 
 var (
-	file_mygosh_wire_v1_auth_proto_rawDescOnce sync.Once
-	file_mygosh_wire_v1_auth_proto_rawDescData []byte
+	file_mygosh_auth_v1_auth_proto_rawDescOnce sync.Once
+	file_mygosh_auth_v1_auth_proto_rawDescData []byte
 )
 
-func file_mygosh_wire_v1_auth_proto_rawDescGZIP() []byte {
-	file_mygosh_wire_v1_auth_proto_rawDescOnce.Do(func() {
-		file_mygosh_wire_v1_auth_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_mygosh_wire_v1_auth_proto_rawDesc), len(file_mygosh_wire_v1_auth_proto_rawDesc)))
+func file_mygosh_auth_v1_auth_proto_rawDescGZIP() []byte {
+	file_mygosh_auth_v1_auth_proto_rawDescOnce.Do(func() {
+		file_mygosh_auth_v1_auth_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_mygosh_auth_v1_auth_proto_rawDesc), len(file_mygosh_auth_v1_auth_proto_rawDesc)))
 	})
-	return file_mygosh_wire_v1_auth_proto_rawDescData
+	return file_mygosh_auth_v1_auth_proto_rawDescData
 }
 
-var file_mygosh_wire_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
-var file_mygosh_wire_v1_auth_proto_goTypes = []any{
-	(*HostAuthInit)(nil),      // 0: mygosh.wire.v1.HostAuthInit
-	(*ServerAuth)(nil),        // 1: mygosh.wire.v1.ServerAuth
-	(*ClientAuthRequest)(nil), // 2: mygosh.wire.v1.ClientAuthRequest
+var file_mygosh_auth_v1_auth_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_mygosh_auth_v1_auth_proto_goTypes = []any{
+	(*HostAuthInit)(nil),      // 0: mygosh.auth.v1.HostAuthInit
+	(*ServerAuth)(nil),        // 1: mygosh.auth.v1.ServerAuth
+	(*ClientAuthRequest)(nil), // 2: mygosh.auth.v1.ClientAuthRequest
 }
-var file_mygosh_wire_v1_auth_proto_depIdxs = []int32{
+var file_mygosh_auth_v1_auth_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -265,26 +265,26 @@ var file_mygosh_wire_v1_auth_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_mygosh_wire_v1_auth_proto_init() }
-func file_mygosh_wire_v1_auth_proto_init() {
-	if File_mygosh_wire_v1_auth_proto != nil {
+func init() { file_mygosh_auth_v1_auth_proto_init() }
+func file_mygosh_auth_v1_auth_proto_init() {
+	if File_mygosh_auth_v1_auth_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mygosh_wire_v1_auth_proto_rawDesc), len(file_mygosh_wire_v1_auth_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mygosh_auth_v1_auth_proto_rawDesc), len(file_mygosh_auth_v1_auth_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_mygosh_wire_v1_auth_proto_goTypes,
-		DependencyIndexes: file_mygosh_wire_v1_auth_proto_depIdxs,
-		MessageInfos:      file_mygosh_wire_v1_auth_proto_msgTypes,
+		GoTypes:           file_mygosh_auth_v1_auth_proto_goTypes,
+		DependencyIndexes: file_mygosh_auth_v1_auth_proto_depIdxs,
+		MessageInfos:      file_mygosh_auth_v1_auth_proto_msgTypes,
 	}.Build()
-	File_mygosh_wire_v1_auth_proto = out.File
-	file_mygosh_wire_v1_auth_proto_goTypes = nil
-	file_mygosh_wire_v1_auth_proto_depIdxs = nil
+	File_mygosh_auth_v1_auth_proto = out.File
+	file_mygosh_auth_v1_auth_proto_goTypes = nil
+	file_mygosh_auth_v1_auth_proto_depIdxs = nil
 }

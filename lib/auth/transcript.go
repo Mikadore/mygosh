@@ -3,19 +3,19 @@ package auth
 import (
 	"crypto/sha256"
 
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/rotisserie/eris"
 	"google.golang.org/protobuf/proto"
 )
 
-func HashHostAuthInit(msg *wirepb.HostAuthInit) ([]byte, error) {
+func HashHostAuthInit(msg *authpb.HostAuthInit) ([]byte, error) {
 	if msg == nil {
 		return nil, eris.New("host auth init is required")
 	}
 	return hashProtoMessage(msg)
 }
 
-func HashServerAuthMessage(msg *wirepb.ServerAuth) ([]byte, error) {
+func HashServerAuthMessage(msg *authpb.ServerAuth) ([]byte, error) {
 	if msg == nil {
 		return nil, eris.New("server auth is required")
 	}
@@ -23,7 +23,7 @@ func HashServerAuthMessage(msg *wirepb.ServerAuth) ([]byte, error) {
 }
 
 func HashServerAuthFields(serverHostKey []byte, serverNonce []byte) ([]byte, error) {
-	return hashProtoMessage(&wirepb.ServerAuth{
+	return hashProtoMessage(&authpb.ServerAuth{
 		ServerHostKey: cloneBytes(serverHostKey),
 		ServerNonce:   cloneBytes(serverNonce),
 	})

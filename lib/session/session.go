@@ -6,9 +6,10 @@ import (
 	"net"
 
 	"github.com/Mikadore/mygosh/lib/auth"
+	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
+	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 )
 
@@ -166,7 +167,7 @@ func (m *authMachine) establishClient(cfg ClientConfig) (*Session, error) {
 		return nil, eris.Wrap(err, "generate client nonce")
 	}
 
-	hostAuthInit := &wirepb.HostAuthInit{
+	hostAuthInit := &authpb.HostAuthInit{
 		MygoshAuthVersion: auth.ProtocolVersion,
 		ClientNonce:       clientNonce,
 		ReferenceIdentity: cfg.ReferenceIdentity,
@@ -176,8 +177,8 @@ func (m *authMachine) establishClient(cfg ClientConfig) (*Session, error) {
 		return nil, eris.Wrap(err, "hash host auth init")
 	}
 
-	if err := m.transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_HostAuthInit{
+	if err := m.transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_HostAuthInit{
 			HostAuthInit: hostAuthInit,
 		},
 	}); err != nil {
@@ -242,7 +243,7 @@ func (m *authMachine) establishClient(cfg ClientConfig) (*Session, error) {
 		return nil, eris.Wrap(err, "encode client auth payload")
 	}
 
-	clientAuthRequest := &wirepb.ClientAuthRequest{
+	clientAuthRequest := &authpb.ClientAuthRequest{
 		Username:              cfg.Username,
 		Service:               cfg.Service,
 		ClientPublicKeyOrCert: clientPublicKeyBlob,
@@ -250,8 +251,8 @@ func (m *authMachine) establishClient(cfg ClientConfig) (*Session, error) {
 		Signature:             (&cfg.ClientIdentity).Sign(clientAuthPayload),
 	}
 
-	if err := m.transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_ClientAuthRequest{
+	if err := m.transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_ClientAuthRequest{
 			ClientAuthRequest: clientAuthRequest,
 		},
 	}); err != nil {
@@ -314,13 +315,13 @@ func (m *authMachine) establishServer(cfg ServerConfig) (*Session, error) {
 		return nil, eris.Wrap(err, "encode server auth payload")
 	}
 
-	serverAuthMsg := &wirepb.ServerAuth{
+	serverAuthMsg := &authpb.ServerAuth{
 		ServerHostKey: hostPublicKeyBlob,
 		ServerNonce:   serverNonce,
 		Signature:     (&cfg.HostKey).Sign(serverAuthPayload),
 	}
-	if err := m.transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_ServerAuth{
+	if err := m.transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_ServerAuth{
 			ServerAuth: serverAuthMsg,
 		},
 	}); err != nil {
@@ -403,48 +404,48 @@ func (m *authMachine) establishServer(cfg ServerConfig) (*Session, error) {
 	}, nil
 }
 
-func receiveHostAuthInit(messageTransport *transport.Transport) (*wirepb.HostAuthInit, error) {
+func receiveHostAuthInit(messageTransport *transport.Transport) (*authpb.HostAuthInit, error) {
 	envelope, err := messageTransport.Receive()
 	if err != nil {
 		return nil, eris.Wrap(err, "receive host auth init")
 	}
 
 	switch kind := envelope.Kind.(type) {
-	case *wirepb.Envelope_HostAuthInit:
+	case *sessionpb.Envelope_HostAuthInit:
 		return kind.HostAuthInit, nil
-	case *wirepb.Envelope_Err:
+	case *sessionpb.Envelope_Err:
 		return nil, eris.Errorf("peer rejected auth: %s", kind.Err.GetMessage())
 	default:
 		return nil, eris.Errorf("expected host auth init, got %T", kind)
 	}
 }
 
-func receiveServerAuth(messageTransport *transport.Transport) (*wirepb.ServerAuth, error) {
+func receiveServerAuth(messageTransport *transport.Transport) (*authpb.ServerAuth, error) {
 	envelope, err := messageTransport.Receive()
 	if err != nil {
 		return nil, eris.Wrap(err, "receive server auth")
 	}
 
 	switch kind := envelope.Kind.(type) {
-	case *wirepb.Envelope_ServerAuth:
+	case *sessionpb.Envelope_ServerAuth:
 		return kind.ServerAuth, nil
-	case *wirepb.Envelope_Err:
+	case *sessionpb.Envelope_Err:
 		return nil, eris.Errorf("server rejected auth: %s", kind.Err.GetMessage())
 	default:
 		return nil, eris.Errorf("expected server auth, got %T", kind)
 	}
 }
 
-func receiveClientAuthRequest(messageTransport *transport.Transport) (*wirepb.ClientAuthRequest, error) {
+func receiveClientAuthRequest(messageTransport *transport.Transport) (*authpb.ClientAuthRequest, error) {
 	envelope, err := messageTransport.Receive()
 	if err != nil {
 		return nil, eris.Wrap(err, "receive client auth request")
 	}
 
 	switch kind := envelope.Kind.(type) {
-	case *wirepb.Envelope_ClientAuthRequest:
+	case *sessionpb.Envelope_ClientAuthRequest:
 		return kind.ClientAuthRequest, nil
-	case *wirepb.Envelope_Err:
+	case *sessionpb.Envelope_Err:
 		return nil, eris.Errorf("peer rejected auth: %s", kind.Err.GetMessage())
 	default:
 		return nil, eris.Errorf("expected client auth request, got %T", kind)
@@ -452,9 +453,9 @@ func receiveClientAuthRequest(messageTransport *transport.Transport) (*wirepb.Cl
 }
 
 func sendWireError(messageTransport *transport.Transport, code string, message string) {
-	_ = messageTransport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_Err{
-			Err: &wirepb.Error{
+	_ = messageTransport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Err{
+			Err: &sessionpb.Error{
 				Code:    code,
 				Message: message,
 			},

@@ -6,8 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/bincoder"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -27,13 +28,13 @@ func (p *packetBuffer) Receive() ([]byte, error) {
 func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 	tests := []struct {
 		name     string
-		envelope *wirepb.Envelope
+		envelope *sessionpb.Envelope
 	}{
 		{
 			name: "open",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_Open{
-					Open: &wirepb.OpenRequest{
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Open{
+					Open: &sessionpb.OpenRequest{
 						Term: "xterm-256color",
 						Rows: 24,
 						Cols: 80,
@@ -43,57 +44,57 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "open ok",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_OpenOk{
-					OpenOk: &wirepb.OpenResponse{SessionId: "session-1"},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_OpenOk{
+					OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
 				},
 			},
 		},
 		{
 			name: "data",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_Data{
-					Data: &wirepb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Data{
+					Data: &sessionpb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
 				},
 			},
 		},
 		{
 			name: "err",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_Err{
-					Err: &wirepb.Error{Code: "failed", Message: "failed"},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Err{
+					Err: &sessionpb.Error{Code: "failed", Message: "failed"},
 				},
 			},
 		},
 		{
 			name: "resize",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_Resize{
-					Resize: &wirepb.Resize{Rows: 40, Cols: 120},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Resize{
+					Resize: &sessionpb.Resize{Rows: 40, Cols: 120},
 				},
 			},
 		},
 		{
 			name: "close",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_Close{
-					Close: &wirepb.Close{Reason: "stdin closed"},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Close{
+					Close: &sessionpb.Close{Reason: "stdin closed"},
 				},
 			},
 		},
 		{
 			name: "exit status",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_ExitStatus{
-					ExitStatus: &wirepb.ExitStatus{Code: 12},
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ExitStatus{
+					ExitStatus: &sessionpb.ExitStatus{Code: 12},
 				},
 			},
 		},
 		{
 			name: "host auth init",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_HostAuthInit{
-					HostAuthInit: &wirepb.HostAuthInit{
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_HostAuthInit{
+					HostAuthInit: &authpb.HostAuthInit{
 						MygoshAuthVersion: "mygosh-auth-v1",
 						ClientNonce:       bytes.Repeat([]byte{0x11}, 32),
 						ReferenceIdentity: "server.example.test",
@@ -103,9 +104,9 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "server auth",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_ServerAuth{
-					ServerAuth: &wirepb.ServerAuth{
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ServerAuth{
+					ServerAuth: &authpb.ServerAuth{
 						ServerHostKey: []byte("server-host-key"),
 						ServerNonce:   bytes.Repeat([]byte{0x22}, 32),
 						Signature:     []byte("server-signature"),
@@ -115,9 +116,9 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "client auth request",
-			envelope: &wirepb.Envelope{
-				Kind: &wirepb.Envelope_ClientAuthRequest{
-					ClientAuthRequest: &wirepb.ClientAuthRequest{
+			envelope: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ClientAuthRequest{
+					ClientAuthRequest: &authpb.ClientAuthRequest{
 						Username:              "alice",
 						Service:               "shell",
 						ClientPublicKeyOrCert: []byte("client-key"),
@@ -152,9 +153,9 @@ func TestDataPayloadIsUnchanged(t *testing.T) {
 	transport := NewTransport(&packetBuffer{})
 	payload := []byte{0x00, 0x01, 'h', 'i', 0xff}
 
-	require.NoError(t, transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_Data{
-			Data: &wirepb.Data{Data: payload},
+	require.NoError(t, transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Data{
+			Data: &sessionpb.Data{Data: payload},
 		},
 	}))
 
@@ -173,7 +174,7 @@ func TestTransportRejectsEmptyPacket(t *testing.T) {
 
 func TestTransportRejectsEnvelopeWithoutKind(t *testing.T) {
 	stream := &packetBuffer{}
-	packet, err := proto.Marshal(&wirepb.Envelope{})
+	packet, err := proto.Marshal(&sessionpb.Envelope{})
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(packet))
 
@@ -183,9 +184,9 @@ func TestTransportRejectsEnvelopeWithoutKind(t *testing.T) {
 
 func TestTransportRejectsInvalidResize(t *testing.T) {
 	stream := &packetBuffer{}
-	packet, err := proto.Marshal(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_Resize{
-			Resize: &wirepb.Resize{
+	packet, err := proto.Marshal(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Resize{
+			Resize: &sessionpb.Resize{
 				Rows: 0,
 				Cols: 80,
 			},
@@ -201,9 +202,9 @@ func TestTransportRejectsInvalidResize(t *testing.T) {
 func TestTransportRejectsInvalidError(t *testing.T) {
 	transport := NewTransport(&packetBuffer{})
 
-	err := transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_Err{
-			Err: &wirepb.Error{Code: "missing-message"},
+	err := transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Err{
+			Err: &sessionpb.Error{Code: "missing-message"},
 		},
 	})
 	require.Error(t, err)
@@ -212,9 +213,9 @@ func TestTransportRejectsInvalidError(t *testing.T) {
 func TestTransportRejectsInvalidHostAuthInit(t *testing.T) {
 	transport := NewTransport(&packetBuffer{})
 
-	err := transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_HostAuthInit{
-			HostAuthInit: &wirepb.HostAuthInit{
+	err := transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_HostAuthInit{
+			HostAuthInit: &authpb.HostAuthInit{
 				MygoshAuthVersion: "mygosh-auth-v1",
 				ClientNonce:       []byte("short"),
 				ReferenceIdentity: "server.example.test",
@@ -267,14 +268,14 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 	clientTransport := NewTransport(clientStream)
 	serverTransport := NewTransport(serverStream)
 
-	expected := &wirepb.Envelope{
-		Kind: &wirepb.Envelope_Data{
-			Data: &wirepb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
+	expected := &sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Data{
+			Data: &sessionpb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
 		},
 	}
 
 	errs = make(chan error, 2)
-	gotCh := make(chan *wirepb.Envelope, 1)
+	gotCh := make(chan *sessionpb.Envelope, 1)
 	go func() {
 		got, err := serverTransport.Receive()
 		if err == nil {

@@ -1,10 +1,10 @@
 syntax = "proto3";
 
-package mygosh.wire.v1;
+package mygosh.auth.v1;
 
 import "buf/validate/validate.proto";
 
-option go_package = "github.com/Mikadore/mygosh/lib/wire/wirepb;wirepb";
+option go_package = "github.com/Mikadore/mygosh/lib/auth/authpb;authpb";
 
 message HostAuthInit {
   string mygosh_auth_version = 1 [(buf.validate.field).string.min_len = 1];

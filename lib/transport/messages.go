@@ -4,7 +4,7 @@ import (
 	"sync"
 
 	"buf.build/go/protovalidate"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/rotisserie/eris"
 	"google.golang.org/protobuf/proto"
 )
@@ -23,7 +23,7 @@ func NewTransport(packets PacketStream) *Transport {
 	return &Transport{packets: packets}
 }
 
-func (t *Transport) Send(envelope *wirepb.Envelope) error {
+func (t *Transport) Send(envelope *sessionpb.Envelope) error {
 	if envelope == nil {
 		return eris.New("wire: nil envelope")
 	}
@@ -45,7 +45,7 @@ func (t *Transport) Send(envelope *wirepb.Envelope) error {
 	return nil
 }
 
-func (t *Transport) Receive() (*wirepb.Envelope, error) {
+func (t *Transport) Receive() (*sessionpb.Envelope, error) {
 	packet, err := t.packets.Receive()
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func (t *Transport) Receive() (*wirepb.Envelope, error) {
 		return nil, eris.New("wire: empty message")
 	}
 
-	var envelope wirepb.Envelope
+	var envelope sessionpb.Envelope
 	if err := proto.Unmarshal(packet, &envelope); err != nil {
 		return nil, eris.Wrap(err, "decode message envelope")
 	}

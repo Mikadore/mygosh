@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
+	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/rotisserie/eris"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -65,13 +65,13 @@ func TestEstablishClientServerSession(t *testing.T) {
 	require.Equal(t, "server.example.test", serverSession.Metadata().ReferenceIdentity)
 	require.Equal(t, clientIdentity.PublicKey(), serverSession.Metadata().ClientPrincipal.PublicKey)
 
-	expected := &wirepb.Envelope{
-		Kind: &wirepb.Envelope_Data{
-			Data: &wirepb.Data{Data: []byte("authenticated transport")},
+	expected := &sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Data{
+			Data: &sessionpb.Data{Data: []byte("authenticated transport")},
 		},
 	}
 
-	gotCh := make(chan *wirepb.Envelope, 1)
+	gotCh := make(chan *sessionpb.Envelope, 1)
 	errs = make(chan error, 2)
 	go func() {
 		got, err := serverSession.Transport().Receive()

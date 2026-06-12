@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/Mikadore/mygosh/lib/tty"
-	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/rotisserie/eris"
 	"golang.org/x/term"
 )
@@ -39,9 +39,9 @@ func (s *TerminalClient) Run(ctx context.Context) error {
 	defer raw.Restore()
 
 	size := currentTerminalSize(s.input)
-	if err := s.transport.Send(&wirepb.Envelope{
-		Kind: &wirepb.Envelope_Open{
-			Open: &wirepb.OpenRequest{
+	if err := s.transport.Send(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_Open{
+			Open: &sessionpb.OpenRequest{
 				Term: terminalName(),
 				Rows: uint32(size.Height),
 				Cols: uint32(size.Width),
@@ -70,9 +70,9 @@ func (s *TerminalClient) waitOpenOK() error {
 	}
 
 	switch kind := envelope.Kind.(type) {
-	case *wirepb.Envelope_OpenOk:
+	case *sessionpb.Envelope_OpenOk:
 		return nil
-	case *wirepb.Envelope_Err:
+	case *sessionpb.Envelope_Err:
 		return eris.Errorf("server rejected open: %s", kind.Err.GetMessage())
 	default:
 		return eris.Errorf("expected open response, got %T", kind)
@@ -84,9 +84,9 @@ func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
 	for {
 		n, err := raw.Read(buf)
 		if n > 0 {
-			if sendErr := s.transport.Send(&wirepb.Envelope{
-				Kind: &wirepb.Envelope_Data{
-					Data: &wirepb.Data{Data: buf[:n]},
+			if sendErr := s.transport.Send(&sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Data{
+					Data: &sessionpb.Data{Data: buf[:n]},
 				},
 			}); sendErr != nil {
 				return eris.Wrap(sendErr, "send terminal data")
@@ -94,9 +94,9 @@ func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return s.transport.Send(&wirepb.Envelope{
-					Kind: &wirepb.Envelope_Close{
-						Close: &wirepb.Close{Reason: "stdin closed"},
+				return s.transport.Send(&sessionpb.Envelope{
+					Kind: &sessionpb.Envelope_Close{
+						Close: &sessionpb.Close{Reason: "stdin closed"},
 					},
 				})
 			}
@@ -112,9 +112,9 @@ func (s *TerminalClient) forwardResizes(ctx context.Context, raw *tty.RawTTY) er
 			if !ok {
 				return nil
 			}
-			if err := s.transport.Send(&wirepb.Envelope{
-				Kind: &wirepb.Envelope_Resize{
-					Resize: &wirepb.Resize{
+			if err := s.transport.Send(&sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Resize{
+					Resize: &sessionpb.Resize{
 						Rows: uint32(size.Height),
 						Cols: uint32(size.Width),
 					},
@@ -139,19 +139,19 @@ func (s *TerminalClient) receiveOutput() error {
 		}
 
 		switch kind := envelope.Kind.(type) {
-		case *wirepb.Envelope_Data:
+		case *sessionpb.Envelope_Data:
 			if err := writeFull(s.output, kind.Data.GetData()); err != nil {
 				return eris.Wrap(err, "write terminal output")
 			}
-		case *wirepb.Envelope_ExitStatus:
+		case *sessionpb.Envelope_ExitStatus:
 			code := kind.ExitStatus.GetCode()
 			if code == 0 {
 				return nil
 			}
 			return eris.Errorf("remote process exited with status %d", code)
-		case *wirepb.Envelope_Close:
+		case *sessionpb.Envelope_Close:
 			return nil
-		case *wirepb.Envelope_Err:
+		case *sessionpb.Envelope_Err:
 			return eris.Errorf("server error: %s", kind.Err.GetMessage())
 		default:
 			return eris.Errorf("unexpected server event %T", kind)

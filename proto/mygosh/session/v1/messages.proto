@@ -1,11 +1,11 @@
 syntax = "proto3";
 
-package mygosh.wire.v1;
+package mygosh.session.v1;
 
 import "buf/validate/validate.proto";
-import "mygosh/wire/v1/auth.proto";
+import "mygosh/auth/v1/auth.proto";
 
-option go_package = "github.com/Mikadore/mygosh/lib/wire/wirepb;wirepb";
+option go_package = "github.com/Mikadore/mygosh/lib/session/sessionpb;sessionpb";
 
 message Envelope {
   oneof kind {
@@ -18,9 +18,9 @@ message Envelope {
     Resize resize = 5;
     Close close = 6;
     ExitStatus exit_status = 7;
-    HostAuthInit host_auth_init = 8;
-    ServerAuth server_auth = 9;
-    ClientAuthRequest client_auth_request = 10;
+    mygosh.auth.v1.HostAuthInit host_auth_init = 8;
+    mygosh.auth.v1.ServerAuth server_auth = 9;
+    mygosh.auth.v1.ClientAuthRequest client_auth_request = 10;
   }
 }
 

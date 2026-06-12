@@ -54,7 +54,7 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 		return err
 	}
 
-	established, err := session.EstablishServer(conn, session.ServerConfig{
+	established, err := session.EstablishServer(ctx, conn, session.ServerConfig{
 		HostKey: serverHostKey,
 		AuthorizeClient: func(principal session.ClientPrincipal) error {
 			if principal.Service != "shell" {
@@ -70,6 +70,7 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
+	defer established.Close()
 
 	meta := established.Metadata()
 	log.Info("authenticated client", "username", meta.ClientPrincipal.Username, "fingerprint", meta.ClientPrincipal.PublicKey.FingerprintSHA256())

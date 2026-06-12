@@ -28,9 +28,14 @@ func NewShellServer(transport *transport.Transport, shell string) *ShellServer {
 }
 
 func (s *ShellServer) Run(ctx context.Context) error {
+	ctx = normalizeContext(ctx)
+
+	stopWatchingContext := watchContextCancellation(ctx, s.transport)
+	defer stopWatchingContext()
+
 	req, err := s.receiveOpen()
 	if err != nil {
-		return err
+		return preferContextError(ctx, err)
 	}
 
 	cmd := exec.CommandContext(ctx, s.shell)
@@ -55,14 +60,14 @@ func (s *ShellServer) Run(ctx context.Context) error {
 			OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
 		},
 	}); err != nil {
-		return eris.Wrap(err, "send open response")
+		return preferContextError(ctx, eris.Wrap(err, "send open response"))
 	}
 
 	errs := make(chan error, 2)
 	go func() { errs <- s.forwardOutput(vtty, cmd) }()
 	go func() { errs <- s.receiveInput(vtty) }()
 
-	return <-errs
+	return preferContextError(ctx, <-errs)
 }
 
 func (s *ShellServer) receiveOpen() (*sessionpb.OpenRequest, error) {

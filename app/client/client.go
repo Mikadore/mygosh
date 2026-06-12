@@ -64,7 +64,7 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 		return err
 	}
 
-	established, err := session.EstablishClient(conn, session.ClientConfig{
+	established, err := session.EstablishClient(ctx, conn, session.ClientConfig{
 		ReferenceIdentity:   referenceIdentity(args.Address),
 		Username:            localUsername(),
 		Service:             "shell",
@@ -74,6 +74,7 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
+	defer established.Close()
 
 	log.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
 	return session.NewTerminalClient(established.Transport(), os.Stdin, os.Stdout).Run(ctx)

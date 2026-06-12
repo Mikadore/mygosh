@@ -29,6 +29,11 @@ func NewTerminalClient(transport *transport.Transport, input *os.File, output io
 }
 
 func (s *TerminalClient) Run(ctx context.Context) error {
+	ctx = normalizeContext(ctx)
+
+	stopWatchingContext := watchContextCancellation(ctx, s.transport)
+	defer stopWatchingContext()
+
 	raw, err := tty.HookRaw(ctx, s.input)
 	if err != nil {
 		return eris.Wrap(err, "hook raw terminal")
@@ -48,11 +53,11 @@ func (s *TerminalClient) Run(ctx context.Context) error {
 			},
 		},
 	}); err != nil {
-		return eris.Wrap(err, "send open request")
+		return preferContextError(ctx, eris.Wrap(err, "send open request"))
 	}
 
 	if err := s.waitOpenOK(); err != nil {
-		return err
+		return preferContextError(ctx, err)
 	}
 
 	errs := make(chan error, 3)
@@ -60,7 +65,7 @@ func (s *TerminalClient) Run(ctx context.Context) error {
 	go func() { errs <- s.forwardResizes(ctx, raw) }()
 	go func() { errs <- s.receiveOutput() }()
 
-	return <-errs
+	return preferContextError(ctx, <-errs)
 }
 
 func (s *TerminalClient) waitOpenOK() error {
@@ -123,7 +128,7 @@ func (s *TerminalClient) forwardResizes(ctx context.Context, raw *tty.RawTTY) er
 				return eris.Wrap(err, "send terminal resize")
 			}
 		case <-ctx.Done():
-			return nil
+			return ctx.Err()
 		}
 	}
 }

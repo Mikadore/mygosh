@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestEstablishClientServerSession(t *testing.T) {
 	serverSessionCh := make(chan *Session, 1)
 	errs := make(chan error, 2)
 	go func() {
-		session, err := EstablishServer(serverConn, ServerConfig{
+		session, err := EstablishServer(context.Background(), serverConn, ServerConfig{
 			HostKey: serverHostKey,
 			AuthorizeClient: func(principal ClientPrincipal) error {
 				if principal.Username != "alice" {
@@ -47,7 +48,7 @@ func TestEstablishClientServerSession(t *testing.T) {
 		errs <- err
 	}()
 
-	clientSession, err := EstablishClient(clientConn, ClientConfig{
+	clientSession, err := EstablishClient(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
 		Service:             "shell",
@@ -103,7 +104,7 @@ func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
 
 	errs := make(chan error, 1)
 	go func() {
-		_, err := EstablishServer(serverConn, ServerConfig{
+		_, err := EstablishServer(context.Background(), serverConn, ServerConfig{
 			HostKey: serverHostKey,
 			AuthorizeClient: func(principal ClientPrincipal) error {
 				return nil
@@ -112,7 +113,7 @@ func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
 		errs <- err
 	}()
 
-	_, err = EstablishClient(clientConn, ClientConfig{
+	_, err = EstablishClient(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
 		Service:             "shell",
@@ -123,6 +124,38 @@ func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
 
 	require.NoError(t, clientConn.Close())
 	require.Error(t, <-errs)
+}
+
+func TestEstablishClientRespectsContextCancellation(t *testing.T) {
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+	_ = serverConn
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := EstablishClient(ctx, clientConn, ClientConfig{
+			ReferenceIdentity: "server.example.test",
+			Username:          "alice",
+			Service:           "shell",
+			ClientIdentity:    clientIdentity,
+			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error {
+				return nil
+			},
+		})
+		errCh <- err
+	}()
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for client establishment cancellation")
+	}
 }
 
 func sessionPipe(t *testing.T) (net.Conn, net.Conn) {

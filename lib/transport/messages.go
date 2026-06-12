@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"io"
 	"sync"
 
 	"buf.build/go/protovalidate"
@@ -62,4 +63,12 @@ func (t *Transport) Receive() (*sessionpb.Envelope, error) {
 		return nil, eris.Wrap(err, "validate message envelope")
 	}
 	return &envelope, nil
+}
+
+func (t *Transport) Close() error {
+	closer, ok := t.packets.(io.Closer)
+	if !ok {
+		return nil
+	}
+	return closer.Close()
 }

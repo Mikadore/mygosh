@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"net"
 
@@ -96,32 +97,61 @@ func (s *Session) Metadata() Metadata {
 	return cloneMetadata(s.metadata)
 }
 
-func EstablishClient(conn net.Conn, cfg ClientConfig) (*Session, error) {
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	return s.transport.Close()
+}
+
+func EstablishClient(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, eris.Wrap(err, "validate client session config")
 	}
 
+	stopWatchingContext := watchContextCancellation(ctx, conn)
+	defer stopWatchingContext()
+
 	stream, err := transport.HandshakeClient(conn)
 	if err != nil {
-		return nil, eris.Wrap(err, "establish noise transport")
+		return nil, preferContextError(ctx, eris.Wrap(err, "establish noise transport"))
 	}
 
 	machine := newAuthMachine(RoleClient, transport.NewTransport(stream), stream.ChannelBinding())
-	return machine.establishClient(cfg)
+	session, err := machine.establishClient(cfg)
+	if err != nil {
+		return nil, preferContextError(ctx, err)
+	}
+	return session, nil
 }
 
-func EstablishServer(conn net.Conn, cfg ServerConfig) (*Session, error) {
+func EstablishServer(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, error) {
+	ctx = normalizeContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, eris.Wrap(err, "validate server session config")
 	}
 
+	stopWatchingContext := watchContextCancellation(ctx, conn)
+	defer stopWatchingContext()
+
 	stream, err := transport.HandshakeServer(conn)
 	if err != nil {
-		return nil, eris.Wrap(err, "establish noise transport")
+		return nil, preferContextError(ctx, eris.Wrap(err, "establish noise transport"))
 	}
 
 	machine := newAuthMachine(RoleServer, transport.NewTransport(stream), stream.ChannelBinding())
-	return machine.establishServer(cfg)
+	session, err := machine.establishServer(cfg)
+	if err != nil {
+		return nil, preferContextError(ctx, err)
+	}
+	return session, nil
 }
 
 type authState string

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"net"
 	"os"
@@ -9,9 +10,9 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
-	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 )
 
@@ -28,6 +29,11 @@ func makeAddr(addr string, port int) string {
 		return addr
 	}
 }
+
+const (
+	demoServerHostSeed = "mygosh-demo-server-host-key-v1"
+	demoClientSeed     = "mygosh-demo-client-key-v1"
+)
 
 func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) error {
 	if args.Address == "" {
@@ -48,11 +54,52 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 
-	stream, err := transport.HandshakeClient(conn)
+	serverHostKey, err := demoEd25519Keypair(demoServerHostSeed)
 	if err != nil {
-		return eris.Wrap(err, "Handshake failed")
+		return err
 	}
-	log.Info("server identity", "fingerprint", stream.PeerStaticKey.FingerprintSHA256())
-	transport := transport.NewTransport(stream)
-	return session.NewClientSession(transport, os.Stdin, os.Stdout).Run(ctx)
+
+	clientIdentity, err := demoEd25519Keypair(demoClientSeed)
+	if err != nil {
+		return err
+	}
+
+	established, err := session.EstablishClient(conn, session.ClientConfig{
+		ReferenceIdentity:   referenceIdentity(args.Address),
+		Username:            localUsername(),
+		Service:             "shell",
+		ClientIdentity:      clientIdentity,
+		VerifyServerHostKey: session.ExactHostKeyVerifier(referenceIdentity(args.Address), serverHostKey.PublicKey()),
+	})
+	if err != nil {
+		return eris.Wrap(err, "establish session")
+	}
+
+	log.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
+	return session.NewTerminalClient(established.Transport(), os.Stdin, os.Stdout).Run(ctx)
+}
+
+func referenceIdentity(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err == nil && host != "" {
+		return host
+	}
+	return addr
+}
+
+func localUsername() string {
+	user := strings.TrimSpace(os.Getenv("USER"))
+	if user == "" {
+		return "unknown"
+	}
+	return user
+}
+
+func demoEd25519Keypair(seedText string) (keys.Keypair, error) {
+	seed := sha256.Sum256([]byte(seedText))
+	keypair, err := keys.GenerateEd25519FromSeed(seed[:])
+	if err != nil {
+		return keys.Keypair{}, eris.Wrap(err, "derive demo auth key")
+	}
+	return keypair, nil
 }

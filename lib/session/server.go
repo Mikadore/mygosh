@@ -15,19 +15,19 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-type ServerSession struct {
+type ShellServer struct {
 	transport *transport.Transport
 	shell     string
 }
 
-func NewServerSession(transport *transport.Transport, shell string) *ServerSession {
-	return &ServerSession{
+func NewShellServer(transport *transport.Transport, shell string) *ShellServer {
+	return &ShellServer{
 		transport: transport,
 		shell:     shell,
 	}
 }
 
-func (s *ServerSession) Run(ctx context.Context) error {
+func (s *ShellServer) Run(ctx context.Context) error {
 	req, err := s.receiveOpen()
 	if err != nil {
 		return err
@@ -65,7 +65,7 @@ func (s *ServerSession) Run(ctx context.Context) error {
 	return <-errs
 }
 
-func (s *ServerSession) receiveOpen() (*wirepb.OpenRequest, error) {
+func (s *ShellServer) receiveOpen() (*wirepb.OpenRequest, error) {
 	envelope, err := s.transport.Receive()
 	if err != nil {
 		return nil, eris.Wrap(err, "receive open request")
@@ -94,7 +94,7 @@ func (s *ServerSession) receiveOpen() (*wirepb.OpenRequest, error) {
 	return req, nil
 }
 
-func (s *ServerSession) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
+func (s *ShellServer) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := vtty.Read(buf)
@@ -127,7 +127,7 @@ func (s *ServerSession) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	}
 }
 
-func (s *ServerSession) receiveInput(vtty *tty.VTTY) error {
+func (s *ShellServer) receiveInput(vtty *tty.VTTY) error {
 	for {
 		envelope, err := s.transport.Receive()
 		if err != nil {

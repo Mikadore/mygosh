@@ -24,6 +24,7 @@ const (
 	ed25519PublicKeySize  = ed25519.PublicKeySize
 	ed25519SeedSize       = ed25519.SeedSize
 	privateKeyMagic       = "mygosh-private-key-v1"
+	publicKeyMagic        = "mygosh-public-key-v1"
 )
 
 type PublicKey struct {
@@ -80,10 +81,42 @@ func GenerateEd25519() (Keypair, error) {
 	}, nil
 }
 
+func GenerateEd25519FromSeed(seed []byte) (Keypair, error) {
+	if err := validateKeyLength(seed, ed25519SeedSize, "private"); err != nil {
+		return Keypair{}, eris.Wrap(err, "generate ed25519 key from seed")
+	}
+
+	public, err := deriveEd25519Public(seed)
+	if err != nil {
+		return Keypair{}, eris.Wrap(err, "generate ed25519 key from seed")
+	}
+
+	return Keypair{
+		Algorithm: AlgorithmEd25519,
+		Public:    public,
+		Private:   cloneBytes(seed),
+	}, nil
+}
+
 func (k Keypair) PublicKey() PublicKey {
 	return PublicKey{
 		Algorithm: k.Algorithm,
 		Bytes:     cloneBytes(k.Public),
+	}
+}
+
+func (k PublicKey) Validate() error {
+	if err := validateAlgorithm(k.Algorithm); err != nil {
+		return err
+	}
+
+	switch k.Algorithm {
+	case AlgorithmX25519:
+		return validateKeyLength(k.Bytes, x25519KeyMaterialSize, "public")
+	case AlgorithmEd25519:
+		return validateKeyLength(k.Bytes, ed25519PublicKeySize, "public")
+	default:
+		return eris.Errorf("validate public key: unsupported algorithm %q", k.Algorithm)
 	}
 }
 
@@ -173,6 +206,45 @@ func ParseKeypair(b []byte) (Keypair, error) {
 		return Keypair{}, eris.Wrap(err, "decode private key")
 	}
 	return keypair, nil
+}
+
+func (k PublicKey) MarshalBinary() ([]byte, error) {
+	if err := k.Validate(); err != nil {
+		return nil, err
+	}
+
+	enc := bincoder.NewEncoder()
+	enc.Write([]byte(publicKeyMagic))
+	enc.UTF8String(string(k.Algorithm))
+	enc.Bytes(k.Bytes)
+	if err := enc.Err(); err != nil {
+		return nil, eris.Wrap(err, "encode public key")
+	}
+	return append([]byte(nil), enc.Result()...), nil
+}
+
+func ParsePublicKey(b []byte) (PublicKey, error) {
+	dec := bincoder.NewCursor(b).WithMaxBytes(16 * 1024)
+	dec.ExpectBytes([]byte(publicKeyMagic))
+
+	alg := Algorithm(dec.UTF8String())
+	keyBytes := dec.Bytes()
+	if err := dec.Done(); err != nil {
+		return PublicKey{}, eris.Wrap(err, "decode public key")
+	}
+
+	if err := validateAlgorithm(alg); err != nil {
+		return PublicKey{}, err
+	}
+
+	key := PublicKey{
+		Algorithm: alg,
+		Bytes:     cloneBytes(keyBytes),
+	}
+	if err := key.Validate(); err != nil {
+		return PublicKey{}, eris.Wrap(err, "decode public key")
+	}
+	return key, nil
 }
 
 func (k Keypair) MarshalBase64() (string, error) {

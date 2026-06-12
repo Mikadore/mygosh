@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package mygosh.wire.v1;
+
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/Mikadore/mygosh/lib/wire/wirepb;wirepb";
+
+message HostAuthInit {
+  string mygosh_auth_version = 1 [(buf.validate.field).string.min_len = 1];
+  bytes client_nonce = 2 [(buf.validate.field).bytes.len = 32];
+  string reference_identity = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ServerAuth {
+  bytes server_host_key = 1 [(buf.validate.field).bytes.min_len = 1];
+  bytes server_nonce = 2 [(buf.validate.field).bytes.len = 32];
+  bytes signature = 3 [(buf.validate.field).bytes.min_len = 1];
+}
+
+message ClientAuthRequest {
+  string username = 1 [(buf.validate.field).string.min_len = 1];
+  string service = 2 [(buf.validate.field).string.min_len = 1];
+  bytes client_public_key_or_cert = 3 [(buf.validate.field).bytes.min_len = 1];
+  string client_sig_alg = 4 [(buf.validate.field).string.min_len = 1];
+  bytes signature = 5 [(buf.validate.field).bytes.min_len = 1];
+}

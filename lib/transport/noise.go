@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
-	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/charmbracelet/log"
 	"github.com/flynn/noise"
 	"github.com/rotisserie/eris"
@@ -16,13 +15,13 @@ import (
 const MaxPayloadSize = 32 * 1024
 
 type NoiseStream struct {
-	conn          net.Conn
-	writeMu       sync.Mutex
-	tx            *noise.CipherState
-	tx_mux        sync.Mutex
-	rx            *noise.CipherState
-	rx_mux        sync.Mutex
-	PeerStaticKey keys.PublicKey
+	conn           net.Conn
+	writeMu        sync.Mutex
+	tx             *noise.CipherState
+	tx_mux         sync.Mutex
+	rx             *noise.CipherState
+	rx_mux         sync.Mutex
+	channelBinding []byte
 }
 
 func (ns *NoiseStream) Receive() ([]byte, error) {
@@ -98,22 +97,15 @@ func (ns *NoiseStream) SetWriteDeadline(t time.Time) error {
 }
 
 func HandshakeClient(conn net.Conn) (*NoiseStream, error) {
-	config, err := createConfig(true, nil)
+	config, err := createConfig(true)
 	if err != nil {
 		return nil, err
 	}
-	stream, err := handshake(conn, config)
-	if err != nil {
-		return nil, err
-	}
-	if stream.PeerStaticKey.IsZero() {
-		return nil, eris.New("noise handshake did not yield a server static key")
-	}
-	return stream, nil
+	return handshake(conn, config)
 }
 
-func HandshakeServer(conn net.Conn, staticKey keys.Keypair) (*NoiseStream, error) {
-	config, err := createConfig(false, &staticKey)
+func HandshakeServer(conn net.Conn) (*NoiseStream, error) {
+	config, err := createConfig(false)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +142,7 @@ func handshake(conn net.Conn, config noise.Config) (*NoiseStream, error) {
 
 			if first != nil && second != nil {
 				ns.setCipherStates(first, second, config.Initiator)
+				ns.channelBinding = append([]byte(nil), state.ChannelBinding()...)
 				break
 			}
 		} else {
@@ -162,21 +155,23 @@ func handshake(conn net.Conn, config noise.Config) (*NoiseStream, error) {
 			if err != nil {
 				return &ns, eris.Wrap(err, "Handshake error")
 			}
-			if err := ns.capturePeerStatic(state); err != nil {
-				return &ns, err
-			}
 
 			if first != nil && second != nil {
 				ns.setCipherStates(first, second, config.Initiator)
+				ns.channelBinding = append([]byte(nil), state.ChannelBinding()...)
 				break
 			}
 		}
 	}
 
+	if len(ns.channelBinding) == 0 {
+		return &ns, eris.New("noise handshake did not yield a channel binding")
+	}
+
 	return &ns, nil
 }
 
-func createConfig(initiator bool, staticKey *keys.Keypair) (noise.Config, error) {
+func createConfig(initiator bool) (noise.Config, error) {
 	cs := NOISE_CIPHERSUITE
 
 	prologue := bytes.Join([][]byte{
@@ -188,43 +183,21 @@ func createConfig(initiator bool, staticKey *keys.Keypair) (noise.Config, error)
 
 	config := noise.Config{
 		CipherSuite: cs,
-		Pattern:     noise.HandshakeNX,
+		Pattern:     noise.HandshakeNN,
 		Prologue:    prologue,
 		Initiator:   initiator,
-	}
-
-	if staticKey != nil {
-		if err := staticKey.Validate(); err != nil {
-			return noise.Config{}, eris.Wrap(err, "invalid static keypair")
-		}
-		if staticKey.Algorithm != keys.AlgorithmX25519 {
-			return noise.Config{}, eris.Errorf("noise static key must use %s, got %s", keys.AlgorithmX25519, staticKey.Algorithm)
-		}
-		config.StaticKeypair = noise.DHKey{
-			Public:  append([]byte(nil), staticKey.Public...),
-			Private: append([]byte(nil), staticKey.Private...),
-		}
 	}
 
 	return config, nil
 }
 
-func (ns *NoiseStream) capturePeerStatic(state *noise.HandshakeState) error {
-	peerStatic := state.PeerStatic()
-	if len(peerStatic) == 0 {
+func (ns *NoiseStream) ChannelBinding() []byte {
+	if len(ns.channelBinding) == 0 {
 		return nil
 	}
-
-	if len(peerStatic) != 32 {
-		return eris.Errorf("noise peer static key length %d does not match expected length %d", len(peerStatic), 32)
-	}
-	ns.PeerStaticKey = keys.PublicKey{
-		Algorithm: keys.AlgorithmX25519,
-		Bytes:     append([]byte(nil), peerStatic...),
-	}
-	return nil
+	return append([]byte(nil), ns.channelBinding...)
 }
 
 const MYGOSH_NOISE_MAGIC string = "mygosh"
 const MYGOSH_NOISE_VERSION string = "v0"
-const MYGOSH_NOISE_PATTERN string = "Noise_NX"
+const MYGOSH_NOISE_PATTERN string = "Noise_NN"

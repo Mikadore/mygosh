@@ -14,21 +14,21 @@ import (
 	"golang.org/x/term"
 )
 
-type ClientSession struct {
+type TerminalClient struct {
 	transport *transport.Transport
 	input     *os.File
 	output    io.Writer
 }
 
-func NewClientSession(transport *transport.Transport, input *os.File, output io.Writer) *ClientSession {
-	return &ClientSession{
+func NewTerminalClient(transport *transport.Transport, input *os.File, output io.Writer) *TerminalClient {
+	return &TerminalClient{
 		transport: transport,
 		input:     input,
 		output:    output,
 	}
 }
 
-func (s *ClientSession) Run(ctx context.Context) error {
+func (s *TerminalClient) Run(ctx context.Context) error {
 	raw, err := tty.HookRaw(ctx, s.input)
 	if err != nil {
 		return eris.Wrap(err, "hook raw terminal")
@@ -63,7 +63,7 @@ func (s *ClientSession) Run(ctx context.Context) error {
 	return <-errs
 }
 
-func (s *ClientSession) waitOpenOK() error {
+func (s *TerminalClient) waitOpenOK() error {
 	envelope, err := s.transport.Receive()
 	if err != nil {
 		return eris.Wrap(err, "receive open response")
@@ -79,7 +79,7 @@ func (s *ClientSession) waitOpenOK() error {
 	}
 }
 
-func (s *ClientSession) forwardInput(raw *tty.RawTTY) error {
+func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := raw.Read(buf)
@@ -105,7 +105,7 @@ func (s *ClientSession) forwardInput(raw *tty.RawTTY) error {
 	}
 }
 
-func (s *ClientSession) forwardResizes(ctx context.Context, raw *tty.RawTTY) error {
+func (s *TerminalClient) forwardResizes(ctx context.Context, raw *tty.RawTTY) error {
 	for {
 		select {
 		case size, ok := <-raw.Resizes():
@@ -128,7 +128,7 @@ func (s *ClientSession) forwardResizes(ctx context.Context, raw *tty.RawTTY) err
 	}
 }
 
-func (s *ClientSession) receiveOutput() error {
+func (s *TerminalClient) receiveOutput() error {
 	for {
 		envelope, err := s.transport.Receive()
 		if err != nil {

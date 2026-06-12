@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
-	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/wire/wirepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -87,6 +86,44 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 			envelope: &wirepb.Envelope{
 				Kind: &wirepb.Envelope_ExitStatus{
 					ExitStatus: &wirepb.ExitStatus{Code: 12},
+				},
+			},
+		},
+		{
+			name: "host auth init",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_HostAuthInit{
+					HostAuthInit: &wirepb.HostAuthInit{
+						MygoshAuthVersion: "mygosh-auth-v1",
+						ClientNonce:       bytes.Repeat([]byte{0x11}, 32),
+						ReferenceIdentity: "server.example.test",
+					},
+				},
+			},
+		},
+		{
+			name: "server auth",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_ServerAuth{
+					ServerAuth: &wirepb.ServerAuth{
+						ServerHostKey: []byte("server-host-key"),
+						ServerNonce:   bytes.Repeat([]byte{0x22}, 32),
+						Signature:     []byte("server-signature"),
+					},
+				},
+			},
+		},
+		{
+			name: "client auth request",
+			envelope: &wirepb.Envelope{
+				Kind: &wirepb.Envelope_ClientAuthRequest{
+					ClientAuthRequest: &wirepb.ClientAuthRequest{
+						Username:              "alice",
+						Service:               "shell",
+						ClientPublicKeyOrCert: []byte("client-key"),
+						ClientSigAlg:          "ed25519",
+						Signature:             []byte("client-signature"),
+					},
 				},
 			},
 		},
@@ -172,10 +209,22 @@ func TestTransportRejectsInvalidError(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
-	serverStatic, err := keys.GenerateX25519()
-	require.NoError(t, err)
+func TestTransportRejectsInvalidHostAuthInit(t *testing.T) {
+	transport := NewTransport(&packetBuffer{})
 
+	err := transport.Send(&wirepb.Envelope{
+		Kind: &wirepb.Envelope_HostAuthInit{
+			HostAuthInit: &wirepb.HostAuthInit{
+				MygoshAuthVersion: "mygosh-auth-v1",
+				ClientNonce:       []byte("short"),
+				ReferenceIdentity: "server.example.test",
+			},
+		},
+	})
+	require.Error(t, err)
+}
+
+func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -196,7 +245,7 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 			return
 		}
 
-		stream, err := HandshakeServer(conn, serverStatic)
+		stream, err := HandshakeServer(conn)
 		if err == nil {
 			serverStreamCh <- stream
 		}

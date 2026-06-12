@@ -34,6 +34,18 @@ func TestGenerateEd25519EncodeDecodeRoundTrip(t *testing.T) {
 	require.Equal(t, keypair, decoded)
 }
 
+func TestPublicKeyEncodeDecodeRoundTrip(t *testing.T) {
+	keypair, err := GenerateEd25519()
+	require.NoError(t, err)
+
+	encoded, err := keypair.PublicKey().MarshalBinary()
+	require.NoError(t, err)
+
+	decoded, err := ParsePublicKey(encoded)
+	require.NoError(t, err)
+	require.Equal(t, keypair.PublicKey(), decoded)
+}
+
 func TestParseKeypairBase64RoundTrip(t *testing.T) {
 	keypair, err := GenerateX25519()
 	require.NoError(t, err)
@@ -119,4 +131,19 @@ func TestGenerateSupportsEd25519(t *testing.T) {
 	require.Equal(t, AlgorithmEd25519, keypair.Algorithm)
 	require.Len(t, keypair.Public, ed25519PublicKeySize)
 	require.Len(t, keypair.Private, ed25519SeedSize)
+}
+
+func TestGenerateEd25519FromSeedIsDeterministic(t *testing.T) {
+	seed := make([]byte, ed25519SeedSize)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+
+	first, err := GenerateEd25519FromSeed(seed)
+	require.NoError(t, err)
+
+	second, err := GenerateEd25519FromSeed(seed)
+	require.NoError(t, err)
+
+	require.Equal(t, first, second)
 }

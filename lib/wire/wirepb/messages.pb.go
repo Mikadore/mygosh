@@ -33,6 +33,9 @@ type Envelope struct {
 	//	*Envelope_Resize
 	//	*Envelope_Close
 	//	*Envelope_ExitStatus
+	//	*Envelope_HostAuthInit
+	//	*Envelope_ServerAuth
+	//	*Envelope_ClientAuthRequest
 	Kind          isEnvelope_Kind `protobuf_oneof:"kind"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -138,6 +141,33 @@ func (x *Envelope) GetExitStatus() *ExitStatus {
 	return nil
 }
 
+func (x *Envelope) GetHostAuthInit() *HostAuthInit {
+	if x != nil {
+		if x, ok := x.Kind.(*Envelope_HostAuthInit); ok {
+			return x.HostAuthInit
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetServerAuth() *ServerAuth {
+	if x != nil {
+		if x, ok := x.Kind.(*Envelope_ServerAuth); ok {
+			return x.ServerAuth
+		}
+	}
+	return nil
+}
+
+func (x *Envelope) GetClientAuthRequest() *ClientAuthRequest {
+	if x != nil {
+		if x, ok := x.Kind.(*Envelope_ClientAuthRequest); ok {
+			return x.ClientAuthRequest
+		}
+	}
+	return nil
+}
+
 type isEnvelope_Kind interface {
 	isEnvelope_Kind()
 }
@@ -170,6 +200,18 @@ type Envelope_ExitStatus struct {
 	ExitStatus *ExitStatus `protobuf:"bytes,7,opt,name=exit_status,json=exitStatus,proto3,oneof"`
 }
 
+type Envelope_HostAuthInit struct {
+	HostAuthInit *HostAuthInit `protobuf:"bytes,8,opt,name=host_auth_init,json=hostAuthInit,proto3,oneof"`
+}
+
+type Envelope_ServerAuth struct {
+	ServerAuth *ServerAuth `protobuf:"bytes,9,opt,name=server_auth,json=serverAuth,proto3,oneof"`
+}
+
+type Envelope_ClientAuthRequest struct {
+	ClientAuthRequest *ClientAuthRequest `protobuf:"bytes,10,opt,name=client_auth_request,json=clientAuthRequest,proto3,oneof"`
+}
+
 func (*Envelope_Open) isEnvelope_Kind() {}
 
 func (*Envelope_OpenOk) isEnvelope_Kind() {}
@@ -183,6 +225,12 @@ func (*Envelope_Resize) isEnvelope_Kind() {}
 func (*Envelope_Close) isEnvelope_Kind() {}
 
 func (*Envelope_ExitStatus) isEnvelope_Kind() {}
+
+func (*Envelope_HostAuthInit) isEnvelope_Kind() {}
+
+func (*Envelope_ServerAuth) isEnvelope_Kind() {}
+
+func (*Envelope_ClientAuthRequest) isEnvelope_Kind() {}
 
 type OpenRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -528,7 +576,7 @@ var File_mygosh_wire_v1_messages_proto protoreflect.FileDescriptor
 
 const file_mygosh_wire_v1_messages_proto_rawDesc = "" +
 	"\n" +
-	"\x1dmygosh/wire/v1/messages.proto\x12\x0emygosh.wire.v1\x1a\x1bbuf/validate/validate.proto\"\xfc\x02\n" +
+	"\x1dmygosh/wire/v1/messages.proto\x12\x0emygosh.wire.v1\x1a\x1bbuf/validate/validate.proto\x1a\x19mygosh/wire/v1/auth.proto\"\xd6\x04\n" +
 	"\bEnvelope\x121\n" +
 	"\x04open\x18\x01 \x01(\v2\x1b.mygosh.wire.v1.OpenRequestH\x00R\x04open\x127\n" +
 	"\aopen_ok\x18\x02 \x01(\v2\x1c.mygosh.wire.v1.OpenResponseH\x00R\x06openOk\x12*\n" +
@@ -537,7 +585,12 @@ const file_mygosh_wire_v1_messages_proto_rawDesc = "" +
 	"\x06resize\x18\x05 \x01(\v2\x16.mygosh.wire.v1.ResizeH\x00R\x06resize\x12-\n" +
 	"\x05close\x18\x06 \x01(\v2\x15.mygosh.wire.v1.CloseH\x00R\x05close\x12=\n" +
 	"\vexit_status\x18\a \x01(\v2\x1a.mygosh.wire.v1.ExitStatusH\x00R\n" +
-	"exitStatusB\r\n" +
+	"exitStatus\x12D\n" +
+	"\x0ehost_auth_init\x18\b \x01(\v2\x1c.mygosh.wire.v1.HostAuthInitH\x00R\fhostAuthInit\x12=\n" +
+	"\vserver_auth\x18\t \x01(\v2\x1a.mygosh.wire.v1.ServerAuthH\x00R\n" +
+	"serverAuth\x12S\n" +
+	"\x13client_auth_request\x18\n" +
+	" \x01(\v2!.mygosh.wire.v1.ClientAuthRequestH\x00R\x11clientAuthRequestB\r\n" +
 	"\x04kind\x12\x05\xbaH\x02\b\x01\"_\n" +
 	"\vOpenRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\tR\x04term\x12\x1d\n" +
@@ -574,28 +627,34 @@ func file_mygosh_wire_v1_messages_proto_rawDescGZIP() []byte {
 
 var file_mygosh_wire_v1_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_mygosh_wire_v1_messages_proto_goTypes = []any{
-	(*Envelope)(nil),     // 0: mygosh.wire.v1.Envelope
-	(*OpenRequest)(nil),  // 1: mygosh.wire.v1.OpenRequest
-	(*OpenResponse)(nil), // 2: mygosh.wire.v1.OpenResponse
-	(*Data)(nil),         // 3: mygosh.wire.v1.Data
-	(*Error)(nil),        // 4: mygosh.wire.v1.Error
-	(*Resize)(nil),       // 5: mygosh.wire.v1.Resize
-	(*Close)(nil),        // 6: mygosh.wire.v1.Close
-	(*ExitStatus)(nil),   // 7: mygosh.wire.v1.ExitStatus
+	(*Envelope)(nil),          // 0: mygosh.wire.v1.Envelope
+	(*OpenRequest)(nil),       // 1: mygosh.wire.v1.OpenRequest
+	(*OpenResponse)(nil),      // 2: mygosh.wire.v1.OpenResponse
+	(*Data)(nil),              // 3: mygosh.wire.v1.Data
+	(*Error)(nil),             // 4: mygosh.wire.v1.Error
+	(*Resize)(nil),            // 5: mygosh.wire.v1.Resize
+	(*Close)(nil),             // 6: mygosh.wire.v1.Close
+	(*ExitStatus)(nil),        // 7: mygosh.wire.v1.ExitStatus
+	(*HostAuthInit)(nil),      // 8: mygosh.wire.v1.HostAuthInit
+	(*ServerAuth)(nil),        // 9: mygosh.wire.v1.ServerAuth
+	(*ClientAuthRequest)(nil), // 10: mygosh.wire.v1.ClientAuthRequest
 }
 var file_mygosh_wire_v1_messages_proto_depIdxs = []int32{
-	1, // 0: mygosh.wire.v1.Envelope.open:type_name -> mygosh.wire.v1.OpenRequest
-	2, // 1: mygosh.wire.v1.Envelope.open_ok:type_name -> mygosh.wire.v1.OpenResponse
-	3, // 2: mygosh.wire.v1.Envelope.data:type_name -> mygosh.wire.v1.Data
-	4, // 3: mygosh.wire.v1.Envelope.err:type_name -> mygosh.wire.v1.Error
-	5, // 4: mygosh.wire.v1.Envelope.resize:type_name -> mygosh.wire.v1.Resize
-	6, // 5: mygosh.wire.v1.Envelope.close:type_name -> mygosh.wire.v1.Close
-	7, // 6: mygosh.wire.v1.Envelope.exit_status:type_name -> mygosh.wire.v1.ExitStatus
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	1,  // 0: mygosh.wire.v1.Envelope.open:type_name -> mygosh.wire.v1.OpenRequest
+	2,  // 1: mygosh.wire.v1.Envelope.open_ok:type_name -> mygosh.wire.v1.OpenResponse
+	3,  // 2: mygosh.wire.v1.Envelope.data:type_name -> mygosh.wire.v1.Data
+	4,  // 3: mygosh.wire.v1.Envelope.err:type_name -> mygosh.wire.v1.Error
+	5,  // 4: mygosh.wire.v1.Envelope.resize:type_name -> mygosh.wire.v1.Resize
+	6,  // 5: mygosh.wire.v1.Envelope.close:type_name -> mygosh.wire.v1.Close
+	7,  // 6: mygosh.wire.v1.Envelope.exit_status:type_name -> mygosh.wire.v1.ExitStatus
+	8,  // 7: mygosh.wire.v1.Envelope.host_auth_init:type_name -> mygosh.wire.v1.HostAuthInit
+	9,  // 8: mygosh.wire.v1.Envelope.server_auth:type_name -> mygosh.wire.v1.ServerAuth
+	10, // 9: mygosh.wire.v1.Envelope.client_auth_request:type_name -> mygosh.wire.v1.ClientAuthRequest
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_mygosh_wire_v1_messages_proto_init() }
@@ -603,6 +662,7 @@ func file_mygosh_wire_v1_messages_proto_init() {
 	if File_mygosh_wire_v1_messages_proto != nil {
 		return
 	}
+	file_mygosh_wire_v1_auth_proto_init()
 	file_mygosh_wire_v1_messages_proto_msgTypes[0].OneofWrappers = []any{
 		(*Envelope_Open)(nil),
 		(*Envelope_OpenOk)(nil),
@@ -611,6 +671,9 @@ func file_mygosh_wire_v1_messages_proto_init() {
 		(*Envelope_Resize)(nil),
 		(*Envelope_Close)(nil),
 		(*Envelope_ExitStatus)(nil),
+		(*Envelope_HostAuthInit)(nil),
+		(*Envelope_ServerAuth)(nil),
+		(*Envelope_ClientAuthRequest)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

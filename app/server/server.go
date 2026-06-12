@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"net"
 
 	"github.com/charmbracelet/log"
@@ -9,12 +11,12 @@ import (
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
-	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 )
 
-var staticServerKeypair = keys.MustParseKeypairBase64(
-	"bXlnb3NoLXByaXZhdGUta2V5LXYxAAAABngyNTUxOQAAACDTsZU23gLTnfEZuTrZ4nmElhwUwR5sKgOWtUvr2o3laAAAACDdNf3zpMwLg6OsnTLfuRittrBU0X9DQAw0XvLjDYXO+AAAAAA=",
+const (
+	demoServerHostSeed = "mygosh-demo-server-host-key-v1"
+	demoClientSeed     = "mygosh-demo-client-key-v1"
 )
 
 func RunServer(ctx context.Context, cfg settings.Settings) error {
@@ -42,10 +44,43 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	defer conn.Close()
 	log.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	stream, err := transport.HandshakeServer(conn, staticServerKeypair)
+	serverHostKey, err := demoEd25519Keypair(demoServerHostSeed)
 	if err != nil {
-		return eris.Wrap(err, "Handshake Failed")
+		return err
 	}
-	transport := transport.NewTransport(stream)
-	return session.NewServerSession(transport, cfg.Core.Shell).Run(ctx)
+
+	authorizedClient, err := demoEd25519Keypair(demoClientSeed)
+	if err != nil {
+		return err
+	}
+
+	established, err := session.EstablishServer(conn, session.ServerConfig{
+		HostKey: serverHostKey,
+		AuthorizeClient: func(principal session.ClientPrincipal) error {
+			if principal.Service != "shell" {
+				return eris.Errorf("unsupported service %q", principal.Service)
+			}
+			authorizedPublicKey := authorizedClient.PublicKey()
+			if principal.PublicKey.Algorithm != authorizedPublicKey.Algorithm || !bytes.Equal(principal.PublicKey.Bytes, authorizedPublicKey.Bytes) {
+				return eris.New("client public key is not authorized")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return eris.Wrap(err, "establish session")
+	}
+
+	meta := established.Metadata()
+	log.Info("authenticated client", "username", meta.ClientPrincipal.Username, "fingerprint", meta.ClientPrincipal.PublicKey.FingerprintSHA256())
+	return session.NewShellServer(established.Transport(), cfg.Core.Shell).Run(ctx)
+}
+
+func demoEd25519Keypair(seedText string) (keys.Keypair, error) {
+	seed := sha256.Sum256([]byte(seedText))
+	keypair, err := keys.GenerateEd25519FromSeed(seed[:])
+	if err != nil {
+		return keys.Keypair{}, eris.Wrap(err, "derive demo auth key")
+	}
+	return keypair, nil
 }

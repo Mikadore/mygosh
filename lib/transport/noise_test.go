@@ -5,15 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/stretchr/testify/require"
 )
 
-func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream, keys.Keypair) {
+func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream) {
 	t.Helper()
-
-	serverStatic, err := keys.GenerateX25519()
-	require.NoError(t, err)
 
 	a, b := net.Pipe()
 	t.Cleanup(func() {
@@ -27,6 +23,7 @@ func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream, keys.Keypair) {
 
 	var initiator *NoiseStream
 	var responder *NoiseStream
+	var err error
 
 	errs := make(chan error, 2)
 	go func() {
@@ -34,7 +31,7 @@ func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream, keys.Keypair) {
 		errs <- err
 	}()
 	go func() {
-		responder, err = HandshakeServer(b, serverStatic)
+		responder, err = HandshakeServer(b)
 		errs <- err
 	}()
 
@@ -42,9 +39,10 @@ func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream, keys.Keypair) {
 	require.NoError(t, <-errs)
 	require.NotNil(t, initiator)
 	require.NotNil(t, responder)
-	require.Equal(t, serverStatic.PublicKey(), initiator.PeerStaticKey)
+	require.NotEmpty(t, initiator.ChannelBinding())
+	require.Equal(t, initiator.ChannelBinding(), responder.ChannelBinding())
 
-	return initiator, responder, serverStatic
+	return initiator, responder
 }
 
 func TestDoHandshakeRoundTrip(t *testing.T) {
@@ -52,23 +50,20 @@ func TestDoHandshakeRoundTrip(t *testing.T) {
 }
 
 func TestNoiseStreamRoundTripInitiatorToResponder(t *testing.T) {
-	initiator, responder, _ := makeNoisePair(t)
+	initiator, responder := makeNoisePair(t)
 	expected := []byte("Hello there! ...General Kenobi :3")
 
 	requireNoiseRoundTrip(t, initiator, responder, expected)
 }
 
 func TestNoiseStreamRoundTripResponderToInitiator(t *testing.T) {
-	initiator, responder, _ := makeNoisePair(t)
+	initiator, responder := makeNoisePair(t)
 	expected := []byte("You are a bold one.")
 
 	requireNoiseRoundTrip(t, responder, initiator, expected)
 }
 
-func TestNoiseStreamTCPRoundTripExportsServerStaticKey(t *testing.T) {
-	serverStatic, err := keys.GenerateX25519()
-	require.NoError(t, err)
-
+func TestNoiseStreamTCPRoundTripExportsChannelBinding(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -89,7 +84,7 @@ func TestNoiseStreamTCPRoundTripExportsServerStaticKey(t *testing.T) {
 			return
 		}
 
-		stream, err := HandshakeServer(conn, serverStatic)
+		stream, err := HandshakeServer(conn)
 		if err == nil {
 			serverStreamCh <- stream
 		}
@@ -108,7 +103,8 @@ func TestNoiseStreamTCPRoundTripExportsServerStaticKey(t *testing.T) {
 	require.NoError(t, <-errs)
 	serverStream := <-serverStreamCh
 
-	require.Equal(t, serverStatic.PublicKey(), clientStream.PeerStaticKey)
+	require.NotEmpty(t, clientStream.ChannelBinding())
+	require.Equal(t, clientStream.ChannelBinding(), serverStream.ChannelBinding())
 
 	requireNoiseRoundTrip(t, clientStream, serverStream, []byte("ping over tcp"))
 	requireNoiseRoundTrip(t, serverStream, clientStream, []byte("pong over tcp"))

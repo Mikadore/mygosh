@@ -30,6 +30,7 @@ const (
 type PublicKey struct {
 	Algorithm Algorithm
 	Bytes     []byte
+	Comment   string
 }
 
 type Keypair struct {
@@ -102,6 +103,7 @@ func (k Keypair) PublicKey() PublicKey {
 	return PublicKey{
 		Algorithm: k.Algorithm,
 		Bytes:     cloneBytes(k.Public),
+		Comment:   k.Comment,
 	}
 }
 
@@ -217,6 +219,7 @@ func (k PublicKey) MarshalBinary() ([]byte, error) {
 	enc.Write([]byte(publicKeyMagic))
 	enc.UTF8String(string(k.Algorithm))
 	enc.Bytes(k.Bytes)
+	enc.UTF8String(k.Comment)
 	if err := enc.Err(); err != nil {
 		return nil, eris.Wrap(err, "encode public key")
 	}
@@ -229,6 +232,10 @@ func ParsePublicKey(b []byte) (PublicKey, error) {
 
 	alg := Algorithm(dec.UTF8String())
 	keyBytes := dec.Bytes()
+	comment := ""
+	if len(dec.Rest()) != 0 {
+		comment = dec.UTF8String()
+	}
 	if err := dec.Done(); err != nil {
 		return PublicKey{}, eris.Wrap(err, "decode public key")
 	}
@@ -240,6 +247,7 @@ func ParsePublicKey(b []byte) (PublicKey, error) {
 	key := PublicKey{
 		Algorithm: alg,
 		Bytes:     cloneBytes(keyBytes),
+		Comment:   comment,
 	}
 	if err := key.Validate(); err != nil {
 		return PublicKey{}, eris.Wrap(err, "decode public key")

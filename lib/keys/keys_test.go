@@ -37,6 +37,7 @@ func TestGenerateEd25519EncodeDecodeRoundTrip(t *testing.T) {
 func TestPublicKeyEncodeDecodeRoundTrip(t *testing.T) {
 	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
+	keypair.Comment = "test public key"
 
 	encoded, err := keypair.PublicKey().MarshalBinary()
 	require.NoError(t, err)
@@ -44,6 +45,23 @@ func TestPublicKeyEncodeDecodeRoundTrip(t *testing.T) {
 	decoded, err := ParsePublicKey(encoded)
 	require.NoError(t, err)
 	require.Equal(t, keypair.PublicKey(), decoded)
+}
+
+func TestParsePublicKeyAcceptsLegacyEncodingWithoutComment(t *testing.T) {
+	keypair, err := GenerateEd25519()
+	require.NoError(t, err)
+
+	enc := bincoder.NewEncoder()
+	enc.Write([]byte(publicKeyMagic))
+	enc.UTF8String(string(keypair.Algorithm))
+	enc.Bytes(keypair.Public)
+	require.NoError(t, enc.Err())
+
+	decoded, err := ParsePublicKey(enc.Result())
+	require.NoError(t, err)
+	require.Equal(t, keypair.Algorithm, decoded.Algorithm)
+	require.Equal(t, keypair.Public, decoded.Bytes)
+	require.Empty(t, decoded.Comment)
 }
 
 func TestParseKeypairBase64RoundTrip(t *testing.T) {

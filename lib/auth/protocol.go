@@ -499,5 +499,6 @@ func clonePublicKey(key keys.PublicKey) keys.PublicKey {
 	return keys.PublicKey{
 		Algorithm: key.Algorithm,
 		Bytes:     cloneBytes(key.Bytes),
+		Comment:   key.Comment,
 	}
 }

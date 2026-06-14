@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
@@ -54,14 +55,11 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 		return err
 	}
 
-	established, err := session.EstablishServer(ctx, conn, session.ServerConfig{
+	established, err := session.Accept(ctx, conn, session.ServerConfig{
 		HostKey: serverHostKey,
-		AuthorizeClient: func(principal session.ClientPrincipal) error {
-			if principal.Service != "shell" {
-				return eris.Errorf("unsupported service %q", principal.Service)
-			}
+		AuthorizeClient: func(identity auth.ClientIdentity) error {
 			authorizedPublicKey := authorizedClient.PublicKey()
-			if principal.PublicKey.Algorithm != authorizedPublicKey.Algorithm || !bytes.Equal(principal.PublicKey.Bytes, authorizedPublicKey.Bytes) {
+			if identity.PublicKey.Algorithm != authorizedPublicKey.Algorithm || !bytes.Equal(identity.PublicKey.Bytes, authorizedPublicKey.Bytes) {
 				return eris.New("client public key is not authorized")
 			}
 			return nil
@@ -73,8 +71,9 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	defer established.Close()
 
 	meta := established.Metadata()
-	log.Info("authenticated client", "username", meta.ClientPrincipal.Username, "fingerprint", meta.ClientPrincipal.PublicKey.FingerprintSHA256())
-	return session.NewShellServer(established.Transport(), cfg.Core.Shell).Run(ctx)
+	log.Info("authenticated client", "username", meta.ClientIdentity.Username, "fingerprint", meta.ClientIdentity.PublicKey.FingerprintSHA256())
+	log.Info("authenticated session established", "session_protocol", "disabled")
+	return nil
 }
 
 func demoEd25519Keypair(seedText string) (keys.Keypair, error) {

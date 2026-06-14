@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/log"
 
+	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
@@ -64,12 +65,11 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 		return err
 	}
 
-	established, err := session.EstablishClient(ctx, conn, session.ClientConfig{
+	established, err := session.Connect(ctx, conn, session.ClientConfig{
 		ReferenceIdentity:   referenceIdentity(args.Address),
 		Username:            localUsername(),
-		Service:             "shell",
 		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: session.ExactHostKeyVerifier(referenceIdentity(args.Address), serverHostKey.PublicKey()),
+		VerifyServerHostKey: auth.ExactHostKeyVerifier(referenceIdentity(args.Address), serverHostKey.PublicKey()),
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
@@ -77,7 +77,8 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	defer established.Close()
 
 	log.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
-	return session.NewTerminalClient(established.Transport(), os.Stdin, os.Stdout).Run(ctx)
+	log.Info("authenticated session established", "session_protocol", "disabled")
+	return nil
 }
 
 func referenceIdentity(addr string) string {

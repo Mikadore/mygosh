@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/rotisserie/eris"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
-func TestEstablishClientServerSession(t *testing.T) {
+func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 	serverHostKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 
@@ -26,17 +26,14 @@ func TestEstablishClientServerSession(t *testing.T) {
 	serverSessionCh := make(chan *Session, 1)
 	errs := make(chan error, 2)
 	go func() {
-		session, err := EstablishServer(context.Background(), serverConn, ServerConfig{
+		session, err := Accept(context.Background(), serverConn, ServerConfig{
 			HostKey: serverHostKey,
-			AuthorizeClient: func(principal ClientPrincipal) error {
-				if principal.Username != "alice" {
-					return eris.Errorf("unexpected username %q", principal.Username)
-				}
-				if principal.Service != "shell" {
-					return eris.Errorf("unexpected service %q", principal.Service)
+			AuthorizeClient: func(identity auth.ClientIdentity) error {
+				if identity.Username != "alice" {
+					return eris.Errorf("unexpected username %q", identity.Username)
 				}
 				expectedPublicKey := clientIdentity.PublicKey()
-				if principal.PublicKey.Algorithm != expectedPublicKey.Algorithm || !bytes.Equal(principal.PublicKey.Bytes, expectedPublicKey.Bytes) {
+				if identity.PublicKey.Algorithm != expectedPublicKey.Algorithm || !bytes.Equal(identity.PublicKey.Bytes, expectedPublicKey.Bytes) {
 					return eris.New("unexpected client public key")
 				}
 				return nil
@@ -48,12 +45,11 @@ func TestEstablishClientServerSession(t *testing.T) {
 		errs <- err
 	}()
 
-	clientSession, err := EstablishClient(context.Background(), clientConn, ClientConfig{
+	clientSession, err := Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		Service:             "shell",
 		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 	})
 	require.NoError(t, err)
 	require.NoError(t, <-errs)
@@ -64,33 +60,11 @@ func TestEstablishClientServerSession(t *testing.T) {
 	require.Equal(t, "server.example.test", clientSession.Metadata().ReferenceIdentity)
 	require.Equal(t, serverHostKey.PublicKey(), clientSession.Metadata().ServerHostKey)
 	require.Equal(t, "server.example.test", serverSession.Metadata().ReferenceIdentity)
-	require.Equal(t, clientIdentity.PublicKey(), serverSession.Metadata().ClientPrincipal.PublicKey)
-
-	expected := &sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Data{
-			Data: &sessionpb.Data{Data: []byte("authenticated transport")},
-		},
-	}
-
-	gotCh := make(chan *sessionpb.Envelope, 1)
-	errs = make(chan error, 2)
-	go func() {
-		got, err := serverSession.Transport().Receive()
-		if err == nil {
-			gotCh <- got
-		}
-		errs <- err
-	}()
-	go func() {
-		errs <- clientSession.Transport().Send(expected)
-	}()
-
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
-	require.True(t, proto.Equal(expected, <-gotCh))
+	require.Equal(t, "alice", serverSession.Metadata().ClientIdentity.Username)
+	require.Equal(t, clientIdentity.PublicKey(), serverSession.Metadata().ClientIdentity.PublicKey)
 }
 
-func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
+func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	serverHostKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 
@@ -104,21 +78,20 @@ func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
 
 	errs := make(chan error, 1)
 	go func() {
-		_, err := EstablishServer(context.Background(), serverConn, ServerConfig{
+		_, err := Accept(context.Background(), serverConn, ServerConfig{
 			HostKey: serverHostKey,
-			AuthorizeClient: func(principal ClientPrincipal) error {
+			AuthorizeClient: func(identity auth.ClientIdentity) error {
 				return nil
 			},
 		})
 		errs <- err
 	}()
 
-	_, err = EstablishClient(context.Background(), clientConn, ClientConfig{
+	_, err = Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		Service:             "shell",
 		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: ExactHostKeyVerifier("server.example.test", untrustedHostKey.PublicKey()),
+		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", untrustedHostKey.PublicKey()),
 	})
 	require.ErrorContains(t, err, "verify server host key")
 
@@ -126,7 +99,38 @@ func TestEstablishClientRejectsUnexpectedHostKey(t *testing.T) {
 	require.Error(t, <-errs)
 }
 
-func TestEstablishClientRespectsContextCancellation(t *testing.T) {
+func TestConnectReportsClientAuthRejection(t *testing.T) {
+	serverHostKey, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+
+	errs := make(chan error, 1)
+	go func() {
+		_, err := Accept(context.Background(), serverConn, ServerConfig{
+			HostKey: serverHostKey,
+			AuthorizeClient: func(identity auth.ClientIdentity) error {
+				return eris.New("client not authorized")
+			},
+		})
+		errs <- err
+	}()
+
+	_, err = Connect(context.Background(), clientConn, ClientConfig{
+		ReferenceIdentity:   "server.example.test",
+		Username:            "alice",
+		ClientIdentity:      clientIdentity,
+		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+	})
+	require.ErrorContains(t, err, "server rejected client auth")
+	require.ErrorContains(t, err, "client not authorized")
+	require.ErrorContains(t, <-errs, "authorize client")
+}
+
+func TestConnectRespectsContextCancellation(t *testing.T) {
 	clientIdentity, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 
@@ -136,10 +140,9 @@ func TestEstablishClientRespectsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := EstablishClient(ctx, clientConn, ClientConfig{
+		_, err := Connect(ctx, clientConn, ClientConfig{
 			ReferenceIdentity: "server.example.test",
 			Username:          "alice",
-			Service:           "shell",
 			ClientIdentity:    clientIdentity,
 			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error {
 				return nil
@@ -156,6 +159,58 @@ func TestEstablishClientRespectsContextCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for client establishment cancellation")
 	}
+}
+
+func TestSessionRunRejectsPostAuthProtocol(t *testing.T) {
+	serverHostKey, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+
+	serverSessionCh := make(chan *Session, 1)
+	errs := make(chan error, 2)
+	go func() {
+		session, err := Accept(context.Background(), serverConn, ServerConfig{
+			HostKey: serverHostKey,
+			AuthorizeClient: func(identity auth.ClientIdentity) error {
+				return nil
+			},
+		})
+		if err == nil {
+			serverSessionCh <- session
+		}
+		errs <- err
+	}()
+
+	clientSession, err := Connect(context.Background(), clientConn, ClientConfig{
+		ReferenceIdentity:   "server.example.test",
+		Username:            "alice",
+		ClientIdentity:      clientIdentity,
+		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+	})
+	require.NoError(t, err)
+	require.NoError(t, <-errs)
+
+	serverSession := <-serverSessionCh
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- clientSession.Run(context.Background())
+	}()
+
+	errs = make(chan error, 1)
+	go func() {
+		errs <- serverSession.transport.Send(&sessionpb.Envelope{
+			Kind: &sessionpb.Envelope_Data{
+				Data: &sessionpb.Data{Data: []byte("unsupported")},
+			},
+		})
+	}()
+
+	require.NoError(t, <-errs)
+	require.ErrorContains(t, <-runErrCh, "session protocol not implemented")
 }
 
 func sessionPipe(t *testing.T) (net.Conn, net.Conn) {

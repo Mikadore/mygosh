@@ -6,6 +6,18 @@ import "buf/validate/validate.proto";
 
 option go_package = "github.com/Mikadore/mygosh/lib/auth/authpb;authpb";
 
+message AuthFrame {
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+
+    HostAuthInit host_auth_init = 1;
+    ServerAuth server_auth = 2;
+    ClientAuthRequest client_auth_request = 3;
+    ClientAuthResponse client_auth_response = 4;
+    AuthError error = 5;
+  }
+}
+
 message HostAuthInit {
   string mygosh_auth_version = 1 [(buf.validate.field).string.min_len = 1];
   bytes client_nonce = 2 [(buf.validate.field).bytes.len = 32];
@@ -20,8 +32,46 @@ message ServerAuth {
 
 message ClientAuthRequest {
   string username = 1 [(buf.validate.field).string.min_len = 1];
-  string service = 2 [(buf.validate.field).string.min_len = 1];
-  bytes client_public_key_or_cert = 3 [(buf.validate.field).bytes.min_len = 1];
-  string client_sig_alg = 4 [(buf.validate.field).string.min_len = 1];
-  bytes signature = 5 [(buf.validate.field).bytes.min_len = 1];
+  bytes client_public_key_or_cert = 2 [(buf.validate.field).bytes.min_len = 1];
+  string client_sig_alg = 3 [(buf.validate.field).string.min_len = 1];
+  bytes signature = 4 [(buf.validate.field).bytes.min_len = 1];
+}
+
+message ClientAuthResponse {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    AuthSuccess ok = 1;
+    AuthReject reject = 2;
+  }
+}
+
+message AuthSuccess {}
+
+message AuthReject {
+  string code = 1;
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message AuthError {
+  string code = 1;
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ServerAuthToSign {
+  string context = 1 [(buf.validate.field).string.min_len = 1];
+  bytes channel_binding = 2 [(buf.validate.field).bytes.len = 32];
+  bytes host_auth_init_hash = 3 [(buf.validate.field).bytes.len = 32];
+  bytes server_host_key = 4 [(buf.validate.field).bytes.min_len = 1];
+  bytes server_nonce = 5 [(buf.validate.field).bytes.len = 32];
+}
+
+message ClientAuthToSign {
+  string context = 1 [(buf.validate.field).string.min_len = 1];
+  bytes channel_binding = 2 [(buf.validate.field).bytes.len = 32];
+  bytes host_auth_init_hash = 3 [(buf.validate.field).bytes.len = 32];
+  bytes server_auth_hash = 4 [(buf.validate.field).bytes.len = 32];
+  string username = 5 [(buf.validate.field).string.min_len = 1];
+  bytes client_public_key_or_cert = 6 [(buf.validate.field).bytes.min_len = 1];
+  string client_sig_alg = 7 [(buf.validate.field).string.min_len = 1];
 }

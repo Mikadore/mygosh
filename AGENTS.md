@@ -8,14 +8,21 @@ Guidance for agents working in this repository.
 
 The current roadmap is moving from a provisional PTY demo toward a proper authenticated, client/server-agnostic global session. A session starts when a client connects to a server, the peers complete Noise, and both sides authenticate. Channels are opened only after authentication.
 
+Today the repository has completed the auth/session split:
+
+- auth uses its own protobuf `AuthFrame` schema in `lib/auth/authpb`
+- session traffic uses its own protobuf `Envelope` schema in `lib/session/sessionpb`
+- `lib/session` currently stops at authenticated session construction plus a minimal post-auth receive-loop stub
+- the default CLI flow authenticates and exits; interactive terminal behavior is not wired into the current session path
+
 ## Repository Layout
 
 - `bin/`: binary entrypoint and Cobra command setup.
-- `app/client/`: client application flow and TCP dialing.
-- `app/server/`: server application flow and TCP listening.
-- `lib/transport/`: Noise transport and protobuf envelope transport.
-- `lib/auth/`: authentication protocol, signed payloads, and auth transcript handling.
-- `lib/session/`: authenticated global session model and post-auth protocol entry points.
+- `app/client/`: client application flow, TCP dialing, and provisional terminal demo code not used by the default CLI path.
+- `app/server/`: server application flow, TCP listening, and provisional shell demo code not used by the default CLI path.
+- `lib/transport/`: Noise transport and generic protobuf frame transport.
+- `lib/auth/`: auth frame schema, authentication protocol/state machine, signed payloads, and auth transcript handling.
+- `lib/session/`: authenticated global session model and minimal post-auth protocol boundary.
 - `lib/bincoder/`: small binary encoding helpers for framing and key formats.
 - `lib/keys/`: key generation, parsing, serialization, and signing helpers.
 - `lib/tty/`: local raw terminal and server PTY mechanics.
@@ -27,7 +34,7 @@ The current roadmap is moving from a provisional PTY demo toward a proper authen
 - Prefer small, composable layers over large all-in-one abstractions.
 - Keep TCP ownership in `app/client` and `app/server`; do not hide sockets inside `NoiseStream`.
 - Keep `NoiseStream` focused on encrypted packet send/receive.
-- Keep message envelopes simple: one protobuf `oneof` envelope per frame.
+- Keep auth and session wire schemas separate: one protobuf `oneof` auth frame type and one protobuf `oneof` session frame type.
 - Keep terminal data contents raw bytes and return terminal bytes unchanged.
 - Use protobuf for message serialization and protovalidate for schema validation where applicable.
 - Use deterministic protobuf serialization only for blobs or payloads that are signed.
@@ -42,10 +49,13 @@ The current roadmap is moving from a provisional PTY demo toward a proper authen
 - `lib/session/session.go` should model the global authenticated session itself, not PTY/client/server terminal behavior.
 - Authentication protocol logic and auth state transitions should live in `lib/auth`.
 - Session construction chooses and validates identities, keys, and trust policy, then calls into the auth machinery.
+- `lib/session.Connect` and `lib/session.Accept` are the authenticated session construction entry points today.
 - Auth code should run the authentication protocol with the supplied identities and keys; it should not decide local policy, selected service, or requested channel type.
+- Auth protocol messages live only in `mygosh.auth.v1.AuthFrame`; session protocol messages live only in `mygosh.session.v1.Envelope`.
 - Auth messages must not include which service or channel the client wants to run.
 - Every auth initiation or request must have a corresponding reply, including rejection and error paths.
-- Prefer deterministic protobuf serialization for signed auth payloads. If that fully covers signed payload generation, prefer deleting `lib/bincoder/struct.go` instead of maintaining two canonicalization schemes.
+- Signed auth payloads use deterministic protobuf serialization; do not reintroduce a second canonicalization scheme for auth blobs.
+- `Session.Run` should be the post-auth receive owner. Do not add competing `Transport.Receive` users around it.
 
 ## Channel Direction
 
@@ -53,7 +63,7 @@ The current roadmap is moving from a provisional PTY demo toward a proper authen
 - The current terminal behavior should become one future `session` channel variant.
 - `StartShell` is the PTY-backed command path.
 - `StartExec` is the non-PTY command path.
-- It is acceptable for the current client/server terminal plumbing to move into `app` and remain unused or commented out during the refactor, as long as the repository remains compilable.
+- The old client/server terminal plumbing currently lives in `app` as demo-only code and is intentionally unused by the default CLI path.
 - Do not tie channel routing to `session_id`; reserve `session_id` for opaque audit/logging if it remains in the protocol.
 
 ## Process-Separation Biases
@@ -85,12 +95,12 @@ The current roadmap is moving from a provisional PTY demo toward a proper authen
   ./run-tmux.sh
   ```
 
-- Expected near-term manual behavior is one client connected to one server process.
-- If terminal raw mode is involved, verify the terminal is restored after errors and normal exit.
+- Expected current manual behavior is one client connected to one server process, successful authentication, then clean exit.
+- The default CLI path does not currently enter raw terminal mode. Only verify terminal restoration if you explicitly rewire the provisional demo PTY code.
 
 ## Current Design Biases
 
-- First make authenticated session construction and post-auth channel opening correct.
+- Authenticated session construction is in place; the next priority is building the post-auth session/channel-open path on top of the new boundary.
 - Keep the current PTY path provisional until it can sit behind the channel model.
 - Add batching, escape sequences like `~.`, reconnect/resume, and broader execution policy only after the session/channel layer is boring.
 - When in doubt, choose the smallest change that improves the session/channel path without closing off future auth, authorization, or process-separation work.

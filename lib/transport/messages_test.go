@@ -25,14 +25,14 @@ func (p *packetBuffer) Receive() ([]byte, error) {
 	return bincoder.ReadBytes(&p.buf, 0)
 }
 
-func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
+func TestTransportRoundTripsSessionEnvelopes(t *testing.T) {
 	tests := []struct {
-		name     string
-		envelope *sessionpb.Envelope
+		name    string
+		message *sessionpb.Envelope
 	}{
 		{
 			name: "open",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Open{
 					Open: &sessionpb.OpenRequest{
 						Term: "xterm-256color",
@@ -44,7 +44,7 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "open ok",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_OpenOk{
 					OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
 				},
@@ -52,7 +52,7 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "data",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Data{
 					Data: &sessionpb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
 				},
@@ -60,7 +60,7 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "err",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Err{
 					Err: &sessionpb.Error{Code: "failed", Message: "failed"},
 				},
@@ -68,7 +68,7 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "resize",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Resize{
 					Resize: &sessionpb.Resize{Rows: 40, Cols: 120},
 				},
@@ -76,7 +76,7 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "close",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Close{
 					Close: &sessionpb.Close{Reason: "stdin closed"},
 				},
@@ -84,16 +84,37 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "exit status",
-			envelope: &sessionpb.Envelope{
+			message: &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_ExitStatus{
 					ExitStatus: &sessionpb.ExitStatus{Code: 12},
 				},
 			},
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &packetBuffer{}
+			transport := NewTransport(stream)
+
+			require.NoError(t, transport.Send(tt.message))
+
+			var got sessionpb.Envelope
+			require.NoError(t, transport.Receive(&got))
+			require.True(t, proto.Equal(tt.message, &got), "expected %v, got %v", tt.message, &got)
+		})
+	}
+}
+
+func TestTransportRoundTripsAuthFrames(t *testing.T) {
+	tests := []struct {
+		name    string
+		message *authpb.AuthFrame
+	}{
 		{
 			name: "host auth init",
-			envelope: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_HostAuthInit{
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_HostAuthInit{
 					HostAuthInit: &authpb.HostAuthInit{
 						MygoshAuthVersion: "mygosh-auth-v1",
 						ClientNonce:       bytes.Repeat([]byte{0x11}, 32),
@@ -104,8 +125,8 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "server auth",
-			envelope: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_ServerAuth{
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_ServerAuth{
 					ServerAuth: &authpb.ServerAuth{
 						ServerHostKey: []byte("server-host-key"),
 						ServerNonce:   bytes.Repeat([]byte{0x22}, 32),
@@ -116,14 +137,51 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 		},
 		{
 			name: "client auth request",
-			envelope: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_ClientAuthRequest{
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_ClientAuthRequest{
 					ClientAuthRequest: &authpb.ClientAuthRequest{
 						Username:              "alice",
-						Service:               "shell",
 						ClientPublicKeyOrCert: []byte("client-key"),
 						ClientSigAlg:          "ed25519",
 						Signature:             []byte("client-signature"),
+					},
+				},
+			},
+		},
+		{
+			name: "client auth ok",
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_ClientAuthResponse{
+					ClientAuthResponse: &authpb.ClientAuthResponse{
+						Result: &authpb.ClientAuthResponse_Ok{
+							Ok: &authpb.AuthSuccess{},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "client auth reject",
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_ClientAuthResponse{
+					ClientAuthResponse: &authpb.ClientAuthResponse{
+						Result: &authpb.ClientAuthResponse_Reject{
+							Reject: &authpb.AuthReject{
+								Code:    "unauthorized-client",
+								Message: "not authorized",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "auth error",
+			message: &authpb.AuthFrame{
+				Kind: &authpb.AuthFrame_Error{
+					Error: &authpb.AuthError{
+						Code:    "protocol-error",
+						Message: "unexpected frame",
 					},
 				},
 			},
@@ -135,16 +193,16 @@ func TestTransportRoundTripsEnvelopeKinds(t *testing.T) {
 			stream := &packetBuffer{}
 			transport := NewTransport(stream)
 
-			require.NoError(t, transport.Send(tt.envelope))
+			require.NoError(t, transport.Send(tt.message))
 
-			got, err := transport.Receive()
-			require.NoError(t, err)
-			require.True(t, proto.Equal(tt.envelope, got), "expected %v, got %v", tt.envelope, got)
+			var got authpb.AuthFrame
+			require.NoError(t, transport.Receive(&got))
+			require.True(t, proto.Equal(tt.message, &got), "expected %v, got %v", tt.message, &got)
 		})
 	}
 }
 
-func TestTransportRejectsNilEnvelope(t *testing.T) {
+func TestTransportRejectsNilMessage(t *testing.T) {
 	transport := NewTransport(&packetBuffer{})
 	require.Error(t, transport.Send(nil))
 }
@@ -159,8 +217,8 @@ func TestDataPayloadIsUnchanged(t *testing.T) {
 		},
 	}))
 
-	got, err := transport.Receive()
-	require.NoError(t, err)
+	var got sessionpb.Envelope
+	require.NoError(t, transport.Receive(&got))
 	require.Equal(t, payload, got.GetData().GetData())
 }
 
@@ -168,7 +226,8 @@ func TestTransportRejectsEmptyPacket(t *testing.T) {
 	stream := &packetBuffer{}
 	require.NoError(t, stream.Send(nil))
 
-	_, err := NewTransport(stream).Receive()
+	var got sessionpb.Envelope
+	err := NewTransport(stream).Receive(&got)
 	require.Error(t, err)
 }
 
@@ -178,7 +237,8 @@ func TestTransportRejectsEnvelopeWithoutKind(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(packet))
 
-	_, err = NewTransport(stream).Receive()
+	var got sessionpb.Envelope
+	err = NewTransport(stream).Receive(&got)
 	require.Error(t, err)
 }
 
@@ -195,26 +255,16 @@ func TestTransportRejectsInvalidResize(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(packet))
 
-	_, err = NewTransport(stream).Receive()
+	var got sessionpb.Envelope
+	err = NewTransport(stream).Receive(&got)
 	require.Error(t, err)
 }
 
-func TestTransportRejectsInvalidError(t *testing.T) {
+func TestTransportRejectsInvalidAuthFrame(t *testing.T) {
 	transport := NewTransport(&packetBuffer{})
 
-	err := transport.Send(&sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Err{
-			Err: &sessionpb.Error{Code: "missing-message"},
-		},
-	})
-	require.Error(t, err)
-}
-
-func TestTransportRejectsInvalidHostAuthInit(t *testing.T) {
-	transport := NewTransport(&packetBuffer{})
-
-	err := transport.Send(&sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_HostAuthInit{
+	err := transport.Send(&authpb.AuthFrame{
+		Kind: &authpb.AuthFrame_HostAuthInit{
 			HostAuthInit: &authpb.HostAuthInit{
 				MygoshAuthVersion: "mygosh-auth-v1",
 				ClientNonce:       []byte("short"),
@@ -268,18 +318,22 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 	clientTransport := NewTransport(clientStream)
 	serverTransport := NewTransport(serverStream)
 
-	expected := &sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Data{
-			Data: &sessionpb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
+	expected := &authpb.AuthFrame{
+		Kind: &authpb.AuthFrame_Error{
+			Error: &authpb.AuthError{
+				Code:    "test",
+				Message: "message",
+			},
 		},
 	}
 
 	errs = make(chan error, 2)
-	gotCh := make(chan *sessionpb.Envelope, 1)
+	gotCh := make(chan *authpb.AuthFrame, 1)
 	go func() {
-		got, err := serverTransport.Receive()
+		var got authpb.AuthFrame
+		err := serverTransport.Receive(&got)
 		if err == nil {
-			gotCh <- got
+			gotCh <- &got
 		}
 		errs <- err
 	}()

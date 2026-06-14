@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"buf.build/go/protovalidate"
-	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/rotisserie/eris"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,45 +23,49 @@ func NewTransport(packets PacketStream) *Transport {
 	return &Transport{packets: packets}
 }
 
-func (t *Transport) Send(envelope *sessionpb.Envelope) error {
-	if envelope == nil {
-		return eris.New("wire: nil envelope")
+func (t *Transport) Send(message proto.Message) error {
+	if message == nil {
+		return eris.New("wire: nil message")
 	}
-	if err := protovalidate.Validate(envelope); err != nil {
-		return eris.Wrap(err, "validate message envelope")
+	if err := protovalidate.Validate(message); err != nil {
+		return eris.Wrap(err, "validate message")
 	}
 
-	packet, err := proto.Marshal(envelope)
+	packet, err := proto.Marshal(message)
 	if err != nil {
-		return eris.Wrap(err, "encode message envelope")
+		return eris.Wrap(err, "encode message")
 	}
 
 	t.writeMu.Lock()
 	defer t.writeMu.Unlock()
 
 	if err := t.packets.Send(packet); err != nil {
-		return eris.Wrapf(err, "send message envelope (%d bytes)", len(packet))
+		return eris.Wrapf(err, "send message (%d bytes)", len(packet))
 	}
 	return nil
 }
 
-func (t *Transport) Receive() (*sessionpb.Envelope, error) {
-	packet, err := t.packets.Receive()
-	if err != nil {
-		return nil, err
-	}
-	if len(packet) == 0 {
-		return nil, eris.New("wire: empty message")
+func (t *Transport) Receive(message proto.Message) error {
+	if message == nil {
+		return eris.New("wire: nil message")
 	}
 
-	var envelope sessionpb.Envelope
-	if err := proto.Unmarshal(packet, &envelope); err != nil {
-		return nil, eris.Wrap(err, "decode message envelope")
+	packet, err := t.packets.Receive()
+	if err != nil {
+		return err
 	}
-	if err := protovalidate.Validate(&envelope); err != nil {
-		return nil, eris.Wrap(err, "validate message envelope")
+	if len(packet) == 0 {
+		return eris.New("wire: empty message")
 	}
-	return &envelope, nil
+
+	proto.Reset(message)
+	if err := proto.Unmarshal(packet, message); err != nil {
+		return eris.Wrap(err, "decode message")
+	}
+	if err := protovalidate.Validate(message); err != nil {
+		return eris.Wrap(err, "validate message")
+	}
+	return nil
 }
 
 func (t *Transport) Close() error {

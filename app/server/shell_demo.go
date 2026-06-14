@@ -1,4 +1,4 @@
-package session
+package server
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
@@ -15,70 +16,67 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-type ShellServer struct {
+type ShellDemo struct {
 	transport *transport.Transport
 	shell     string
 }
 
-func NewShellServer(transport *transport.Transport, shell string) *ShellServer {
-	return &ShellServer{
-		transport: transport,
+func NewShellDemo(messageTransport *transport.Transport, shell string) *ShellDemo {
+	return &ShellDemo{
+		transport: messageTransport,
 		shell:     shell,
 	}
 }
 
-func (s *ShellServer) Run(ctx context.Context) error {
-	ctx = normalizeContext(ctx)
+func (d *ShellDemo) Run(ctx context.Context) error {
+	ctx = serverNormalizeContext(ctx)
 
-	stopWatchingContext := watchContextCancellation(ctx, s.transport)
+	stopWatchingContext := serverWatchContextCancellation(ctx, d.transport)
 	defer stopWatchingContext()
 
-	req, err := s.receiveOpen()
+	req, err := d.receiveOpen()
 	if err != nil {
-		return preferContextError(ctx, err)
+		return serverPreferContextError(ctx, err)
 	}
 
-	cmd := exec.CommandContext(ctx, s.shell)
-	cmd.Env = sessionEnv(req)
+	cmd := exec.CommandContext(ctx, d.shell)
+	cmd.Env = shellDemoEnv(req)
 
 	vtty, err := tty.CreateVTTY(tty.Size{Width: int(req.GetCols()), Height: int(req.GetRows())}, cmd)
 	if err != nil {
-		_ = s.transport.Send(&sessionpb.Envelope{
+		_ = d.transport.Send(&sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_Err{
 				Err: &sessionpb.Error{Code: "pty-start-failed", Message: err.Error()},
 			},
 		})
 		return eris.Wrap(err, "create server PTY")
 	}
-	//TODO: implement comprehensive application lifecycle
-	// and integrate with logging and error handling
-	//nolint:errcheck
-	defer vtty.Close()
+	defer vtty.Close() //nolint:errcheck
 
-	if err := s.transport.Send(&sessionpb.Envelope{
+	if err := d.transport.Send(&sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_OpenOk{
 			OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
 		},
 	}); err != nil {
-		return preferContextError(ctx, eris.Wrap(err, "send open response"))
+		return serverPreferContextError(ctx, eris.Wrap(err, "send open response"))
 	}
 
 	errs := make(chan error, 2)
-	go func() { errs <- s.forwardOutput(vtty, cmd) }()
-	go func() { errs <- s.receiveInput(vtty) }()
+	go func() { errs <- d.forwardOutput(vtty, cmd) }()
+	go func() { errs <- d.receiveInput(vtty) }()
 
-	return preferContextError(ctx, <-errs)
+	return serverPreferContextError(ctx, <-errs)
 }
 
-func (s *ShellServer) receiveOpen() (*sessionpb.OpenRequest, error) {
-	envelope, err := s.transport.Receive()
-	if err != nil {
+func (d *ShellDemo) receiveOpen() (*sessionpb.OpenRequest, error) {
+	var envelope sessionpb.Envelope
+	if err := d.transport.Receive(&envelope); err != nil {
 		return nil, eris.Wrap(err, "receive open request")
 	}
 
 	open, ok := envelope.Kind.(*sessionpb.Envelope_Open)
 	if !ok {
-		_ = s.transport.Send(&sessionpb.Envelope{
+		_ = d.transport.Send(&sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_Err{
 				Err: &sessionpb.Error{Code: "expected-open", Message: "expected open request"},
 			},
@@ -99,12 +97,12 @@ func (s *ShellServer) receiveOpen() (*sessionpb.OpenRequest, error) {
 	return req, nil
 }
 
-func (s *ShellServer) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
+func (d *ShellDemo) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := vtty.Read(buf)
 		if n > 0 {
-			if sendErr := s.transport.Send(&sessionpb.Envelope{
+			if sendErr := d.transport.Send(&sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Data{
 					Data: &sessionpb.Data{Data: buf[:n]},
 				},
@@ -113,9 +111,9 @@ func (s *ShellServer) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 			}
 		}
 		if err != nil {
-			if terminalClosed(err) {
-				code, waitErr := waitExit(cmd)
-				if sendErr := s.transport.Send(&sessionpb.Envelope{
+			if shellDemoTerminalClosed(err) {
+				code, waitErr := shellDemoWaitExit(cmd)
+				if sendErr := d.transport.Send(&sessionpb.Envelope{
 					Kind: &sessionpb.Envelope_ExitStatus{
 						ExitStatus: &sessionpb.ExitStatus{Code: int32(code)},
 					},
@@ -132,10 +130,10 @@ func (s *ShellServer) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	}
 }
 
-func (s *ShellServer) receiveInput(vtty *tty.VTTY) error {
+func (d *ShellDemo) receiveInput(vtty *tty.VTTY) error {
 	for {
-		envelope, err := s.transport.Receive()
-		if err != nil {
+		var envelope sessionpb.Envelope
+		if err := d.transport.Receive(&envelope); err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
 			}
@@ -144,7 +142,7 @@ func (s *ShellServer) receiveInput(vtty *tty.VTTY) error {
 
 		switch kind := envelope.Kind.(type) {
 		case *sessionpb.Envelope_Data:
-			if err := writeFull(vtty, kind.Data.GetData()); err != nil {
+			if err := serverWriteFull(vtty, kind.Data.GetData()); err != nil {
 				return eris.Wrap(err, "write PTY input")
 			}
 		case *sessionpb.Envelope_Resize:
@@ -155,7 +153,7 @@ func (s *ShellServer) receiveInput(vtty *tty.VTTY) error {
 			return nil
 		default:
 			msg := eris.Errorf("unexpected client event %T", kind)
-			_ = s.transport.Send(&sessionpb.Envelope{
+			_ = d.transport.Send(&sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Err{
 					Err: &sessionpb.Error{Code: "unexpected-event", Message: msg.Error()},
 				},
@@ -165,7 +163,7 @@ func (s *ShellServer) receiveInput(vtty *tty.VTTY) error {
 	}
 }
 
-func sessionEnv(req *sessionpb.OpenRequest) []string {
+func shellDemoEnv(req *sessionpb.OpenRequest) []string {
 	env := os.Environ()
 	if strings.TrimSpace(req.GetTerm()) != "" {
 		env = append(env, "TERM="+req.GetTerm())
@@ -173,11 +171,11 @@ func sessionEnv(req *sessionpb.OpenRequest) []string {
 	return env
 }
 
-func terminalClosed(err error) bool {
+func shellDemoTerminalClosed(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, os.ErrClosed) || errors.Is(err, syscall.EIO)
 }
 
-func waitExit(cmd *exec.Cmd) (int, error) {
+func shellDemoWaitExit(cmd *exec.Cmd) (int, error) {
 	err := cmd.Wait()
 	if err == nil {
 		return 0, nil
@@ -188,4 +186,53 @@ func waitExit(cmd *exec.Cmd) (int, error) {
 		return exitErr.ExitCode(), nil
 	}
 	return 1, err
+}
+
+func serverWriteFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		p = p[n:]
+	}
+	return nil
+}
+
+func serverNormalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func serverWatchContextCancellation(ctx context.Context, closer io.Closer) func() {
+	ctx = serverNormalizeContext(ctx)
+
+	stopCh := make(chan struct{})
+	var once sync.Once
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = closer.Close()
+		case <-stopCh:
+		}
+	}()
+
+	return func() {
+		once.Do(func() {
+			close(stopCh)
+		})
+	}
+}
+
+func serverPreferContextError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }

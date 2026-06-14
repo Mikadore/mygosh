@@ -1,8 +1,9 @@
 package auth
 
 import (
-	"github.com/Mikadore/mygosh/lib/bincoder"
+	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/rotisserie/eris"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -25,21 +26,17 @@ func (p ServerAuthToSign) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 
-	type canonicalServerAuthToSign struct {
-		Context          string
-		ChannelBinding   []byte
-		HostAuthInitHash []byte
-		ServerHostKey    []byte
-		ServerNonce      []byte
-	}
-
-	return bincoder.Canonicalize(canonicalServerAuthToSign{
+	packet, err := proto.MarshalOptions{Deterministic: true}.Marshal(&authpb.ServerAuthToSign{
 		Context:          ServerAuthContext,
-		ChannelBinding:   p.ChannelBinding,
-		HostAuthInitHash: p.HostAuthInitHash,
-		ServerHostKey:    p.ServerHostKey,
-		ServerNonce:      p.ServerNonce,
+		ChannelBinding:   cloneBytes(p.ChannelBinding),
+		HostAuthInitHash: cloneBytes(p.HostAuthInitHash),
+		ServerHostKey:    cloneBytes(p.ServerHostKey),
+		ServerNonce:      cloneBytes(p.ServerNonce),
 	})
+	if err != nil {
+		return nil, eris.Wrap(err, "marshal server auth payload")
+	}
+	return packet, nil
 }
 
 func (p ServerAuthToSign) Validate() error {
@@ -63,7 +60,6 @@ type ClientAuthToSign struct {
 	HostAuthInitHash      []byte
 	ServerAuthHash        []byte
 	Username              string
-	Service               string
 	ClientPublicKeyOrCert []byte
 	ClientSigAlg          string
 }
@@ -73,27 +69,19 @@ func (p ClientAuthToSign) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 
-	type canonicalClientAuthToSign struct {
-		Context               string
-		ChannelBinding        []byte
-		HostAuthInitHash      []byte
-		ServerAuthHash        []byte
-		Username              string
-		Service               string
-		ClientPublicKeyOrCert []byte
-		ClientSigAlg          string
-	}
-
-	return bincoder.Canonicalize(canonicalClientAuthToSign{
+	packet, err := proto.MarshalOptions{Deterministic: true}.Marshal(&authpb.ClientAuthToSign{
 		Context:               ClientAuthContext,
-		ChannelBinding:        p.ChannelBinding,
-		HostAuthInitHash:      p.HostAuthInitHash,
-		ServerAuthHash:        p.ServerAuthHash,
+		ChannelBinding:        cloneBytes(p.ChannelBinding),
+		HostAuthInitHash:      cloneBytes(p.HostAuthInitHash),
+		ServerAuthHash:        cloneBytes(p.ServerAuthHash),
 		Username:              p.Username,
-		Service:               p.Service,
-		ClientPublicKeyOrCert: p.ClientPublicKeyOrCert,
+		ClientPublicKeyOrCert: cloneBytes(p.ClientPublicKeyOrCert),
 		ClientSigAlg:          p.ClientSigAlg,
 	})
+	if err != nil {
+		return nil, eris.Wrap(err, "marshal client auth payload")
+	}
+	return packet, nil
 }
 
 func (p ClientAuthToSign) Validate() error {
@@ -108,9 +96,6 @@ func (p ClientAuthToSign) Validate() error {
 	}
 	if p.Username == "" {
 		return eris.New("username is required")
-	}
-	if p.Service == "" {
-		return eris.New("service is required")
 	}
 	if len(p.ClientPublicKeyOrCert) == 0 {
 		return eris.New("client public key or cert is required")

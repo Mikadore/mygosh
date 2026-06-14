@@ -3,8 +3,9 @@ package auth
 import (
 	"testing"
 
-	"github.com/Mikadore/mygosh/lib/bincoder"
+	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestServerAuthToSignMarshalBinary(t *testing.T) {
@@ -18,13 +19,15 @@ func TestServerAuthToSignMarshalBinary(t *testing.T) {
 	encoded, err := payload.MarshalBinary()
 	require.NoError(t, err)
 
-	dec := bincoder.NewCursor(encoded)
-	require.Equal(t, ServerAuthContext, dec.UTF8String())
-	require.Equal(t, payload.ChannelBinding, dec.Bytes())
-	require.Equal(t, payload.HostAuthInitHash, dec.Bytes())
-	require.Equal(t, payload.ServerHostKey, dec.Bytes())
-	require.Equal(t, payload.ServerNonce, dec.Bytes())
-	require.NoError(t, dec.Done())
+	expected, err := proto.MarshalOptions{Deterministic: true}.Marshal(&authpb.ServerAuthToSign{
+		Context:          ServerAuthContext,
+		ChannelBinding:   payload.ChannelBinding,
+		HostAuthInitHash: payload.HostAuthInitHash,
+		ServerHostKey:    payload.ServerHostKey,
+		ServerNonce:      payload.ServerNonce,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expected, encoded)
 }
 
 func TestClientAuthToSignMarshalBinary(t *testing.T) {
@@ -33,7 +36,6 @@ func TestClientAuthToSignMarshalBinary(t *testing.T) {
 		HostAuthInitHash:      repeatedByte(0x22),
 		ServerAuthHash:        repeatedByte(0x44),
 		Username:              "alice",
-		Service:               "shell",
 		ClientPublicKeyOrCert: []byte("client-key"),
 		ClientSigAlg:          "ed25519",
 	}
@@ -41,16 +43,17 @@ func TestClientAuthToSignMarshalBinary(t *testing.T) {
 	encoded, err := payload.MarshalBinary()
 	require.NoError(t, err)
 
-	dec := bincoder.NewCursor(encoded)
-	require.Equal(t, ClientAuthContext, dec.UTF8String())
-	require.Equal(t, payload.ChannelBinding, dec.Bytes())
-	require.Equal(t, payload.HostAuthInitHash, dec.Bytes())
-	require.Equal(t, payload.ServerAuthHash, dec.Bytes())
-	require.Equal(t, payload.Username, dec.UTF8String())
-	require.Equal(t, payload.Service, dec.UTF8String())
-	require.Equal(t, payload.ClientPublicKeyOrCert, dec.Bytes())
-	require.Equal(t, payload.ClientSigAlg, dec.UTF8String())
-	require.NoError(t, dec.Done())
+	expected, err := proto.MarshalOptions{Deterministic: true}.Marshal(&authpb.ClientAuthToSign{
+		Context:               ClientAuthContext,
+		ChannelBinding:        payload.ChannelBinding,
+		HostAuthInitHash:      payload.HostAuthInitHash,
+		ServerAuthHash:        payload.ServerAuthHash,
+		Username:              payload.Username,
+		ClientPublicKeyOrCert: payload.ClientPublicKeyOrCert,
+		ClientSigAlg:          payload.ClientSigAlg,
+	})
+	require.NoError(t, err)
+	require.Equal(t, expected, encoded)
 }
 
 func TestServerAuthToSignValidateRejectsInvalidPayloads(t *testing.T) {
@@ -76,7 +79,6 @@ func TestClientAuthToSignValidateRejectsInvalidPayloads(t *testing.T) {
 		HostAuthInitHash:      repeatedByte(0x22),
 		ServerAuthHash:        []byte("short"),
 		Username:              "alice",
-		Service:               "shell",
 		ClientPublicKeyOrCert: []byte("client-key"),
 		ClientSigAlg:          "ed25519",
 	}.Validate()
@@ -87,7 +89,6 @@ func TestClientAuthToSignValidateRejectsInvalidPayloads(t *testing.T) {
 		HostAuthInitHash: repeatedByte(0x22),
 		ServerAuthHash:   repeatedByte(0x44),
 		Username:         "alice",
-		Service:          "shell",
 		ClientSigAlg:     "ed25519",
 	}.Validate()
 	require.ErrorContains(t, err, "client public key or cert is required")

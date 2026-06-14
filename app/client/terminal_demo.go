@@ -1,4 +1,4 @@
-package session
+package client
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
@@ -14,63 +15,60 @@ import (
 	"golang.org/x/term"
 )
 
-type TerminalClient struct {
+type TerminalDemo struct {
 	transport *transport.Transport
 	input     *os.File
 	output    io.Writer
 }
 
-func NewTerminalClient(transport *transport.Transport, input *os.File, output io.Writer) *TerminalClient {
-	return &TerminalClient{
-		transport: transport,
+func NewTerminalDemo(messageTransport *transport.Transport, input *os.File, output io.Writer) *TerminalDemo {
+	return &TerminalDemo{
+		transport: messageTransport,
 		input:     input,
 		output:    output,
 	}
 }
 
-func (s *TerminalClient) Run(ctx context.Context) error {
-	ctx = normalizeContext(ctx)
+func (d *TerminalDemo) Run(ctx context.Context) error {
+	ctx = clientNormalizeContext(ctx)
 
-	stopWatchingContext := watchContextCancellation(ctx, s.transport)
+	stopWatchingContext := clientWatchContextCancellation(ctx, d.transport)
 	defer stopWatchingContext()
 
-	raw, err := tty.HookRaw(ctx, s.input)
+	raw, err := tty.HookRaw(ctx, d.input)
 	if err != nil {
 		return eris.Wrap(err, "hook raw terminal")
 	}
-	//TODO: implement comprehensive application lifecycle
-	// and integrate with logging and error handling
-	//nolint:errcheck
-	defer raw.Restore()
+	defer raw.Restore() //nolint:errcheck
 
-	size := currentTerminalSize(s.input)
-	if err := s.transport.Send(&sessionpb.Envelope{
+	size := clientCurrentTerminalSize(d.input)
+	if err := d.transport.Send(&sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_Open{
 			Open: &sessionpb.OpenRequest{
-				Term: terminalName(),
+				Term: clientTerminalName(),
 				Rows: uint32(size.Height),
 				Cols: uint32(size.Width),
 			},
 		},
 	}); err != nil {
-		return preferContextError(ctx, eris.Wrap(err, "send open request"))
+		return clientPreferContextError(ctx, eris.Wrap(err, "send open request"))
 	}
 
-	if err := s.waitOpenOK(); err != nil {
-		return preferContextError(ctx, err)
+	if err := d.waitOpenOK(); err != nil {
+		return clientPreferContextError(ctx, err)
 	}
 
 	errs := make(chan error, 3)
-	go func() { errs <- s.forwardInput(raw) }()
-	go func() { errs <- s.forwardResizes(ctx, raw) }()
-	go func() { errs <- s.receiveOutput() }()
+	go func() { errs <- d.forwardInput(raw) }()
+	go func() { errs <- d.forwardResizes(ctx, raw) }()
+	go func() { errs <- d.receiveOutput() }()
 
-	return preferContextError(ctx, <-errs)
+	return clientPreferContextError(ctx, <-errs)
 }
 
-func (s *TerminalClient) waitOpenOK() error {
-	envelope, err := s.transport.Receive()
-	if err != nil {
+func (d *TerminalDemo) waitOpenOK() error {
+	var envelope sessionpb.Envelope
+	if err := d.transport.Receive(&envelope); err != nil {
 		return eris.Wrap(err, "receive open response")
 	}
 
@@ -84,12 +82,12 @@ func (s *TerminalClient) waitOpenOK() error {
 	}
 }
 
-func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
+func (d *TerminalDemo) forwardInput(raw *tty.RawTTY) error {
 	buf := make([]byte, 4096)
 	for {
 		n, err := raw.Read(buf)
 		if n > 0 {
-			if sendErr := s.transport.Send(&sessionpb.Envelope{
+			if sendErr := d.transport.Send(&sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Data{
 					Data: &sessionpb.Data{Data: buf[:n]},
 				},
@@ -99,7 +97,7 @@ func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return s.transport.Send(&sessionpb.Envelope{
+				return d.transport.Send(&sessionpb.Envelope{
 					Kind: &sessionpb.Envelope_Close{
 						Close: &sessionpb.Close{Reason: "stdin closed"},
 					},
@@ -110,14 +108,14 @@ func (s *TerminalClient) forwardInput(raw *tty.RawTTY) error {
 	}
 }
 
-func (s *TerminalClient) forwardResizes(ctx context.Context, raw *tty.RawTTY) error {
+func (d *TerminalDemo) forwardResizes(ctx context.Context, raw *tty.RawTTY) error {
 	for {
 		select {
 		case size, ok := <-raw.Resizes():
 			if !ok {
 				return nil
 			}
-			if err := s.transport.Send(&sessionpb.Envelope{
+			if err := d.transport.Send(&sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Resize{
 					Resize: &sessionpb.Resize{
 						Rows: uint32(size.Height),
@@ -133,10 +131,10 @@ func (s *TerminalClient) forwardResizes(ctx context.Context, raw *tty.RawTTY) er
 	}
 }
 
-func (s *TerminalClient) receiveOutput() error {
+func (d *TerminalDemo) receiveOutput() error {
 	for {
-		envelope, err := s.transport.Receive()
-		if err != nil {
+		var envelope sessionpb.Envelope
+		if err := d.transport.Receive(&envelope); err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
 			}
@@ -145,7 +143,7 @@ func (s *TerminalClient) receiveOutput() error {
 
 		switch kind := envelope.Kind.(type) {
 		case *sessionpb.Envelope_Data:
-			if err := writeFull(s.output, kind.Data.GetData()); err != nil {
+			if err := clientWriteFull(d.output, kind.Data.GetData()); err != nil {
 				return eris.Wrap(err, "write terminal output")
 			}
 		case *sessionpb.Envelope_ExitStatus:
@@ -164,7 +162,7 @@ func (s *TerminalClient) receiveOutput() error {
 	}
 }
 
-func currentTerminalSize(file *os.File) tty.Size {
+func clientCurrentTerminalSize(file *os.File) tty.Size {
 	width, height, err := term.GetSize(int(file.Fd()))
 	if err != nil || width <= 0 || height <= 0 {
 		return tty.Size{Width: 80, Height: 24}
@@ -172,7 +170,7 @@ func currentTerminalSize(file *os.File) tty.Size {
 	return tty.Size{Width: width, Height: height}
 }
 
-func terminalName() string {
+func clientTerminalName() string {
 	name := strings.TrimSpace(os.Getenv("TERM"))
 	if name == "" {
 		return "xterm"
@@ -180,7 +178,7 @@ func terminalName() string {
 	return name
 }
 
-func writeFull(w io.Writer, p []byte) error {
+func clientWriteFull(w io.Writer, p []byte) error {
 	for len(p) > 0 {
 		n, err := w.Write(p)
 		if err != nil {
@@ -192,4 +190,39 @@ func writeFull(w io.Writer, p []byte) error {
 		p = p[n:]
 	}
 	return nil
+}
+
+func clientNormalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func clientWatchContextCancellation(ctx context.Context, closer io.Closer) func() {
+	ctx = clientNormalizeContext(ctx)
+
+	stopCh := make(chan struct{})
+	var once sync.Once
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = closer.Close()
+		case <-stopCh:
+		}
+	}()
+
+	return func() {
+		once.Do(func() {
+			close(stopCh)
+		})
+	}
+}
+
+func clientPreferContextError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
 }

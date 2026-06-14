@@ -44,7 +44,7 @@ func (d *ShellDemo) Run(ctx context.Context) error {
 
 	vtty, err := tty.CreateVTTY(tty.Size{Width: int(req.GetCols()), Height: int(req.GetRows())}, cmd)
 	if err != nil {
-		_ = d.transport.Send(&sessionpb.Envelope{
+		_ = transport.SendProto(d.transport, &sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_Err{
 				Err: &sessionpb.Error{Code: "pty-start-failed", Message: err.Error()},
 			},
@@ -53,7 +53,7 @@ func (d *ShellDemo) Run(ctx context.Context) error {
 	}
 	defer vtty.Close() //nolint:errcheck
 
-	if err := d.transport.Send(&sessionpb.Envelope{
+	if err := transport.SendProto(d.transport, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_OpenOk{
 			OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
 		},
@@ -70,13 +70,13 @@ func (d *ShellDemo) Run(ctx context.Context) error {
 
 func (d *ShellDemo) receiveOpen() (*sessionpb.OpenRequest, error) {
 	var envelope sessionpb.Envelope
-	if err := d.transport.Receive(&envelope); err != nil {
+	if err := transport.ReceiveProto(d.transport, &envelope); err != nil {
 		return nil, eris.Wrap(err, "receive open request")
 	}
 
 	open, ok := envelope.Kind.(*sessionpb.Envelope_Open)
 	if !ok {
-		_ = d.transport.Send(&sessionpb.Envelope{
+		_ = transport.SendProto(d.transport, &sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_Err{
 				Err: &sessionpb.Error{Code: "expected-open", Message: "expected open request"},
 			},
@@ -102,7 +102,7 @@ func (d *ShellDemo) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 	for {
 		n, err := vtty.Read(buf)
 		if n > 0 {
-			if sendErr := d.transport.Send(&sessionpb.Envelope{
+			if sendErr := transport.SendProto(d.transport, &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Data{
 					Data: &sessionpb.Data{Data: buf[:n]},
 				},
@@ -113,7 +113,7 @@ func (d *ShellDemo) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 		if err != nil {
 			if shellDemoTerminalClosed(err) {
 				code, waitErr := shellDemoWaitExit(cmd)
-				if sendErr := d.transport.Send(&sessionpb.Envelope{
+				if sendErr := transport.SendProto(d.transport, &sessionpb.Envelope{
 					Kind: &sessionpb.Envelope_ExitStatus{
 						ExitStatus: &sessionpb.ExitStatus{Code: int32(code)},
 					},
@@ -133,7 +133,7 @@ func (d *ShellDemo) forwardOutput(vtty *tty.VTTY, cmd *exec.Cmd) error {
 func (d *ShellDemo) receiveInput(vtty *tty.VTTY) error {
 	for {
 		var envelope sessionpb.Envelope
-		if err := d.transport.Receive(&envelope); err != nil {
+		if err := transport.ReceiveProto(d.transport, &envelope); err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
 			}
@@ -153,7 +153,7 @@ func (d *ShellDemo) receiveInput(vtty *tty.VTTY) error {
 			return nil
 		default:
 			msg := eris.Errorf("unexpected client event %T", kind)
-			_ = d.transport.Send(&sessionpb.Envelope{
+			_ = transport.SendProto(d.transport, &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Err{
 					Err: &sessionpb.Error{Code: "unexpected-event", Message: msg.Error()},
 				},

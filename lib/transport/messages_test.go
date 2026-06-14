@@ -7,25 +7,12 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
-	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
 
-type packetBuffer struct {
-	buf bytes.Buffer
-}
-
-func (p *packetBuffer) Send(packet []byte) error {
-	return bincoder.WriteBytes(&p.buf, packet)
-}
-
-func (p *packetBuffer) Receive() ([]byte, error) {
-	return bincoder.ReadBytes(&p.buf, 0)
-}
-
-func TestTransportRoundTripsSessionEnvelopes(t *testing.T) {
+func TestSendReceiveProtoRoundTripsSessionEnvelopes(t *testing.T) {
 	tests := []struct {
 		name    string
 		message *sessionpb.Envelope
@@ -94,19 +81,14 @@ func TestTransportRoundTripsSessionEnvelopes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stream := &packetBuffer{}
-			transport := NewTransport(stream)
-
-			require.NoError(t, transport.Send(tt.message))
-
+			sender, receiver := makeTransportPair(t)
 			var got sessionpb.Envelope
-			require.NoError(t, transport.Receive(&got))
-			require.True(t, proto.Equal(tt.message, &got), "expected %v, got %v", tt.message, &got)
+			requireProtoRoundTrip(t, sender, receiver, tt.message, &got)
 		})
 	}
 }
 
-func TestTransportRoundTripsAuthFrames(t *testing.T) {
+func TestSendReceiveProtoRoundTripsAuthFrames(t *testing.T) {
 	tests := []struct {
 		name    string
 		message *authpb.AuthFrame
@@ -190,60 +172,54 @@ func TestTransportRoundTripsAuthFrames(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stream := &packetBuffer{}
-			transport := NewTransport(stream)
-
-			require.NoError(t, transport.Send(tt.message))
-
+			sender, receiver := makeTransportPair(t)
 			var got authpb.AuthFrame
-			require.NoError(t, transport.Receive(&got))
-			require.True(t, proto.Equal(tt.message, &got), "expected %v, got %v", tt.message, &got)
+			requireProtoRoundTrip(t, sender, receiver, tt.message, &got)
 		})
 	}
 }
 
-func TestTransportRejectsNilMessage(t *testing.T) {
-	transport := NewTransport(&packetBuffer{})
-	require.Error(t, transport.Send(nil))
+func TestSendProtoRejectsNilMessage(t *testing.T) {
+	sender, _ := makeTransportPair(t)
+	require.Error(t, SendProto(sender, nil))
 }
 
 func TestDataPayloadIsUnchanged(t *testing.T) {
-	transport := NewTransport(&packetBuffer{})
+	sender, receiver := makeTransportPair(t)
 	payload := []byte{0x00, 0x01, 'h', 'i', 0xff}
-
-	require.NoError(t, transport.Send(&sessionpb.Envelope{
+	expected := &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_Data{
 			Data: &sessionpb.Data{Data: payload},
 		},
-	}))
+	}
 
 	var got sessionpb.Envelope
-	require.NoError(t, transport.Receive(&got))
+	requireProtoRoundTrip(t, sender, receiver, expected, &got)
 	require.Equal(t, payload, got.GetData().GetData())
 }
 
-func TestTransportRejectsEmptyPacket(t *testing.T) {
-	stream := &packetBuffer{}
-	require.NoError(t, stream.Send(nil))
+func TestReceiveProtoRejectsEmptyFrame(t *testing.T) {
+	sender, receiver := makeTransportPair(t)
 
 	var got sessionpb.Envelope
-	err := NewTransport(stream).Receive(&got)
+	err := receiveProtoFromRawFrame(t, sender, receiver, nil, &got)
 	require.Error(t, err)
 }
 
-func TestTransportRejectsEnvelopeWithoutKind(t *testing.T) {
-	stream := &packetBuffer{}
+func TestReceiveProtoRejectsEnvelopeWithoutKind(t *testing.T) {
+	sender, receiver := makeTransportPair(t)
+
 	packet, err := proto.Marshal(&sessionpb.Envelope{})
 	require.NoError(t, err)
-	require.NoError(t, stream.Send(packet))
 
 	var got sessionpb.Envelope
-	err = NewTransport(stream).Receive(&got)
+	err = receiveProtoFromRawFrame(t, sender, receiver, packet, &got)
 	require.Error(t, err)
 }
 
-func TestTransportRejectsInvalidResize(t *testing.T) {
-	stream := &packetBuffer{}
+func TestReceiveProtoRejectsInvalidResize(t *testing.T) {
+	sender, receiver := makeTransportPair(t)
+
 	packet, err := proto.Marshal(&sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_Resize{
 			Resize: &sessionpb.Resize{
@@ -253,17 +229,16 @@ func TestTransportRejectsInvalidResize(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, stream.Send(packet))
 
 	var got sessionpb.Envelope
-	err = NewTransport(stream).Receive(&got)
+	err = receiveProtoFromRawFrame(t, sender, receiver, packet, &got)
 	require.Error(t, err)
 }
 
-func TestTransportRejectsInvalidAuthFrame(t *testing.T) {
-	transport := NewTransport(&packetBuffer{})
+func TestSendProtoRejectsInvalidAuthFrame(t *testing.T) {
+	sender, _ := makeTransportPair(t)
 
-	err := transport.Send(&authpb.AuthFrame{
+	err := SendProto(sender, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_HostAuthInit{
 			HostAuthInit: &authpb.HostAuthInit{
 				MygoshAuthVersion: "mygosh-auth-v1",
@@ -275,14 +250,14 @@ func TestTransportRejectsInvalidAuthFrame(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
+func TestSendReceiveProtoOverTCPTransport(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = listener.Close()
 	})
 
-	serverStreamCh := make(chan *NoiseStream, 1)
+	serverTransportCh := make(chan *Transport, 1)
 	errs := make(chan error, 2)
 	go func() {
 		conn, err := listener.Accept()
@@ -296,9 +271,9 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 			return
 		}
 
-		stream, err := HandshakeServer(conn)
+		messageTransport, err := HandshakeServer(conn)
 		if err == nil {
-			serverStreamCh <- stream
+			serverTransportCh <- messageTransport
 		}
 		errs <- err
 	}()
@@ -310,13 +285,10 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 	})
 	require.NoError(t, conn.SetDeadline(time.Now().Add(2*time.Second)))
 
-	clientStream, err := HandshakeClient(conn)
+	clientTransport, err := HandshakeClient(conn)
 	require.NoError(t, err)
 	require.NoError(t, <-errs)
-	serverStream := <-serverStreamCh
-
-	clientTransport := NewTransport(clientStream)
-	serverTransport := NewTransport(serverStream)
+	serverTransport := <-serverTransportCh
 
 	expected := &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_Error{
@@ -331,17 +303,46 @@ func TestTransportRoundTripOverNoiseStreamTCP(t *testing.T) {
 	gotCh := make(chan *authpb.AuthFrame, 1)
 	go func() {
 		var got authpb.AuthFrame
-		err := serverTransport.Receive(&got)
+		err := ReceiveProto(serverTransport, &got)
 		if err == nil {
 			gotCh <- &got
 		}
 		errs <- err
 	}()
 	go func() {
-		errs <- clientTransport.Send(expected)
+		errs <- SendProto(clientTransport, expected)
 	}()
 
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)
 	require.True(t, proto.Equal(expected, <-gotCh))
+}
+
+func requireProtoRoundTrip(t *testing.T, sender, receiver *Transport, expected proto.Message, got proto.Message) {
+	t.Helper()
+
+	errs := make(chan error, 2)
+	go func() {
+		errs <- SendProto(sender, expected)
+	}()
+	go func() {
+		errs <- ReceiveProto(receiver, got)
+	}()
+
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	require.True(t, proto.Equal(expected, got), "expected %v, got %v", expected, got)
+}
+
+func receiveProtoFromRawFrame(t *testing.T, sender, receiver *Transport, frame []byte, got proto.Message) error {
+	t.Helper()
+
+	sendErrs := make(chan error, 1)
+	go func() {
+		sendErrs <- sender.SendFrame(frame)
+	}()
+
+	err := ReceiveProto(receiver, got)
+	require.NoError(t, <-sendErrs)
+	return err
 }

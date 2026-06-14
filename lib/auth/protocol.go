@@ -426,14 +426,14 @@ func receiveClientAuthResponse(messageTransport *transport.Transport) (*authpb.C
 
 func receiveAuthFrame(messageTransport *transport.Transport) (*authpb.AuthFrame, error) {
 	var frame authpb.AuthFrame
-	if err := messageTransport.Receive(&frame); err != nil {
+	if err := transport.ReceiveProto(messageTransport, &frame); err != nil {
 		return nil, eris.Wrap(err, "receive auth frame")
 	}
 	return &frame, nil
 }
 
 func sendAuthFrame(messageTransport *transport.Transport, frame *authpb.AuthFrame) error {
-	return messageTransport.Send(frame)
+	return transport.SendProto(messageTransport, frame)
 }
 
 func sendAuthError(messageTransport *transport.Transport, code string, message string) {

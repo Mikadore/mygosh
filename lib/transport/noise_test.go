@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream) {
+func makeTransportPair(t *testing.T) (*Transport, *Transport) {
 	t.Helper()
 
 	a, b := net.Pipe()
@@ -21,8 +21,8 @@ func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream) {
 	require.NoError(t, a.SetDeadline(deadline))
 	require.NoError(t, b.SetDeadline(deadline))
 
-	var initiator *NoiseStream
-	var responder *NoiseStream
+	var initiator *Transport
+	var responder *Transport
 	var err error
 
 	errs := make(chan error, 2)
@@ -46,31 +46,31 @@ func makeNoisePair(t *testing.T) (*NoiseStream, *NoiseStream) {
 }
 
 func TestDoHandshakeRoundTrip(t *testing.T) {
-	makeNoisePair(t)
+	makeTransportPair(t)
 }
 
-func TestNoiseStreamRoundTripInitiatorToResponder(t *testing.T) {
-	initiator, responder := makeNoisePair(t)
+func TestTransportRoundTripInitiatorToResponder(t *testing.T) {
+	initiator, responder := makeTransportPair(t)
 	expected := []byte("Hello there! ...General Kenobi :3")
 
-	requireNoiseRoundTrip(t, initiator, responder, expected)
+	requireTransportRoundTrip(t, initiator, responder, expected)
 }
 
-func TestNoiseStreamRoundTripResponderToInitiator(t *testing.T) {
-	initiator, responder := makeNoisePair(t)
+func TestTransportRoundTripResponderToInitiator(t *testing.T) {
+	initiator, responder := makeTransportPair(t)
 	expected := []byte("You are a bold one.")
 
-	requireNoiseRoundTrip(t, responder, initiator, expected)
+	requireTransportRoundTrip(t, responder, initiator, expected)
 }
 
-func TestNoiseStreamTCPRoundTripExportsChannelBinding(t *testing.T) {
+func TestTransportTCPRoundTripExportsChannelBinding(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = listener.Close()
 	})
 
-	serverStreamCh := make(chan *NoiseStream, 1)
+	serverStreamCh := make(chan *Transport, 1)
 	errs := make(chan error, 2)
 	go func() {
 		conn, err := listener.Accept()
@@ -106,18 +106,18 @@ func TestNoiseStreamTCPRoundTripExportsChannelBinding(t *testing.T) {
 	require.NotEmpty(t, clientStream.ChannelBinding())
 	require.Equal(t, clientStream.ChannelBinding(), serverStream.ChannelBinding())
 
-	requireNoiseRoundTrip(t, clientStream, serverStream, []byte("ping over tcp"))
-	requireNoiseRoundTrip(t, serverStream, clientStream, []byte("pong over tcp"))
+	requireTransportRoundTrip(t, clientStream, serverStream, []byte("ping over tcp"))
+	requireTransportRoundTrip(t, serverStream, clientStream, []byte("pong over tcp"))
 }
 
-func requireNoiseRoundTrip(t *testing.T, sender *NoiseStream, receiver *NoiseStream, expected []byte) {
+func requireTransportRoundTrip(t *testing.T, sender *Transport, receiver *Transport, expected []byte) {
 	t.Helper()
 
 	actualCh := make(chan []byte, 1)
 	errs := make(chan error, 2)
 
 	go func() {
-		actual, err := receiver.Receive()
+		actual, err := receiver.ReceiveFrame()
 		if err != nil {
 			errs <- err
 			return
@@ -126,7 +126,7 @@ func requireNoiseRoundTrip(t *testing.T, sender *NoiseStream, receiver *NoiseStr
 		errs <- nil
 	}()
 	go func() {
-		errs <- sender.Send(expected)
+		errs <- sender.SendFrame(expected)
 	}()
 
 	require.NoError(t, <-errs)

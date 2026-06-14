@@ -10,6 +10,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
+	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 	"github.com/stretchr/testify/require"
 )
@@ -161,6 +162,92 @@ func TestConnectRespectsContextCancellation(t *testing.T) {
 	}
 }
 
+func TestResolveTimeoutUsesDefault(t *testing.T) {
+	require.Equal(t, defaultHandshakeTimeout, resolveTimeout(0, defaultHandshakeTimeout))
+	require.Equal(t, defaultAuthTimeout, resolveTimeout(0, defaultAuthTimeout))
+}
+
+func TestConnectHandshakeTimeout(t *testing.T) {
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+	_ = serverConn
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Connect(context.Background(), clientConn, ClientConfig{
+			ReferenceIdentity:   "server.example.test",
+			Username:            "alice",
+			ClientIdentity:      clientIdentity,
+			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+			HandshakeTimeout:    25 * time.Millisecond,
+		})
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handshake timeout")
+	}
+}
+
+func TestConnectAuthTimeout(t *testing.T) {
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		_, err := transport.HandshakeServer(serverConn)
+		serverErrCh <- err
+	}()
+
+	_, err = Connect(context.Background(), clientConn, ClientConfig{
+		ReferenceIdentity:   "server.example.test",
+		Username:            "alice",
+		ClientIdentity:      clientIdentity,
+		VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+		AuthTimeout:         25 * time.Millisecond,
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NoError(t, <-serverErrCh)
+}
+
+func TestConnectContextCancellationBeatsPhaseTimeout(t *testing.T) {
+	clientIdentity, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	clientConn, serverConn := sessionPipe(t)
+	_ = serverConn
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := Connect(ctx, clientConn, ClientConfig{
+			ReferenceIdentity:   "server.example.test",
+			Username:            "alice",
+			ClientIdentity:      clientIdentity,
+			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+			HandshakeTimeout:    200 * time.Millisecond,
+		})
+		errCh <- err
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for context cancellation")
+	}
+}
+
 func TestSessionRunRejectsPostAuthProtocol(t *testing.T) {
 	serverHostKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
@@ -202,7 +289,7 @@ func TestSessionRunRejectsPostAuthProtocol(t *testing.T) {
 
 	errs = make(chan error, 1)
 	go func() {
-		errs <- serverSession.transport.Send(&sessionpb.Envelope{
+		errs <- transport.SendProto(serverSession.transport, &sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_Data{
 				Data: &sessionpb.Data{Data: []byte("unsupported")},
 			},

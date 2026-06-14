@@ -42,7 +42,7 @@ func (d *TerminalDemo) Run(ctx context.Context) error {
 	defer raw.Restore() //nolint:errcheck
 
 	size := clientCurrentTerminalSize(d.input)
-	if err := d.transport.Send(&sessionpb.Envelope{
+	if err := transport.SendProto(d.transport, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_Open{
 			Open: &sessionpb.OpenRequest{
 				Term: clientTerminalName(),
@@ -68,7 +68,7 @@ func (d *TerminalDemo) Run(ctx context.Context) error {
 
 func (d *TerminalDemo) waitOpenOK() error {
 	var envelope sessionpb.Envelope
-	if err := d.transport.Receive(&envelope); err != nil {
+	if err := transport.ReceiveProto(d.transport, &envelope); err != nil {
 		return eris.Wrap(err, "receive open response")
 	}
 
@@ -87,7 +87,7 @@ func (d *TerminalDemo) forwardInput(raw *tty.RawTTY) error {
 	for {
 		n, err := raw.Read(buf)
 		if n > 0 {
-			if sendErr := d.transport.Send(&sessionpb.Envelope{
+			if sendErr := transport.SendProto(d.transport, &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Data{
 					Data: &sessionpb.Data{Data: buf[:n]},
 				},
@@ -97,7 +97,7 @@ func (d *TerminalDemo) forwardInput(raw *tty.RawTTY) error {
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return d.transport.Send(&sessionpb.Envelope{
+				return transport.SendProto(d.transport, &sessionpb.Envelope{
 					Kind: &sessionpb.Envelope_Close{
 						Close: &sessionpb.Close{Reason: "stdin closed"},
 					},
@@ -115,7 +115,7 @@ func (d *TerminalDemo) forwardResizes(ctx context.Context, raw *tty.RawTTY) erro
 			if !ok {
 				return nil
 			}
-			if err := d.transport.Send(&sessionpb.Envelope{
+			if err := transport.SendProto(d.transport, &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_Resize{
 					Resize: &sessionpb.Resize{
 						Rows: uint32(size.Height),
@@ -134,7 +134,7 @@ func (d *TerminalDemo) forwardResizes(ctx context.Context, raw *tty.RawTTY) erro
 func (d *TerminalDemo) receiveOutput() error {
 	for {
 		var envelope sessionpb.Envelope
-		if err := d.transport.Receive(&envelope); err != nil {
+		if err := transport.ReceiveProto(d.transport, &envelope); err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
 			}

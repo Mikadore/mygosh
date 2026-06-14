@@ -3,7 +3,7 @@
 `mygosh` is a from-scratch, minimal SSH-like client/server experiment in Go.
 It is not SSH-compatible and does not use Go SSH libraries.
 
-The current code has a custom Noise-based transport over TCP, separate auth/session protobuf frame schemas, and a minimal authenticated session abstraction. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the post-auth session protocol is rebuilt on top of the new boundary.
+The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, and a minimal authenticated session abstraction. The session layer now owns connection shutdown plus handshake/auth timeout enforcement during construction. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the post-auth session protocol is rebuilt on top of the new boundary.
 
 The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory.
 
@@ -12,9 +12,12 @@ The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` i
 The current repository baseline is:
 
 - Noise handshake plus auth completes through `lib/session.Connect` / `lib/session.Accept`
+- the concrete secure connection type is `lib/transport.Transport`
+- protobuf framing above transport goes through `transport.SendProto` / `transport.ReceiveProto`
 - auth protocol/state transitions live in `lib/auth`
 - auth traffic uses `mygosh.auth.v1.AuthFrame`
 - post-auth traffic uses `mygosh.session.v1.Envelope`
+- session construction enforces built-in handshake/auth timeouts through an internal session runtime
 - the default CLI path authenticates and exits
 
 The next project step is to build the real post-auth session/channel-open path on top of that split. See `PLAN.md` for the near-term plan.
@@ -34,6 +37,8 @@ json = false
 ```
 
 `core.shell` is currently only used by the provisional demo PTY code under `app/`; it is not exercised by the default auth-only CLI path.
+
+Handshake/auth timeout policy is currently internal to `lib/session` and is not exposed through `mygosh.toml`.
 
 Log verbosity can be overridden from the CLI:
 

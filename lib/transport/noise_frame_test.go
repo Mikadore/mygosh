@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNoiseStreamSendChunkWritesBincoderFrame(t *testing.T) {
+func TestTransportSendChunkWritesBincoderFrame(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() {
 		_ = a.Close()
@@ -18,7 +18,7 @@ func TestNoiseStreamSendChunkWritesBincoderFrame(t *testing.T) {
 	})
 	requireFrameDeadlines(t, a, b)
 
-	stream := &NoiseStream{conn: a}
+	stream := &Transport{conn: a}
 	payload := []byte("hello")
 
 	errs := make(chan error, 1)
@@ -32,7 +32,7 @@ func TestNoiseStreamSendChunkWritesBincoderFrame(t *testing.T) {
 	require.NoError(t, <-errs)
 }
 
-func TestNoiseStreamRecvChunkReadsSingleBincoderFrame(t *testing.T) {
+func TestTransportRecvChunkReadsSingleBincoderFrame(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() {
 		_ = a.Close()
@@ -40,7 +40,7 @@ func TestNoiseStreamRecvChunkReadsSingleBincoderFrame(t *testing.T) {
 	})
 	requireFrameDeadlines(t, a, b)
 
-	stream := &NoiseStream{conn: a}
+	stream := &Transport{conn: a}
 	payload := []byte("hello")
 	trailing := []byte("trailing")
 
@@ -68,8 +68,8 @@ func TestNoiseStreamRecvChunkReadsSingleBincoderFrame(t *testing.T) {
 	require.NoError(t, <-errs)
 }
 
-func TestNoiseStreamRoundTripEmptyPayload(t *testing.T) {
-	sender, receiver := makeNoiseFramePair(t)
+func TestTransportRoundTripEmptyPayload(t *testing.T) {
+	sender, receiver := makeTransportFramePair(t)
 
 	actualCh := make(chan []byte, 1)
 	errs := make(chan error, 2)
@@ -92,20 +92,20 @@ func TestNoiseStreamRoundTripEmptyPayload(t *testing.T) {
 	require.Empty(t, <-actualCh)
 }
 
-func TestNoiseStreamRejectsOversizedSendChunk(t *testing.T) {
+func TestTransportRejectsOversizedSendChunk(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() {
 		_ = a.Close()
 		_ = b.Close()
 	})
 
-	stream := &NoiseStream{conn: a}
+	stream := &Transport{conn: a}
 
 	err := stream.sendChunk(make([]byte, MaxPayloadSize+1))
 	require.ErrorContains(t, err, "wire: payload too large")
 }
 
-func TestNoiseStreamRejectsOversizedRecvChunk(t *testing.T) {
+func TestTransportRejectsOversizedRecvChunk(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() {
 		_ = a.Close()
@@ -113,7 +113,7 @@ func TestNoiseStreamRejectsOversizedRecvChunk(t *testing.T) {
 	})
 	requireFrameDeadlines(t, a, b)
 
-	stream := &NoiseStream{conn: a}
+	stream := &Transport{conn: a}
 
 	errs := make(chan error, 1)
 	go func() {
@@ -125,14 +125,14 @@ func TestNoiseStreamRejectsOversizedRecvChunk(t *testing.T) {
 	require.NoError(t, <-errs)
 }
 
-func TestNoiseStreamDelegatesConnMethods(t *testing.T) {
+func TestTransportDelegatesConnMethods(t *testing.T) {
 	a, b := net.Pipe()
 	t.Cleanup(func() {
 		_ = a.Close()
 		_ = b.Close()
 	})
 
-	stream := &NoiseStream{conn: a}
+	stream := &Transport{conn: a}
 	deadline := time.Now().Add(2 * time.Second)
 
 	require.Equal(t, a.LocalAddr().String(), stream.LocalAddr().String())
@@ -143,7 +143,7 @@ func TestNoiseStreamDelegatesConnMethods(t *testing.T) {
 	require.NoError(t, stream.Close())
 }
 
-func makeNoiseFramePair(t *testing.T) (*NoiseStream, *NoiseStream) {
+func makeTransportFramePair(t *testing.T) (*Transport, *Transport) {
 	t.Helper()
 
 	a, b := net.Pipe()
@@ -153,7 +153,7 @@ func makeNoiseFramePair(t *testing.T) (*NoiseStream, *NoiseStream) {
 	})
 	requireFrameDeadlines(t, a, b)
 
-	return &NoiseStream{conn: a}, &NoiseStream{conn: b}
+	return &Transport{conn: a}, &Transport{conn: b}
 }
 
 func requireFrameDeadlines(t *testing.T, conns ...net.Conn) {

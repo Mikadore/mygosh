@@ -12,7 +12,10 @@ Today the repository has completed the auth/session split:
 
 - auth uses its own protobuf `AuthFrame` schema in `lib/auth/authpb`
 - session traffic uses its own protobuf `Envelope` schema in `lib/session/sessionpb`
+- `lib/transport.Transport` is the concrete Noise-backed framed secure connection
+- protobuf marshaling sits above transport in `transport.SendProto` / `transport.ReceiveProto`
 - `lib/session` currently stops at authenticated session construction plus a minimal post-auth receive-loop stub
+- `lib/session` owns an internal connection runtime for parent-context shutdown plus handshake/auth timeouts
 - the default CLI flow authenticates and exits; interactive terminal behavior is not wired into the current session path
 
 ## Repository Layout
@@ -20,7 +23,7 @@ Today the repository has completed the auth/session split:
 - `bin/`: binary entrypoint and Cobra command setup.
 - `app/client/`: client application flow, TCP dialing, and provisional terminal demo code not used by the default CLI path.
 - `app/server/`: server application flow, TCP listening, and provisional shell demo code not used by the default CLI path.
-- `lib/transport/`: Noise transport and generic protobuf frame transport.
+- `lib/transport/`: concrete Noise-backed framed transport plus protobuf send/receive helpers.
 - `lib/auth/`: auth frame schema, authentication protocol/state machine, signed payloads, and auth transcript handling.
 - `lib/session/`: authenticated global session model and minimal post-auth protocol boundary.
 - `lib/bincoder/`: small binary encoding helpers for framing and key formats.
@@ -32,8 +35,9 @@ Today the repository has completed the auth/session split:
 ## Development Rules
 
 - Prefer small, composable layers over large all-in-one abstractions.
-- Keep TCP ownership in `app/client` and `app/server`; do not hide sockets inside `NoiseStream`.
-- Keep `NoiseStream` focused on encrypted packet send/receive.
+- Keep TCP ownership in `app/client` and `app/server`; do not move dialing/listening or TCP tuning into `lib/transport`.
+- Keep `transport.Transport` focused on encrypted frame send/receive.
+- Keep protobuf marshaling/validation above transport in helper functions rather than making it the transport identity.
 - Keep auth and session wire schemas separate: one protobuf `oneof` auth frame type and one protobuf `oneof` session frame type.
 - Keep terminal data contents raw bytes and return terminal bytes unchanged.
 - Use protobuf for message serialization and protovalidate for schema validation where applicable.
@@ -50,12 +54,13 @@ Today the repository has completed the auth/session split:
 - Authentication protocol logic and auth state transitions should live in `lib/auth`.
 - Session construction chooses and validates identities, keys, and trust policy, then calls into the auth machinery.
 - `lib/session.Connect` and `lib/session.Accept` are the authenticated session construction entry points today.
+- `lib/session` may own internal connection-runtime details such as target handoff, cancellation, and handshake/auth timeout enforcement.
 - Auth code should run the authentication protocol with the supplied identities and keys; it should not decide local policy, selected service, or requested channel type.
 - Auth protocol messages live only in `mygosh.auth.v1.AuthFrame`; session protocol messages live only in `mygosh.session.v1.Envelope`.
 - Auth messages must not include which service or channel the client wants to run.
 - Every auth initiation or request must have a corresponding reply, including rejection and error paths.
 - Signed auth payloads use deterministic protobuf serialization; do not reintroduce a second canonicalization scheme for auth blobs.
-- `Session.Run` should be the post-auth receive owner. Do not add competing `Transport.Receive` users around it.
+- `Session.Run` should be the post-auth receive owner. Do not add competing `ReceiveFrame` / `ReceiveProto` users around it.
 
 ## Channel Direction
 
@@ -70,7 +75,7 @@ Today the repository has completed the auth/session split:
 
 `PROCESS_SEPARATION.md` is guidance, not the immediate priority. Keep its boundaries in mind without forcing a process split now.
 
-- Keep one receive owner per connection; do not let unrelated goroutines compete over `Transport.Receive`.
+- Keep one receive owner per connection; do not let unrelated goroutines compete over `ReceiveFrame` / `ReceiveProto`.
 - Avoid spreading host-key access, authorization policy, account lookup, or PTY launch policy into `transport` or `auth`.
 - Prefer plain data interfaces at trust boundaries so future helper/monitor processes remain possible.
 

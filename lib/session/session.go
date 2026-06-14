@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
@@ -24,11 +25,15 @@ type ClientConfig struct {
 	Username            string
 	ClientIdentity      keys.Keypair
 	VerifyServerHostKey auth.HostKeyVerifier
+	HandshakeTimeout    time.Duration
+	AuthTimeout         time.Duration
 }
 
 type ServerConfig struct {
-	HostKey         keys.Keypair
-	AuthorizeClient auth.AuthorizeClientFunc
+	HostKey          keys.Keypair
+	AuthorizeClient  auth.AuthorizeClientFunc
+	HandshakeTimeout time.Duration
+	AuthTimeout      time.Duration
 }
 
 type Metadata struct {
@@ -38,6 +43,7 @@ type Metadata struct {
 }
 
 type Session struct {
+	runtime   *connRuntime
 	role      Role
 	transport *transport.Transport
 	metadata  Metadata
@@ -48,27 +54,46 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, er
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	stopWatchingContext := watchContextCancellation(ctx, conn)
-	defer stopWatchingContext()
-
-	stream, err := transport.HandshakeClient(conn)
-	if err != nil {
-		return nil, preferContextError(ctx, eris.Wrap(err, "establish noise transport"))
+	if err := validateTimeouts(cfg.HandshakeTimeout, cfg.AuthTimeout); err != nil {
+		return nil, eris.Wrap(err, "validate client session config")
 	}
+	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
+	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
 
-	messageTransport := transport.NewTransport(stream)
-	result, err := auth.AuthenticateClient(messageTransport, stream.ChannelBinding(), auth.ClientConfig{
-		ReferenceIdentity:   cfg.ReferenceIdentity,
-		Username:            cfg.Username,
-		ClientIdentity:      cfg.ClientIdentity,
-		VerifyServerHostKey: cfg.VerifyServerHostKey,
+	runtime := newConnRuntime(ctx, conn)
+
+	var messageTransport *transport.Transport
+	err := runtime.runWithTimeout(handshakeTimeout, func() error {
+		var err error
+		messageTransport, err = transport.HandshakeClient(conn)
+		return err
 	})
 	if err != nil {
-		return nil, preferContextError(ctx, eris.Wrap(err, "authenticate client"))
+		wrapped := runtime.wrapError(err, "establish noise transport")
+		_ = runtime.Close()
+		return nil, wrapped
+	}
+	runtime.setTarget(messageTransport)
+
+	var result auth.Result
+	err = runtime.runWithTimeout(authTimeout, func() error {
+		var err error
+		result, err = auth.AuthenticateClient(messageTransport, messageTransport.ChannelBinding(), auth.ClientConfig{
+			ReferenceIdentity:   cfg.ReferenceIdentity,
+			Username:            cfg.Username,
+			ClientIdentity:      cfg.ClientIdentity,
+			VerifyServerHostKey: cfg.VerifyServerHostKey,
+		})
+		return err
+	})
+	if err != nil {
+		wrapped := runtime.wrapError(err, "authenticate client")
+		_ = runtime.Close()
+		return nil, wrapped
 	}
 
 	return &Session{
+		runtime:   runtime,
 		role:      RoleClient,
 		transport: messageTransport,
 		metadata:  metadataFromAuthResult(result),
@@ -80,25 +105,44 @@ func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, err
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	stopWatchingContext := watchContextCancellation(ctx, conn)
-	defer stopWatchingContext()
-
-	stream, err := transport.HandshakeServer(conn)
-	if err != nil {
-		return nil, preferContextError(ctx, eris.Wrap(err, "establish noise transport"))
+	if err := validateTimeouts(cfg.HandshakeTimeout, cfg.AuthTimeout); err != nil {
+		return nil, eris.Wrap(err, "validate server session config")
 	}
+	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
+	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
 
-	messageTransport := transport.NewTransport(stream)
-	result, err := auth.AuthenticateServer(messageTransport, stream.ChannelBinding(), auth.ServerConfig{
-		HostKey:         cfg.HostKey,
-		AuthorizeClient: cfg.AuthorizeClient,
+	runtime := newConnRuntime(ctx, conn)
+
+	var messageTransport *transport.Transport
+	err := runtime.runWithTimeout(handshakeTimeout, func() error {
+		var err error
+		messageTransport, err = transport.HandshakeServer(conn)
+		return err
 	})
 	if err != nil {
-		return nil, preferContextError(ctx, eris.Wrap(err, "authenticate server"))
+		wrapped := runtime.wrapError(err, "establish noise transport")
+		_ = runtime.Close()
+		return nil, wrapped
+	}
+	runtime.setTarget(messageTransport)
+
+	var result auth.Result
+	err = runtime.runWithTimeout(authTimeout, func() error {
+		var err error
+		result, err = auth.AuthenticateServer(messageTransport, messageTransport.ChannelBinding(), auth.ServerConfig{
+			HostKey:         cfg.HostKey,
+			AuthorizeClient: cfg.AuthorizeClient,
+		})
+		return err
+	})
+	if err != nil {
+		wrapped := runtime.wrapError(err, "authenticate server")
+		_ = runtime.Close()
+		return nil, wrapped
 	}
 
 	return &Session{
+		runtime:   runtime,
 		role:      RoleServer,
 		transport: messageTransport,
 		metadata:  metadataFromAuthResult(result),
@@ -124,16 +168,29 @@ func (s *Session) Metadata() Metadata {
 func (s *Session) Run(ctx context.Context) error {
 	ctx = normalizeContext(ctx)
 
-	stopWatchingContext := watchContextCancellation(ctx, s.transport)
-	defer stopWatchingContext()
+	stopCh := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.Close()
+		case <-stopCh:
+		}
+	}()
+	defer close(stopCh)
 
 	for {
 		var frame sessionpb.Envelope
-		if err := s.transport.Receive(&frame); err != nil {
+		if err := transport.ReceiveProto(s.transport, &frame); err != nil {
 			if eris.Is(err, io.EOF) {
 				return nil
 			}
-			return preferContextError(ctx, eris.Wrap(err, "receive session frame"))
+			if s.runtime != nil {
+				return s.runtime.wrapError(err, "receive session frame")
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return eris.Wrap(err, "receive session frame")
 		}
 
 		return eris.Errorf("session protocol not implemented: received %T", frame.Kind)
@@ -143,6 +200,9 @@ func (s *Session) Run(ctx context.Context) error {
 func (s *Session) Close() error {
 	if s == nil {
 		return nil
+	}
+	if s.runtime != nil {
+		return s.runtime.Close()
 	}
 	return s.transport.Close()
 }
@@ -175,4 +235,14 @@ func clonePublicKey(key keys.PublicKey) keys.PublicKey {
 		Algorithm: key.Algorithm,
 		Bytes:     append([]byte(nil), key.Bytes...),
 	}
+}
+
+func validateTimeouts(handshakeTimeout time.Duration, authTimeout time.Duration) error {
+	if handshakeTimeout < 0 {
+		return eris.New("handshake timeout must not be negative")
+	}
+	if authTimeout < 0 {
+		return eris.New("auth timeout must not be negative")
+	}
+	return nil
 }

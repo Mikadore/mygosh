@@ -9,7 +9,7 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/auth"
-	"github.com/Mikadore/mygosh/lib/session"
+	"github.com/Mikadore/mygosh/lib/connection"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
@@ -58,19 +58,19 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 		return err
 	}
 
-	established, err := session.Connect(ctx, conn, session.ClientConfig{
-		ReferenceIdentity:   referenceIdentity(args.Address),
-		Username:            localUsername(),
-		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
-		VerifyServerHostKey: trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
-		Logger:              logger,
+	established, err := connection.Connect(ctx, conn, connection.ClientConfig{
+		ReferenceIdentity:      referenceIdentity(args.Address),
+		Username:               localUsername(),
+		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+		VerifyServerHostKey:    trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
+		Logger:                 logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
 	defer established.Close()
 
-	logger.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
+	logger.Info("server identity", "fingerprint", established.Auth.ServerHostKey.FingerprintSHA256())
 	logger.Info("authenticated session established", "session_protocol", "disabled")
 	return nil
 }

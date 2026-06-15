@@ -11,11 +11,6 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-const (
-	defaultHandshakeTimeout = 5 * time.Second
-	defaultAuthTimeout      = 10 * time.Second
-)
-
 type deadlineCloser interface {
 	io.Closer
 	SetDeadline(time.Time) error
@@ -155,11 +150,4 @@ func (r *Runtime) WrapError(err error, message string) error {
 		return nil
 	}
 	return eris.Wrap(err, message)
-}
-
-func resolveTimeout(actual time.Duration, fallback time.Duration) time.Duration {
-	if actual == 0 {
-		return fallback
-	}
-	return actual
 }

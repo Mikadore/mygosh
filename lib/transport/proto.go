@@ -6,7 +6,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func SendProto(t *Transport, message proto.Message) error {
+func SendProto(t Framer, message proto.Message) error {
 	if t == nil {
 		return eris.New("wire: nil transport")
 	}
@@ -28,7 +28,7 @@ func SendProto(t *Transport, message proto.Message) error {
 	return nil
 }
 
-func ReceiveProto(t *Transport, message proto.Message) error {
+func ReceiveProto(t Framer, message proto.Message) error {
 	if t == nil {
 		return eris.New("wire: nil transport")
 	}

@@ -17,22 +17,22 @@ func KnownHostsHostKeyVerifier(path string) auth.HostKeyVerifier {
 
 func KnownHostsHostKeyVerifierWithLogger(path string, logger *charmlog.Logger) auth.HostKeyVerifier {
 	logger = logging.Resolve(logger)
-	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error {
+	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
 		resolvedPath, err := resolveCurrentUserPath(path)
 		if err != nil {
-			return eris.Wrap(err, "resolve known_hosts path")
+			return auth.HostKeyVerificationResult{}, eris.Wrap(err, "resolve known_hosts path")
 		}
 
 		logger.Debug("loading known_hosts", "path", resolvedPath, "reference_identity", req.ReferenceIdentity)
 
 		knownHosts, err := ReadKnownHosts(resolvedPath)
 		if err != nil {
-			return eris.Wrap(err, "load known_hosts")
+			return auth.HostKeyVerificationResult{}, eris.Wrap(err, "load known_hosts")
 		}
 
 		hostKeys, ok := knownHosts[req.ReferenceIdentity]
 		if !ok || len(hostKeys) == 0 {
-			return eris.Errorf("no known host keys for reference identity %q", req.ReferenceIdentity)
+			return auth.HostKeyVerificationResult{}, eris.Errorf("no known host keys for reference identity %q", req.ReferenceIdentity)
 		}
 
 		for _, knownHostKey := range hostKeys {
@@ -41,9 +41,9 @@ func KnownHostsHostKeyVerifierWithLogger(path string, logger *charmlog.Logger) a
 			}
 
 			logger.Info("known_hosts matched server identity", "reference_identity", req.ReferenceIdentity, "fingerprint", req.HostKey.FingerprintSHA256())
-			return nil
+			return auth.HostKeyVerificationResult{Source: resolvedPath}, nil
 		}
 
-		return eris.Errorf("unexpected host key fingerprint %s for reference identity %q", req.HostKey.FingerprintSHA256(), req.ReferenceIdentity)
+		return auth.HostKeyVerificationResult{}, eris.Errorf("unexpected host key fingerprint %s for reference identity %q", req.HostKey.FingerprintSHA256(), req.ReferenceIdentity)
 	})
 }

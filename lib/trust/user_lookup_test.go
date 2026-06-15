@@ -44,7 +44,7 @@ func TestGatherAuthorizedKeysSkipsMissingFiles(t *testing.T) {
 	require.Equal(t, 0, got[0].Compare(keypair.PublicKey()))
 }
 
-func TestAuthorizedKeysClientAuthorizerMatchesKeyForUser(t *testing.T) {
+func TestAuthorizedKeysClientKeyAuthorizerMatchesKeyForUser(t *testing.T) {
 	currentUser, err := user.Current()
 	require.NoError(t, err)
 
@@ -55,17 +55,18 @@ func TestAuthorizedKeysClientAuthorizerMatchesKeyForUser(t *testing.T) {
 	line := authorizedKeysLine(t, keypair.PublicKey(), "alice@test")
 	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o600))
 
-	authorizer := AuthorizedKeysClientAuthorizer([]string{path})
-	err = authorizer.AuthorizeClient(context.Background(), auth.ClientAuthorizationRequest{
+	authorizer := AuthorizedKeysClientKeyAuthorizer([]string{path})
+	result, err := authorizer.AuthorizeClientKey(context.Background(), auth.ClientKeyAuthorizationRequest{
 		Identity: auth.ClientIdentity{
 			Username:  currentUser.Username,
 			PublicKey: keypair.PublicKey(),
 		},
 	})
 	require.NoError(t, err)
+	require.Equal(t, "authorized_keys", result.Source)
 }
 
-func TestAuthorizedKeysClientAuthorizerRejectsUnexpectedKey(t *testing.T) {
+func TestAuthorizedKeysClientKeyAuthorizerRejectsUnexpectedKey(t *testing.T) {
 	currentUser, err := user.Current()
 	require.NoError(t, err)
 
@@ -78,8 +79,8 @@ func TestAuthorizedKeysClientAuthorizerRejectsUnexpectedKey(t *testing.T) {
 	line := authorizedKeysLine(t, authorizedKey.PublicKey(), "alice@test")
 	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o600))
 
-	authorizer := AuthorizedKeysClientAuthorizer([]string{path})
-	err = authorizer.AuthorizeClient(context.Background(), auth.ClientAuthorizationRequest{
+	authorizer := AuthorizedKeysClientKeyAuthorizer([]string{path})
+	_, err = authorizer.AuthorizeClientKey(context.Background(), auth.ClientKeyAuthorizationRequest{
 		Identity: auth.ClientIdentity{
 			Username:  currentUser.Username,
 			PublicKey: presentedKey.PublicKey(),

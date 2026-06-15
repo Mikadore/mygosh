@@ -16,11 +16,12 @@ func TestKnownHostsHostKeyVerifierMatchesKnownHost(t *testing.T) {
 	path := writeKnownHostsFile(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")
 
 	verify := KnownHostsHostKeyVerifier(path)
-	err = verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
+	result, err := verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
 		ReferenceIdentity: "server.example.test",
 		HostKey:           serverKey.PublicKey(),
 	})
 	require.NoError(t, err)
+	require.Equal(t, path, result.Source)
 }
 
 func TestKnownHostsHostKeyVerifierRejectsUnknownReferenceIdentity(t *testing.T) {
@@ -30,7 +31,7 @@ func TestKnownHostsHostKeyVerifierRejectsUnknownReferenceIdentity(t *testing.T) 
 	path := writeKnownHostsFile(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")
 
 	verify := KnownHostsHostKeyVerifier(path)
-	err = verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
+	_, err = verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
 		ReferenceIdentity: "other.example.test",
 		HostKey:           serverKey.PublicKey(),
 	})
@@ -46,7 +47,7 @@ func TestKnownHostsHostKeyVerifierRejectsUnexpectedHostKey(t *testing.T) {
 	path := writeKnownHostsFile(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")
 
 	verify := KnownHostsHostKeyVerifier(path)
-	err = verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
+	_, err = verify.VerifyHostKey(context.Background(), auth.HostKeyVerificationRequest{
 		ReferenceIdentity: "server.example.test",
 		HostKey:           otherKey.PublicKey(),
 	})

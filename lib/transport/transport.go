@@ -2,6 +2,7 @@ package transport
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -14,6 +15,23 @@ import (
 )
 
 const MaxPayloadSize = 32 * 1024
+
+type Framer interface {
+	SendFrame([]byte) error
+	ReceiveFrame() ([]byte, error)
+}
+
+type FramedConn interface {
+	Framer
+	io.Closer
+}
+
+// BoundFramer exposes the Noise channel binding to auth without making auth
+// depend on the concrete Transport implementation.
+type BoundFramer interface {
+	Framer
+	ChannelBinding() []byte
+}
 
 type Transport struct {
 	conn           net.Conn

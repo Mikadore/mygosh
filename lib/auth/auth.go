@@ -36,47 +36,119 @@ func (s KeypairSigner) Sign(_ context.Context, payload []byte) (keys.Signature, 
 	return (&s.keypair).Sign(payload), nil
 }
 
+type HostKeyRequest struct {
+	ReferenceIdentity string
+}
+
+// HostKeyProvider is deliberately separate from auth policy: it supplies the
+// server signing capability selected for the client's reference identity.
+type HostKeyProvider interface {
+	HostSigner(ctx context.Context, req HostKeyRequest) (Signer, error)
+}
+
+type HostKeyProviderFunc func(ctx context.Context, req HostKeyRequest) (Signer, error)
+
+func (f HostKeyProviderFunc) HostSigner(ctx context.Context, req HostKeyRequest) (Signer, error) {
+	if f == nil {
+		return nil, eris.New("host key provider is required")
+	}
+	return f(ctx, req)
+}
+
+func StaticHostKeyProvider(signer Signer) HostKeyProvider {
+	return HostKeyProviderFunc(func(_ context.Context, _ HostKeyRequest) (Signer, error) {
+		if signer == nil {
+			return nil, eris.New("server host signer is required")
+		}
+		return signer, nil
+	})
+}
+
+type ClientIdentityRequest struct {
+	ReferenceIdentity string
+	Username          string
+	ServerHostKey     keys.PublicKey
+}
+
+// ClientIdentityProvider selects the client signing capability after the peer
+// host key is known. Future implementations can delegate signing over IPC.
+type ClientIdentityProvider interface {
+	ClientSigner(ctx context.Context, req ClientIdentityRequest) (Signer, error)
+}
+
+type ClientIdentityProviderFunc func(ctx context.Context, req ClientIdentityRequest) (Signer, error)
+
+func (f ClientIdentityProviderFunc) ClientSigner(ctx context.Context, req ClientIdentityRequest) (Signer, error) {
+	if f == nil {
+		return nil, eris.New("client identity provider is required")
+	}
+	return f(ctx, req)
+}
+
+func StaticClientIdentityProvider(signer Signer) ClientIdentityProvider {
+	return ClientIdentityProviderFunc(func(_ context.Context, _ ClientIdentityRequest) (Signer, error) {
+		if signer == nil {
+			return nil, eris.New("client signer is required")
+		}
+		return signer, nil
+	})
+}
+
 type HostKeyVerificationRequest struct {
 	ReferenceIdentity string
 	HostKey           keys.PublicKey
 }
 
-type HostKeyVerifier interface {
-	VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) error
+type HostKeyVerificationResult struct {
+	Source string
 }
 
-type HostKeyVerifierFunc func(ctx context.Context, req HostKeyVerificationRequest) error
+// HostKeyVerifier is called by the client during auth because the protocol must
+// stop before client signing if the presented server key is not trusted.
+type HostKeyVerifier interface {
+	VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error)
+}
 
-func (f HostKeyVerifierFunc) VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) error {
+type HostKeyVerifierFunc func(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error)
+
+func (f HostKeyVerifierFunc) VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error) {
 	if f == nil {
-		return eris.New("host key verifier is required")
+		return HostKeyVerificationResult{}, eris.New("host key verifier is required")
 	}
 	return f(ctx, req)
 }
 
-type ClientAuthorizationRequest struct {
-	Identity ClientIdentity
+type ClientKeyAuthorizationRequest struct {
+	ReferenceIdentity string
+	ServerHostKey     keys.PublicKey
+	Identity          ClientIdentity
 }
 
-type ClientAuthorizer interface {
-	AuthorizeClient(ctx context.Context, req ClientAuthorizationRequest) error
+type ClientKeyAuthorizationResult struct {
+	Source string
 }
 
-type ClientAuthorizerFunc func(ctx context.Context, req ClientAuthorizationRequest) error
+// ClientKeyAuthorizer is still part of the auth exchange because the server
+// must send an auth OK/reject response before any session channel can open.
+type ClientKeyAuthorizer interface {
+	AuthorizeClientKey(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error)
+}
 
-func (f ClientAuthorizerFunc) AuthorizeClient(ctx context.Context, req ClientAuthorizationRequest) error {
+type ClientKeyAuthorizerFunc func(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error)
+
+func (f ClientKeyAuthorizerFunc) AuthorizeClientKey(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error) {
 	if f == nil {
-		return eris.New("client authorizer is required")
+		return ClientKeyAuthorizationResult{}, eris.New("client key authorizer is required")
 	}
 	return f(ctx, req)
 }
 
 type ClientConfig struct {
-	ReferenceIdentity   string
-	Username            string
-	ClientSigner        Signer
-	VerifyServerHostKey HostKeyVerifier
-	Logger              *charmlog.Logger
+	ReferenceIdentity      string
+	Username               string
+	ClientIdentityProvider ClientIdentityProvider
+	VerifyServerHostKey    HostKeyVerifier
+	Logger                 *charmlog.Logger
 }
 
 func (c ClientConfig) Validate() error {
@@ -86,12 +158,8 @@ func (c ClientConfig) Validate() error {
 	if c.Username == "" {
 		return eris.New("username is required")
 	}
-	if c.ClientSigner == nil {
-		return eris.New("client signer is required")
-	}
-	clientPublicKey := c.ClientSigner.PublicKey()
-	if !(&clientPublicKey).IsSigning() {
-		return eris.New("client signer must expose an ed25519 signing key")
+	if c.ClientIdentityProvider == nil {
+		return eris.New("client identity provider is required")
 	}
 	if c.VerifyServerHostKey == nil {
 		return eris.New("server host key verifier is required")
@@ -100,21 +168,17 @@ func (c ClientConfig) Validate() error {
 }
 
 type ServerConfig struct {
-	HostSigner      Signer
-	AuthorizeClient ClientAuthorizer
-	Logger          *charmlog.Logger
+	HostKeyProvider    HostKeyProvider
+	AuthorizeClientKey ClientKeyAuthorizer
+	Logger             *charmlog.Logger
 }
 
 func (c ServerConfig) Validate() error {
-	if c.HostSigner == nil {
-		return eris.New("server host signer is required")
+	if c.HostKeyProvider == nil {
+		return eris.New("server host key provider is required")
 	}
-	hostPublicKey := c.HostSigner.PublicKey()
-	if !(&hostPublicKey).IsSigning() {
-		return eris.New("server host signer must expose an ed25519 signing key")
-	}
-	if c.AuthorizeClient == nil {
-		return eris.New("client authorizer is required")
+	if c.AuthorizeClientKey == nil {
+		return eris.New("client key authorizer is required")
 	}
 	return nil
 }
@@ -124,10 +188,18 @@ type ClientIdentity struct {
 	PublicKey keys.PublicKey
 }
 
-type Result struct {
-	ReferenceIdentity string
-	ServerHostKey     keys.PublicKey
-	ClientIdentity    ClientIdentity
+type ClientResult struct {
+	ReferenceIdentity   string
+	ServerHostKey       keys.PublicKey
+	ClientIdentity      ClientIdentity
+	HostKeyVerification HostKeyVerificationResult
+}
+
+type ServerResult struct {
+	ReferenceIdentity      string
+	ServerHostKey          keys.PublicKey
+	ClientIdentity         ClientIdentity
+	ClientKeyAuthorization ClientKeyAuthorizationResult
 }
 
 type authState string
@@ -146,17 +218,17 @@ const (
 type authMachine struct {
 	role           string
 	state          authState
-	transport      *transport.Transport
+	conn           transport.BoundFramer
 	channelBinding []byte
 	logger         *charmlog.Logger
 }
 
-func newAuthMachine(role string, messageTransport *transport.Transport, channelBinding []byte, logger *charmlog.Logger) *authMachine {
+func newAuthMachine(role string, conn transport.BoundFramer, logger *charmlog.Logger) *authMachine {
 	return &authMachine{
 		role:           role,
 		state:          authStateNoiseEstablished,
-		transport:      messageTransport,
-		channelBinding: cloneBytes(channelBinding),
+		conn:           conn,
+		channelBinding: cloneBytes(conn.ChannelBinding()),
 		logger:         logging.Resolve(logger),
 	}
 }
@@ -180,7 +252,7 @@ func (m *authMachine) advance(expected authState, next authState) error {
 	return nil
 }
 
-func receiveHostAuthInit(messageTransport *transport.Transport) (*authpb.HostAuthInit, error) {
+func receiveHostAuthInit(messageTransport transport.Framer) (*authpb.HostAuthInit, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive host auth init")
@@ -196,7 +268,7 @@ func receiveHostAuthInit(messageTransport *transport.Transport) (*authpb.HostAut
 	}
 }
 
-func receiveServerAuth(messageTransport *transport.Transport) (*authpb.ServerAuth, error) {
+func receiveServerAuth(messageTransport transport.Framer) (*authpb.ServerAuth, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive server auth")
@@ -212,7 +284,7 @@ func receiveServerAuth(messageTransport *transport.Transport) (*authpb.ServerAut
 	}
 }
 
-func receiveClientAuthRequest(messageTransport *transport.Transport) (*authpb.ClientAuthRequest, error) {
+func receiveClientAuthRequest(messageTransport transport.Framer) (*authpb.ClientAuthRequest, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive client auth request")
@@ -228,7 +300,7 @@ func receiveClientAuthRequest(messageTransport *transport.Transport) (*authpb.Cl
 	}
 }
 
-func receiveClientAuthResponse(messageTransport *transport.Transport) (*authpb.ClientAuthResponse, error) {
+func receiveClientAuthResponse(messageTransport transport.Framer) (*authpb.ClientAuthResponse, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive client auth response")
@@ -244,7 +316,7 @@ func receiveClientAuthResponse(messageTransport *transport.Transport) (*authpb.C
 	}
 }
 
-func receiveAuthFrame(messageTransport *transport.Transport) (*authpb.AuthFrame, error) {
+func receiveAuthFrame(messageTransport transport.Framer) (*authpb.AuthFrame, error) {
 	var frame authpb.AuthFrame
 	if err := transport.ReceiveProto(messageTransport, &frame); err != nil {
 		return nil, eris.Wrap(err, "receive auth frame")
@@ -252,11 +324,11 @@ func receiveAuthFrame(messageTransport *transport.Transport) (*authpb.AuthFrame,
 	return &frame, nil
 }
 
-func sendAuthFrame(messageTransport *transport.Transport, frame *authpb.AuthFrame) error {
+func sendAuthFrame(messageTransport transport.Framer, frame *authpb.AuthFrame) error {
 	return transport.SendProto(messageTransport, frame)
 }
 
-func sendAuthError(messageTransport *transport.Transport, code string, message string) {
+func sendAuthError(messageTransport transport.Framer, code string, message string) {
 	_ = sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_Error{
 			Error: &authpb.AuthError{
@@ -267,7 +339,7 @@ func sendAuthError(messageTransport *transport.Transport, code string, message s
 	})
 }
 
-func sendClientAuthOK(messageTransport *transport.Transport) error {
+func sendClientAuthOK(messageTransport transport.Framer) error {
 	return sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_ClientAuthResponse{
 			ClientAuthResponse: &authpb.ClientAuthResponse{
@@ -279,7 +351,7 @@ func sendClientAuthOK(messageTransport *transport.Transport) error {
 	})
 }
 
-func sendClientAuthReject(messageTransport *transport.Transport, code string, message string) {
+func sendClientAuthReject(messageTransport transport.Framer, code string, message string) {
 	_ = sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_ClientAuthResponse{
 			ClientAuthResponse: &authpb.ClientAuthResponse{
@@ -296,14 +368,14 @@ func sendClientAuthReject(messageTransport *transport.Transport, code string, me
 
 func ExactHostKeyVerifier(referenceIdentity string, expected keys.PublicKey) HostKeyVerifier {
 	expected = clonePublicKey(expected)
-	return HostKeyVerifierFunc(func(_ context.Context, req HostKeyVerificationRequest) error {
+	return HostKeyVerifierFunc(func(_ context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error) {
 		if req.ReferenceIdentity != referenceIdentity {
-			return eris.Errorf("reference identity %q does not match expected %q", req.ReferenceIdentity, referenceIdentity)
+			return HostKeyVerificationResult{}, eris.Errorf("reference identity %q does not match expected %q", req.ReferenceIdentity, referenceIdentity)
 		}
 		if req.HostKey.Algorithm != expected.Algorithm || !bytes.Equal(req.HostKey.Bytes, expected.Bytes) {
-			return eris.Errorf("unexpected host key fingerprint %s", req.HostKey.FingerprintSHA256())
+			return HostKeyVerificationResult{}, eris.Errorf("unexpected host key fingerprint %s", req.HostKey.FingerprintSHA256())
 		}
-		return nil
+		return HostKeyVerificationResult{}, nil
 	})
 }
 

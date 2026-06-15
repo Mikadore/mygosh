@@ -7,20 +7,12 @@ import (
 	"math"
 	"sync"
 
-	"github.com/Mikadore/mygosh/lib/auth"
-	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
 	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
-
-type Metadata struct {
-	ReferenceIdentity string
-	ServerHostKey     keys.PublicKey
-	ClientIdentity    auth.ClientIdentity
-}
 
 type Options struct {
 	Runtime *Runtime
@@ -33,11 +25,10 @@ type globalWaitResult struct {
 }
 
 type Session struct {
-	runtime   *Runtime
-	transport *transport.Transport
-	metadata  Metadata
-	logger    *charmlog.Logger
-	config    Config
+	runtime *Runtime
+	conn    transport.FramedConn
+	logger  *charmlog.Logger
+	config  Config
 
 	mu                  sync.Mutex
 	nextLocalChannelID  uint64
@@ -51,9 +42,11 @@ type Session struct {
 	once    sync.Once
 }
 
-func New(messageTransport *transport.Transport, metadata Metadata, cfg Config, opts Options) (*Session, error) {
-	if messageTransport == nil {
-		return nil, eris.New("session transport is required")
+// New builds the post-auth multiplexer over an already authenticated framed
+// connection. Role-specific auth results belong to the caller.
+func New(conn transport.FramedConn, cfg Config, opts Options) (*Session, error) {
+	if conn == nil {
+		return nil, eris.New("session connection is required")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, eris.Wrap(err, "validate session mux config")
@@ -62,15 +55,14 @@ func New(messageTransport *transport.Transport, metadata Metadata, cfg Config, o
 	logger := logging.Resolve(opts.Logger)
 	runtime := opts.Runtime
 	if runtime == nil {
-		runtime = NewRuntime(context.Background(), messageTransport, logger)
+		runtime = NewRuntime(context.Background(), conn, logger)
 	} else {
-		runtime.SetTarget(messageTransport)
+		runtime.SetTarget(conn)
 	}
 
 	s := &Session{
 		runtime:       runtime,
-		transport:     messageTransport,
-		metadata:      cloneMetadata(metadata),
+		conn:          conn,
 		logger:        logger,
 		config:        cfg.withDefaults(),
 		channels:      make(map[uint64]*Channel),
@@ -86,10 +78,6 @@ func New(messageTransport *transport.Transport, metadata Metadata, cfg Config, o
 	return s, nil
 }
 
-func (s *Session) Metadata() Metadata {
-	return cloneMetadata(s.metadata)
-}
-
 func (s *Session) Run(ctx context.Context, handler Handler) error {
 	ctx = normalizeContext(ctx)
 
@@ -103,7 +91,7 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 
 	handler = normalizeHandler(handler)
 	logger := logging.Resolve(s.logger)
-	logger.Debug("session run loop started", "reference_identity", s.metadata.ReferenceIdentity)
+	logger.Debug("session run loop started")
 
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -132,7 +120,7 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 
 	for {
 		var frame sessionpb.Envelope
-		if err := transport.ReceiveProto(s.transport, &frame); err != nil {
+		if err := transport.ReceiveProto(s.conn, &frame); err != nil {
 			if eris.Is(err, io.EOF) {
 				logger.Debug("session stream closed")
 				finalErr = nil
@@ -271,8 +259,8 @@ func (s *Session) Close() error {
 	if s.runtime != nil {
 		return s.runtime.Close()
 	}
-	if s.transport != nil {
-		return s.transport.Close()
+	if s.conn != nil {
+		return s.conn.Close()
 	}
 	return nil
 }
@@ -732,7 +720,7 @@ func (s *Session) sendEnvelope(frame *sessionpb.Envelope) error {
 		return cause
 	}
 
-	if err := transport.SendProto(s.transport, frame); err != nil {
+	if err := transport.SendProto(s.conn, frame); err != nil {
 		if cause := context.Cause(s.runtime.Context()); cause != nil {
 			return cause
 		}
@@ -801,37 +789,6 @@ func (s *Session) shutdown(err error) {
 			}
 		}
 	})
-}
-
-func metadataFromAuthResult(result auth.Result) Metadata {
-	return Metadata{
-		ReferenceIdentity: result.ReferenceIdentity,
-		ServerHostKey:     clonePublicKey(result.ServerHostKey),
-		ClientIdentity:    cloneClientIdentity(result.ClientIdentity),
-	}
-}
-
-func cloneMetadata(meta Metadata) Metadata {
-	return Metadata{
-		ReferenceIdentity: meta.ReferenceIdentity,
-		ServerHostKey:     clonePublicKey(meta.ServerHostKey),
-		ClientIdentity:    cloneClientIdentity(meta.ClientIdentity),
-	}
-}
-
-func cloneClientIdentity(identity auth.ClientIdentity) auth.ClientIdentity {
-	return auth.ClientIdentity{
-		Username:  identity.Username,
-		PublicKey: clonePublicKey(identity.PublicKey),
-	}
-}
-
-func clonePublicKey(key keys.PublicKey) keys.PublicKey {
-	return keys.PublicKey{
-		Algorithm: key.Algorithm,
-		Bytes:     append([]byte(nil), key.Bytes...),
-		Comment:   key.Comment,
-	}
 }
 
 func cloneBytes(data []byte) []byte {

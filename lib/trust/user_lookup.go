@@ -35,20 +35,20 @@ func GatherAuthorizedKeys(files []string) ([]keys.PublicKey, error) {
 	return out, errs
 }
 
-func AuthorizedKeysClientAuthorizer(paths []string) auth.ClientAuthorizer {
-	return AuthorizedKeysClientAuthorizerWithLogger(paths, nil)
+func AuthorizedKeysClientKeyAuthorizer(paths []string) auth.ClientKeyAuthorizer {
+	return AuthorizedKeysClientKeyAuthorizerWithLogger(paths, nil)
 }
 
-func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.ClientAuthorizer {
+func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.ClientKeyAuthorizer {
 	configuredPaths := append([]string(nil), paths...)
 	logger = logging.Resolve(logger)
 
-	return auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
+	return auth.ClientKeyAuthorizerFunc(func(_ context.Context, req auth.ClientKeyAuthorizationRequest) (auth.ClientKeyAuthorizationResult, error) {
 		identity := req.Identity
 
 		account, err := user.Lookup(identity.Username)
 		if err != nil {
-			return eris.Wrapf(err, "lookup local user %q", identity.Username)
+			return auth.ClientKeyAuthorizationResult{}, eris.Wrapf(err, "lookup local user %q", identity.Username)
 		}
 
 		resolvedPaths := resolveAuthorizedKeysPaths(account.HomeDir, configuredPaths)
@@ -61,16 +61,16 @@ func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.L
 			}
 
 			logger.Info("authorized client key matched local user", "username", identity.Username, "fingerprint", identity.PublicKey.FingerprintSHA256())
-			return nil
+			return auth.ClientKeyAuthorizationResult{Source: "authorized_keys"}, nil
 		}
 
 		if gatherErr != nil {
-			return eris.Wrapf(gatherErr, "load authorized_keys for user %q", identity.Username)
+			return auth.ClientKeyAuthorizationResult{}, eris.Wrapf(gatherErr, "load authorized_keys for user %q", identity.Username)
 		}
 		if len(authorizedKeys) == 0 {
-			return eris.Errorf("no authorized keys found for user %q", identity.Username)
+			return auth.ClientKeyAuthorizationResult{}, eris.Errorf("no authorized keys found for user %q", identity.Username)
 		}
-		return eris.Errorf("client public key is not authorized for user %q", identity.Username)
+		return auth.ClientKeyAuthorizationResult{}, eris.Errorf("client public key is not authorized for user %q", identity.Username)
 	})
 }
 

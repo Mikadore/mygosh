@@ -1,83 +1,216 @@
-# Next Step: Post-Auth Session Protocol And Channel Opens
+# Next Step: Session Abstraction And Auth/Permission Boundaries
 
-## Current State
+## Current Baseline
 
-The auth/session cleanup step is complete enough to serve as the new baseline:
+The auth/session split is now real enough to plan from:
 
-- Noise handshake is still owned by `app/client` and `app/server` through `lib/session.Connect` and `lib/session.Accept`.
-- `lib/transport.Transport` is now the concrete Noise-backed framed connection.
-- Protobuf encoding/validation above transport now goes through `transport.SendProto` / `transport.ReceiveProto`.
-- Authentication protocol/state-machine code now lives in `lib/auth`.
+- Noise handshake still begins from `app/client` and `app/server`, but authenticated session construction happens through `lib/session.Connect` and `lib/session.Accept`.
+- `lib/transport.Transport` is the concrete Noise-backed framed connection.
 - Auth traffic uses `mygosh.auth.v1.AuthFrame`.
-- Session traffic uses `mygosh.session.v1.Envelope`.
-- `ClientAuthRequest` no longer carries service/channel intent.
-- Client auth now has an explicit final server reply through `ClientAuthResponse`.
-- Signed auth payloads use deterministic protobuf serialization.
-- `lib/bincoder/struct.go` has been removed.
-- `lib/session` now models only the authenticated session boundary and a minimal post-auth receive-loop stub.
-- `lib/session` owns an internal connection runtime that handles connection shutdown plus handshake/auth timeout budgets during construction.
-- The old PTY demo plumbing lives under `app/` and is not part of the default authenticated session flow.
-- The default CLI behavior is currently "connect, complete Noise, authenticate, log success, exit".
+- Post-auth traffic uses `mygosh.session.v1.Envelope`.
+- `lib/session` owns construction-time shutdown and handshake/auth timeout enforcement.
+- `lib/session` still stops at authenticated session construction plus a minimal post-auth receive-loop stub.
+- The default CLI currently completes Noise, authenticates, logs success, and exits.
 
-This means the next step is no longer "separate auth from session". That split has already happened. The next step is to build the first real post-auth session protocol on top of the new boundary.
+The app layer also now uses minimal file-backed trust stubs:
 
-## Goal
+- the client loads its identity from `~/.mygosh/id_ed25519`
+- the server loads its host key from `~/.mygosh/host_ed25519`
+- the client verifies the server against `~/.mygosh/known_hosts`
+- the server authorizes client keys from `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys`
 
-Implement the first post-auth session protocol path behind the minimal authenticated session abstraction.
+Those trust hooks are intentionally small. They are good seams, but they are not yet a complete authentication, authorization, or permissions model.
 
-A session should already exist after Noise + auth. After that point:
+## Planning Goal
 
-- one internal session event loop owns all post-auth `transport.ReceiveProto` calls
-- local actions are initiated through explicit session methods
-- remote protocol events are dispatched through narrow callbacks or typed handlers
-- the first useful post-auth capability is opening a `session` channel for shell/exec behavior
+The next goal is not only to add real post-auth channels, but to shape the project so that:
 
-The repository may continue to keep interactive PTY behavior provisional while this is introduced, but the protocol ownership model should be the real one.
+- a session is a real long-lived abstraction rather than a one-shot auth result
+- authentication stays separate from authorization and local permissions
+- file-backed trust lookups remain outside the auth state machine
+- the resulting boundaries still make sense if the repository later moves toward the process-separation direction described in `PROCESS_SEPARATION.md`
 
-## Wire And Ownership Constraints
+In practice, the next milestone should make both of these stories clearer:
+
+1. what a post-auth session owns and how channels live inside it
+2. how a verified remote identity turns into local policy and permissions
+
+## Why These Two Problems Belong Together
+
+Session abstraction and auth/permission abstraction should be planned together because they meet at the same point: the moment after authentication succeeds.
+
+At that boundary, the system needs to answer two different questions:
+
+- what protocol object now owns the connection and its post-auth messages
+- what local authority, if any, does this authenticated identity actually have
+
+If the session model is too thin, channel-open behavior will end up mixed with user/account policy.
+If the auth model is too thin, session/channel code will end up deciding things that belong to trust policy, account mapping, or execution permissions.
+
+The clean version is:
+
+- `auth` proves identity
+- trust and policy decide whether that identity is acceptable
+- session owns the post-auth connection and channels
+- later execution code consumes an already-decided permission/launch plan
+
+That direction also lines up with `PROCESS_SEPARATION.md`, even if the repo does not introduce real helper processes yet.
+
+## Constraints To Preserve
 
 - Keep auth and session wire schemas separate.
-  - Auth stays in `mygosh.auth.v1.AuthFrame`.
-  - Post-auth traffic stays in `mygosh.session.v1.Envelope`.
-- Do not move service/channel intent back into auth.
+- Do not move service or channel intent back into auth messages.
 - Keep TCP ownership in `app/client` and `app/server`.
 - Keep `transport.Transport` focused on encrypted frame send/receive.
-- Keep protobuf marshaling at the helper layer rather than rebuilding a wrapper transport abstraction.
 - Keep one receive owner per connection.
-- Do not expose raw transport receive loops as the primary public session API.
-- Keep the session-owned connection runtime implementation-only; extend it only for lifecycle/liveness concerns, not protocol semantics.
+- Keep `Session.Run` as the eventual post-auth receive owner.
+- Keep `known_hosts`, `authorized_keys`, and private-key file lookup outside `lib/auth`.
+- Avoid letting `lib/session` become the place that parses trust files or decides local account policy.
 - Do not add SSH compatibility, reconnect/resume, or broad execution policy in this step.
 
-## Responsibility Split
+## Design Directions And Tradeoffs
 
-- `lib/auth` owns auth frames, transcript hashing, signed auth payload generation, and auth state transitions.
-- `lib/session` owns the authenticated session lifecycle, the single post-auth event loop, future channel routing, public local-action APIs, and the internal connection runtime used for construction-time cancellation/timeouts.
-- `app/client` and `app/server` own deployment-specific choices such as keys, peer identity expectations, and authorization policy.
-- PTY launch policy and shell execution policy should stay out of `lib/auth` and `lib/transport`.
+### 1. Session shape
 
-Values that depend on deployment, peer, user, or local policy must still be supplied through callbacks, function parameters, interfaces, or config objects.
+Approach: keep one session object with an internal dispatcher and let channels be session-owned sub-objects.
 
-## Next Implementation Direction
+Pros:
 
-Build the smallest real post-auth session layer that preserves the current boundary:
+- preserves one receive owner per connection
+- makes channel routing an internal session concern
+- fits the process-separation direction well because the connection/session boundary stays explicit
 
-1. Keep `Session.Run` as the only post-auth receive owner and make it dispatch session envelopes instead of returning an immediate stub error.
-2. Add explicit local-action APIs on `Session` for the first post-auth intent, starting with opening one `session` channel.
-3. Route remote post-auth events through narrow typed callbacks or handler interfaces rather than exposing raw Go channels.
-4. Model PTY/shell/exec behavior as requests and state on that future `session` channel, not as top-level session behavior.
-5. Reuse or adapt the provisional demo PTY code in `app/` only after the session channel boundary exists.
+Cons:
 
-## Explicit Non-Goals For This Step
+- asks for more up-front abstraction before the first useful channel feature ships
 
-- Do not rework auth back into `lib/session`.
-- Do not add multi-key retry or multi-method authentication yet.
-- Do not let multiple goroutines call `ReceiveFrame` / `ReceiveProto` on the same connection.
-- Do not reintroduce hardcoded auth/session placeholders inside `lib/auth` or `lib/session`.
-- Do not treat `session_id` as a routing key.
+Approach: expose channels very early and let them look almost transport-backed.
+
+Pros:
+
+- can feel direct when building the first shell or exec path
+- may get the first feature moving quickly
+
+Cons:
+
+- makes it easier to accidentally leak transport details into channel code
+- makes it easier to violate single-owner receive discipline later
+
+The better bias is to keep the session object real first, even if the first channel set is tiny.
+
+### 2. Auth and authorization boundary
+
+Approach: keep using minimal callbacks that only return success or failure.
+
+Pros:
+
+- small change surface
+- easy to wire into the current app flow
+
+Cons:
+
+- weak for logging, audit, and policy evolution
+- hard to carry richer decisions such as matched key source, resolved account, or permission set
+- less friendly to future helper-process boundaries
+
+Approach: move toward richer plain-data interfaces and result types.
+
+Pros:
+
+- clearer separation between proving identity and deciding permissions
+- better support for account mapping, policy, and audit
+- much closer to RPC/process-separation-ready boundaries
+
+Cons:
+
+- introduces more types earlier
+- can feel heavier if the project still only supports one narrow execution path
+
+The better bias is to keep the wire/auth machine simple, while allowing trust and policy decisions to become richer around it.
+
+### 3. File-backed trust placement
+
+Approach: keep file-backed lookup logic mostly in `app/client` and `app/server`.
+
+Pros:
+
+- keeps library packages small
+- makes deployment choices obviously app-owned
+
+Cons:
+
+- duplicates policy and lookup logic
+- makes testing and reuse weaker
+- risks smearing trust semantics across app entrypoints
+
+Approach: keep reusable file-backed trust helpers in `lib/trust`, but compose them from the app layer.
+
+Pros:
+
+- preserves the app-owned deployment choice while keeping parsing and lookup reusable
+- keeps `auth` and `session` free of file-path knowledge
+- matches the current `HostKeyVerifier` and `AuthorizeClient` seams well
+
+Cons:
+
+- requires discipline so `lib/trust` does not grow into an all-purpose policy layer
+
+The current repo is already leaning in this direction, and it is the better one to continue.
+
+### 4. Permissions modeling
+
+Approach: treat successful client auth as enough to start work immediately.
+
+Pros:
+
+- simple for a demo
+
+Cons:
+
+- collapses authentication, authorization, and local execution policy into one step
+- makes future PTY/exec permissions harder to reason about
+
+Approach: treat authenticated identity as input to a separate permission decision.
+
+Pros:
+
+- leaves room for account resolution, allowed channel types, PTY policy, forced commands, and future environment/workdir rules
+- lines up cleanly with later process separation
+
+Cons:
+
+- requires the repo to define a few more concepts before they are all fully enforced
+
+This is the direction the next step should favor, even if the first permission model is still deliberately small.
+
+## Near-Term Outcome To Aim For
+
+The next milestone should leave the repository in a state where:
+
+- an authenticated session is a real post-auth abstraction with clear ownership
+- the first channel-open path exists behind that session boundary
+- auth continues to prove identity only
+- known-hosts verification, key authorization, and account/permission decisions remain outside the auth state machine
+- the project can later swap in richer trust sources or helper processes without rewriting the session protocol boundary
+
+That does not require finalizing every interface up front, but it does require choosing boundaries that do not push trust policy back into `auth` or channel behavior directly into app glue.
+
+## Explicit Non-Goals For The Next Step
+
+- Do not collapse auth back into `lib/session`.
+- Do not let multiple goroutines call `ReceiveFrame` or `ReceiveProto` on the same connection.
+- Do not add TOFU or automatic host-key update semantics yet.
+- Do not broaden file-backed trust stubs into a full policy engine in one jump.
+- Do not add multi-method auth, reconnect/resume, or SSH compatibility.
+- Do not tie future channel routing to `session_id`.
 
 ## Testing Direction
 
-- Keep `go test ./...` as the required full test pass.
-- Prefer focused protocol tests in `lib/session`, `lib/auth`, and `lib/transport`.
-- Use `net.Pipe` with deadlines for bidirectional session tests.
-- Preserve explicit tests that auth succeeds/fails correctly and that terminal data bytes remain unchanged when session data flow is reintroduced.
+- Keep `go test ./...` as the required full pass.
+- Prefer focused tests in `lib/session`, `lib/auth`, `lib/trust`, and `lib/transport`.
+- Add more end-to-end coverage around:
+  - host-key verification success and failure
+  - client-key authorization success and failure
+  - session/channel receive ownership
+  - post-auth channel-open behavior
+- Prefer tests that exercise policy and ownership boundaries, not only parser correctness.

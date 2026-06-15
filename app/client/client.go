@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/log"
 
-	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/trust"
@@ -49,11 +48,6 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 
-	serverHostKey, err := trust.LookupHostKey(trust.DefaultHostKeyPath)
-	if err != nil {
-		return err
-	}
-
 	clientIdentity, err := trust.LookupClientIdentity(trust.DefaultClientIdentityPath)
 	if err != nil {
 		return err
@@ -63,7 +57,7 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 		ReferenceIdentity:   referenceIdentity(args.Address),
 		Username:            localUsername(),
 		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: auth.ExactHostKeyVerifier(referenceIdentity(args.Address), serverHostKey.PublicKey()),
+		VerifyServerHostKey: trust.KnownHostsHostKeyVerifier(trust.DefaultKnownHostsPath),
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")

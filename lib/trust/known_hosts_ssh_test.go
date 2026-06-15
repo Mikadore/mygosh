@@ -43,8 +43,7 @@ func TestReadKnownHosts(t *testing.T) {
 	serverKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 
-	path := filepath.Join(t.TempDir(), "known_hosts")
-	require.NoError(t, os.WriteFile(path, []byte(knownHostsLine(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")), 0o600))
+	path := writeKnownHostsFile(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")
 
 	got, err := ReadKnownHosts(path)
 	require.NoError(t, err)
@@ -100,4 +99,12 @@ func knownHostsLine(t *testing.T, hosts []string, publicKey keys.PublicKey, comm
 		line += " " + comment
 	}
 	return line
+}
+
+func writeKnownHostsFile(t *testing.T, hosts []string, publicKey keys.PublicKey, comment string) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "known_hosts")
+	require.NoError(t, os.WriteFile(path, []byte(knownHostsLine(t, hosts, publicKey, comment)+"\n"), 0o600))
+	return path
 }

@@ -28,8 +28,9 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 	errs := make(chan error, 2)
 	go func() {
 		session, err := Accept(context.Background(), serverConn, ServerConfig{
-			HostKey: serverHostKey,
-			AuthorizeClient: func(identity auth.ClientIdentity) error {
+			HostSigner: auth.NewKeypairSigner(serverHostKey),
+			AuthorizeClient: auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
+				identity := req.Identity
 				if identity.Username != "alice" {
 					return eris.Errorf("unexpected username %q", identity.Username)
 				}
@@ -38,7 +39,7 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 					return eris.New("unexpected client public key")
 				}
 				return nil
-			},
+			}),
 		})
 		if err == nil {
 			serverSessionCh <- session
@@ -49,15 +50,13 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 	clientSession, err := Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		ClientIdentity:      clientIdentity,
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
 		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 	})
 	require.NoError(t, err)
 	require.NoError(t, <-errs)
 
 	serverSession := <-serverSessionCh
-	require.Equal(t, RoleClient, clientSession.Role())
-	require.Equal(t, RoleServer, serverSession.Role())
 	require.Equal(t, "server.example.test", clientSession.Metadata().ReferenceIdentity)
 	require.Equal(t, serverHostKey.PublicKey(), clientSession.Metadata().ServerHostKey)
 	require.Equal(t, "server.example.test", serverSession.Metadata().ReferenceIdentity)
@@ -80,10 +79,10 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() {
 		_, err := Accept(context.Background(), serverConn, ServerConfig{
-			HostKey: serverHostKey,
-			AuthorizeClient: func(identity auth.ClientIdentity) error {
+			HostSigner: auth.NewKeypairSigner(serverHostKey),
+			AuthorizeClient: auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
 				return nil
-			},
+			}),
 		})
 		errs <- err
 	}()
@@ -91,7 +90,7 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	_, err = Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		ClientIdentity:      clientIdentity,
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
 		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", untrustedHostKey.PublicKey()),
 	})
 	require.ErrorContains(t, err, "verify server host key")
@@ -112,10 +111,10 @@ func TestConnectReportsClientAuthRejection(t *testing.T) {
 	errs := make(chan error, 1)
 	go func() {
 		_, err := Accept(context.Background(), serverConn, ServerConfig{
-			HostKey: serverHostKey,
-			AuthorizeClient: func(identity auth.ClientIdentity) error {
+			HostSigner: auth.NewKeypairSigner(serverHostKey),
+			AuthorizeClient: auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
 				return eris.New("client not authorized")
-			},
+			}),
 		})
 		errs <- err
 	}()
@@ -123,7 +122,7 @@ func TestConnectReportsClientAuthRejection(t *testing.T) {
 	_, err = Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		ClientIdentity:      clientIdentity,
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
 		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 	})
 	require.ErrorContains(t, err, "server rejected client auth")
@@ -144,10 +143,10 @@ func TestConnectRespectsContextCancellation(t *testing.T) {
 		_, err := Connect(ctx, clientConn, ClientConfig{
 			ReferenceIdentity: "server.example.test",
 			Username:          "alice",
-			ClientIdentity:    clientIdentity,
-			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error {
+			ClientSigner:      auth.NewKeypairSigner(clientIdentity),
+			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error {
 				return nil
-			},
+			}),
 		})
 		errCh <- err
 	}()
@@ -179,8 +178,8 @@ func TestConnectHandshakeTimeout(t *testing.T) {
 		_, err := Connect(context.Background(), clientConn, ClientConfig{
 			ReferenceIdentity:   "server.example.test",
 			Username:            "alice",
-			ClientIdentity:      clientIdentity,
-			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+			ClientSigner:        auth.NewKeypairSigner(clientIdentity),
+			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error { return nil }),
 			HandshakeTimeout:    25 * time.Millisecond,
 		})
 		errCh <- err
@@ -209,8 +208,8 @@ func TestConnectAuthTimeout(t *testing.T) {
 	_, err = Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
+		VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error { return nil }),
 		AuthTimeout:         25 * time.Millisecond,
 	})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -230,8 +229,8 @@ func TestConnectContextCancellationBeatsPhaseTimeout(t *testing.T) {
 		_, err := Connect(ctx, clientConn, ClientConfig{
 			ReferenceIdentity:   "server.example.test",
 			Username:            "alice",
-			ClientIdentity:      clientIdentity,
-			VerifyServerHostKey: func(referenceIdentity string, hostKey keys.PublicKey) error { return nil },
+			ClientSigner:        auth.NewKeypairSigner(clientIdentity),
+			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error { return nil }),
 			HandshakeTimeout:    200 * time.Millisecond,
 		})
 		errCh <- err
@@ -558,8 +557,9 @@ func authenticatedSessionPair(t *testing.T, cfg Config) (*Session, *Session) {
 	serverErrCh := make(chan error, 1)
 	go func() {
 		session, err := Accept(context.Background(), serverConn, ServerConfig{
-			HostKey: serverHostKey,
-			AuthorizeClient: func(identity auth.ClientIdentity) error {
+			HostSigner: auth.NewKeypairSigner(serverHostKey),
+			AuthorizeClient: auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
+				identity := req.Identity
 				expectedPublicKey := clientIdentity.PublicKey()
 				if identity.Username != "alice" {
 					return eris.Errorf("unexpected username %q", identity.Username)
@@ -568,7 +568,7 @@ func authenticatedSessionPair(t *testing.T, cfg Config) (*Session, *Session) {
 					return eris.New("unexpected client public key")
 				}
 				return nil
-			},
+			}),
 			Config: cfg,
 		})
 		if err == nil {
@@ -580,7 +580,7 @@ func authenticatedSessionPair(t *testing.T, cfg Config) (*Session, *Session) {
 	clientSession, err := Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:   "server.example.test",
 		Username:            "alice",
-		ClientIdentity:      clientIdentity,
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
 		VerifyServerHostKey: auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 		Config:              cfg,
 	})
@@ -605,11 +605,9 @@ func startSessionRun(t *testing.T, sess *Session, handler Handler) runningSessio
 		errCh <- sess.Run(ctx, handler)
 	}()
 
-	select {
-	case <-sess.runReady:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for session run loop readiness")
-	}
+	require.Eventually(t, func() bool {
+		return sess.ensureRunning() == nil
+	}, time.Second, 10*time.Millisecond)
 
 	return runningSession{
 		sess:   sess,

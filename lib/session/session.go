@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"sync"
-	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
@@ -18,37 +16,15 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-type Role string
-
-const (
-	RoleClient Role = "client"
-	RoleServer Role = "server"
-)
-
-type ClientConfig struct {
-	ReferenceIdentity   string
-	Username            string
-	ClientIdentity      keys.Keypair
-	VerifyServerHostKey auth.HostKeyVerifier
-	HandshakeTimeout    time.Duration
-	AuthTimeout         time.Duration
-	Config              Config
-	Logger              *charmlog.Logger
-}
-
-type ServerConfig struct {
-	HostKey          keys.Keypair
-	AuthorizeClient  auth.AuthorizeClientFunc
-	HandshakeTimeout time.Duration
-	AuthTimeout      time.Duration
-	Config           Config
-	Logger           *charmlog.Logger
-}
-
 type Metadata struct {
 	ReferenceIdentity string
 	ServerHostKey     keys.PublicKey
 	ClientIdentity    auth.ClientIdentity
+}
+
+type Options struct {
+	Runtime *Runtime
+	Logger  *charmlog.Logger
 }
 
 type globalWaitResult struct {
@@ -57,8 +33,7 @@ type globalWaitResult struct {
 }
 
 type Session struct {
-	runtime   *connRuntime
-	role      Role
+	runtime   *Runtime
 	transport *transport.Transport
 	metadata  Metadata
 	logger    *charmlog.Logger
@@ -71,156 +46,44 @@ type Session struct {
 	pendingGlobal       map[uint64]chan globalWaitResult
 	runStarted          bool
 
-	writeMu  sync.Mutex
-	closed   chan struct{}
-	runReady chan struct{}
-	once     sync.Once
+	writeMu sync.Mutex
+	closed  chan struct{}
+	once    sync.Once
 }
 
-func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, error) {
-	ctx = normalizeContext(ctx)
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func New(messageTransport *transport.Transport, metadata Metadata, cfg Config, opts Options) (*Session, error) {
+	if messageTransport == nil {
+		return nil, eris.New("session transport is required")
 	}
-	if err := validateTimeouts(cfg.HandshakeTimeout, cfg.AuthTimeout); err != nil {
-		return nil, eris.Wrap(err, "validate client session config")
-	}
-	if err := cfg.Config.Validate(); err != nil {
-		return nil, eris.Wrap(err, "validate client session mux config")
+	if err := cfg.Validate(); err != nil {
+		return nil, eris.Wrap(err, "validate session mux config")
 	}
 
-	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
-	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
-	logger := logging.Resolve(cfg.Logger)
-	ctx = logging.IntoContext(ctx, logger)
-	logger.Debug("starting session connect", "role", RoleClient, "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
-
-	runtime := newConnRuntime(ctx, conn, logger)
-
-	var messageTransport *transport.Transport
-	err := runtime.runWithTimeout("handshake", handshakeTimeout, func() error {
-		var err error
-		messageTransport, err = transport.HandshakeClientWithLogger(conn, logger)
-		return err
-	})
-	if err != nil {
-		wrapped := runtime.wrapError(err, "establish noise transport")
-		_ = runtime.Close()
-		return nil, wrapped
+	logger := logging.Resolve(opts.Logger)
+	runtime := opts.Runtime
+	if runtime == nil {
+		runtime = NewRuntime(context.Background(), messageTransport, logger)
+	} else {
+		runtime.SetTarget(messageTransport)
 	}
-	runtime.setTarget(messageTransport)
-	logger.Debug("noise transport established", "role", RoleClient, "remote", remoteAddrString(conn))
-
-	var result auth.Result
-	err = runtime.runWithTimeout("auth", authTimeout, func() error {
-		var err error
-		result, err = auth.AuthenticateClient(messageTransport, messageTransport.ChannelBinding(), auth.ClientConfig{
-			ReferenceIdentity:   cfg.ReferenceIdentity,
-			Username:            cfg.Username,
-			ClientIdentity:      cfg.ClientIdentity,
-			VerifyServerHostKey: cfg.VerifyServerHostKey,
-			Logger:              logger,
-		})
-		return err
-	})
-	if err != nil {
-		wrapped := runtime.wrapError(err, "authenticate client")
-		_ = runtime.Close()
-		return nil, wrapped
-	}
-	logger.Debug("session connect authenticated", "role", RoleClient, "reference_identity", result.ReferenceIdentity, "server_fingerprint", result.ServerHostKey.FingerprintSHA256())
-
-	return newSession(runtime, RoleClient, messageTransport, metadataFromAuthResult(result), cfg.Config, logger), nil
-}
-
-func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, error) {
-	ctx = normalizeContext(ctx)
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := validateTimeouts(cfg.HandshakeTimeout, cfg.AuthTimeout); err != nil {
-		return nil, eris.Wrap(err, "validate server session config")
-	}
-	if err := cfg.Config.Validate(); err != nil {
-		return nil, eris.Wrap(err, "validate server session mux config")
-	}
-
-	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
-	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
-	logger := logging.Resolve(cfg.Logger)
-	ctx = logging.IntoContext(ctx, logger)
-	logger.Debug("starting session accept", "role", RoleServer, "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
-
-	runtime := newConnRuntime(ctx, conn, logger)
-
-	var messageTransport *transport.Transport
-	err := runtime.runWithTimeout("handshake", handshakeTimeout, func() error {
-		var err error
-		messageTransport, err = transport.HandshakeServerWithLogger(conn, logger)
-		return err
-	})
-	if err != nil {
-		wrapped := runtime.wrapError(err, "establish noise transport")
-		_ = runtime.Close()
-		return nil, wrapped
-	}
-	runtime.setTarget(messageTransport)
-	logger.Debug("noise transport established", "role", RoleServer, "remote", remoteAddrString(conn))
-
-	var result auth.Result
-	err = runtime.runWithTimeout("auth", authTimeout, func() error {
-		var err error
-		result, err = auth.AuthenticateServer(messageTransport, messageTransport.ChannelBinding(), auth.ServerConfig{
-			HostKey:         cfg.HostKey,
-			AuthorizeClient: cfg.AuthorizeClient,
-			Logger:          logger,
-		})
-		return err
-	})
-	if err != nil {
-		wrapped := runtime.wrapError(err, "authenticate server")
-		_ = runtime.Close()
-		return nil, wrapped
-	}
-	logger.Debug("session accept authenticated", "role", RoleServer, "reference_identity", result.ReferenceIdentity, "username", result.ClientIdentity.Username, "client_fingerprint", result.ClientIdentity.PublicKey.FingerprintSHA256())
-
-	return newSession(runtime, RoleServer, messageTransport, metadataFromAuthResult(result), cfg.Config, logger), nil
-}
-
-func EstablishClient(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, error) {
-	return Connect(ctx, conn, cfg)
-}
-
-func EstablishServer(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, error) {
-	return Accept(ctx, conn, cfg)
-}
-
-func newSession(runtime *connRuntime, role Role, messageTransport *transport.Transport, metadata Metadata, cfg Config, logger *charmlog.Logger) *Session {
-	cfg = cfg.withDefaults()
 
 	s := &Session{
 		runtime:       runtime,
-		role:          role,
 		transport:     messageTransport,
-		metadata:      metadata,
-		logger:        logging.Resolve(logger),
-		config:        cfg,
+		metadata:      cloneMetadata(metadata),
+		logger:        logger,
+		config:        cfg.withDefaults(),
 		channels:      make(map[uint64]*Channel),
 		pendingGlobal: make(map[uint64]chan globalWaitResult),
 		closed:        make(chan struct{}),
-		runReady:      make(chan struct{}),
 	}
 
 	go func() {
-		<-runtime.ctx.Done()
-		s.shutdown(context.Cause(runtime.ctx))
+		<-runtime.Context().Done()
+		s.shutdown(context.Cause(runtime.Context()))
 	}()
 
-	return s
-}
-
-func (s *Session) Role() Role {
-	return s.role
+	return s, nil
 }
 
 func (s *Session) Metadata() Metadata {
@@ -240,7 +103,7 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 
 	handler = normalizeHandler(handler)
 	logger := logging.Resolve(s.logger)
-	logger.Debug("session run loop started", "role", s.role, "reference_identity", s.metadata.ReferenceIdentity)
+	logger.Debug("session run loop started", "reference_identity", s.metadata.ReferenceIdentity)
 
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -267,17 +130,15 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 		handler.OnDisconnect(disconnectCtx, finalErr)
 	}()
 
-	close(s.runReady)
-
 	for {
 		var frame sessionpb.Envelope
 		if err := transport.ReceiveProto(s.transport, &frame); err != nil {
 			if eris.Is(err, io.EOF) {
-				logger.Debug("session stream closed", "role", s.role)
+				logger.Debug("session stream closed")
 				finalErr = nil
 				return nil
 			}
-			if cause := context.Cause(s.runtime.ctx); cause != nil {
+			if cause := context.Cause(s.runtime.Context()); cause != nil {
 				finalErr = cause
 				return cause
 			}
@@ -313,9 +174,8 @@ func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (
 
 	ch := newPendingChannel(s, localID, typ)
 	s.channels[localID] = ch
-	s.mu.Unlock()
-
 	waitCh := ch.openWait
+	s.mu.Unlock()
 
 	err := s.sendEnvelope(&sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelOpen{
@@ -861,19 +721,19 @@ func (s *Session) sendEnvelope(frame *sessionpb.Envelope) error {
 	if frame == nil {
 		return eris.New("session envelope is required")
 	}
-	if cause := context.Cause(s.runtime.ctx); cause != nil {
+	if cause := context.Cause(s.runtime.Context()); cause != nil {
 		return cause
 	}
 
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	if cause := context.Cause(s.runtime.ctx); cause != nil {
+	if cause := context.Cause(s.runtime.Context()); cause != nil {
 		return cause
 	}
 
 	if err := transport.SendProto(s.transport, frame); err != nil {
-		if cause := context.Cause(s.runtime.ctx); cause != nil {
+		if cause := context.Cause(s.runtime.Context()); cause != nil {
 			return cause
 		}
 		return eris.Wrap(err, "send session envelope")
@@ -898,14 +758,14 @@ func (s *Session) closeWithCause(cause error) {
 	if s == nil || s.runtime == nil {
 		return
 	}
-	_ = s.runtime.fail(cause)
+	_ = s.runtime.Fail(cause)
 }
 
 func (s *Session) closeCause() error {
 	if s == nil || s.runtime == nil {
 		return context.Canceled
 	}
-	if cause := context.Cause(s.runtime.ctx); cause != nil {
+	if cause := context.Cause(s.runtime.Context()); cause != nil {
 		return cause
 	}
 	return context.Canceled
@@ -990,21 +850,4 @@ func normalizeRejectMessage(message string, fallback string) string {
 		return fallback
 	}
 	return message
-}
-
-func validateTimeouts(handshakeTimeout time.Duration, authTimeout time.Duration) error {
-	if handshakeTimeout < 0 {
-		return eris.New("handshake timeout must not be negative")
-	}
-	if authTimeout < 0 {
-		return eris.New("auth timeout must not be negative")
-	}
-	return nil
-}
-
-func remoteAddrString(conn net.Conn) string {
-	if conn == nil || conn.RemoteAddr() == nil {
-		return ""
-	}
-	return conn.RemoteAddr().String()
 }

@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"os"
@@ -55,9 +56,11 @@ func TestAuthorizedKeysClientAuthorizerMatchesKeyForUser(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o600))
 
 	authorizer := AuthorizedKeysClientAuthorizer([]string{path})
-	err = authorizer(auth.ClientIdentity{
-		Username:  currentUser.Username,
-		PublicKey: keypair.PublicKey(),
+	err = authorizer.AuthorizeClient(context.Background(), auth.ClientAuthorizationRequest{
+		Identity: auth.ClientIdentity{
+			Username:  currentUser.Username,
+			PublicKey: keypair.PublicKey(),
+		},
 	})
 	require.NoError(t, err)
 }
@@ -76,9 +79,11 @@ func TestAuthorizedKeysClientAuthorizerRejectsUnexpectedKey(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o600))
 
 	authorizer := AuthorizedKeysClientAuthorizer([]string{path})
-	err = authorizer(auth.ClientIdentity{
-		Username:  currentUser.Username,
-		PublicKey: presentedKey.PublicKey(),
+	err = authorizer.AuthorizeClient(context.Background(), auth.ClientAuthorizationRequest{
+		Identity: auth.ClientIdentity{
+			Username:  currentUser.Username,
+			PublicKey: presentedKey.PublicKey(),
+		},
 	})
 	require.ErrorContains(t, err, "client public key is not authorized")
 }

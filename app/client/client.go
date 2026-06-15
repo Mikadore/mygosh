@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Mikadore/mygosh/app/root"
+	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
@@ -60,7 +61,7 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	established, err := session.Connect(ctx, conn, session.ClientConfig{
 		ReferenceIdentity:   referenceIdentity(args.Address),
 		Username:            localUsername(),
-		ClientIdentity:      clientIdentity,
+		ClientSigner:        auth.NewKeypairSigner(clientIdentity),
 		VerifyServerHostKey: trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
 		Logger:              logger,
 	})

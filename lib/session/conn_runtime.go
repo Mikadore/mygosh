@@ -21,7 +21,7 @@ type deadlineCloser interface {
 	SetDeadline(time.Time) error
 }
 
-type connRuntime struct {
+type Runtime struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
@@ -33,11 +33,11 @@ type connRuntime struct {
 	closeOnce sync.Once
 }
 
-func newConnRuntime(parent context.Context, target io.Closer, logger *charmlog.Logger) *connRuntime {
+func NewRuntime(parent context.Context, target io.Closer, logger *charmlog.Logger) *Runtime {
 	parent = normalizeContext(parent)
 
 	ctx, cancel := context.WithCancelCause(parent)
-	runtime := &connRuntime{
+	runtime := &Runtime{
 		ctx:    ctx,
 		cancel: cancel,
 		target: target,
@@ -50,13 +50,17 @@ func newConnRuntime(parent context.Context, target io.Closer, logger *charmlog.L
 	return runtime
 }
 
-func (r *connRuntime) setTarget(target io.Closer) {
+func (r *Runtime) Context() context.Context {
+	return r.ctx
+}
+
+func (r *Runtime) SetTarget(target io.Closer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.target = target
 }
 
-func (r *connRuntime) runWithTimeout(phase string, timeout time.Duration, fn func() error) error {
+func (r *Runtime) RunWithTimeout(phase string, timeout time.Duration, fn func() error) error {
 	if err := context.Cause(r.ctx); err != nil {
 		return err
 	}
@@ -73,7 +77,7 @@ func (r *connRuntime) runWithTimeout(phase string, timeout time.Duration, fn fun
 	return err
 }
 
-func (r *connRuntime) startTimer(phase string, timeout time.Duration) error {
+func (r *Runtime) startTimer(phase string, timeout time.Duration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -96,7 +100,7 @@ func (r *connRuntime) startTimer(phase string, timeout time.Duration) error {
 	return nil
 }
 
-func (r *connRuntime) stopTimer() {
+func (r *Runtime) stopTimer() {
 	r.mu.Lock()
 	timer := r.timer
 	r.timer = nil
@@ -107,13 +111,13 @@ func (r *connRuntime) stopTimer() {
 	}
 }
 
-func (r *connRuntime) currentTarget() io.Closer {
+func (r *Runtime) currentTarget() io.Closer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.target
 }
 
-func (r *connRuntime) closeTarget() error {
+func (r *Runtime) closeTarget() error {
 	r.stopTimer()
 
 	var err error
@@ -130,12 +134,12 @@ func (r *connRuntime) closeTarget() error {
 	return err
 }
 
-func (r *connRuntime) Close() error {
+func (r *Runtime) Close() error {
 	r.cancel(context.Canceled)
 	return r.closeTarget()
 }
 
-func (r *connRuntime) fail(cause error) error {
+func (r *Runtime) Fail(cause error) error {
 	if cause == nil {
 		cause = context.Canceled
 	}
@@ -143,7 +147,7 @@ func (r *connRuntime) fail(cause error) error {
 	return r.closeTarget()
 }
 
-func (r *connRuntime) wrapError(err error, message string) error {
+func (r *Runtime) WrapError(err error, message string) error {
 	if cause := context.Cause(r.ctx); cause != nil {
 		return eris.Wrap(cause, message)
 	}

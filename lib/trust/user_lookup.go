@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/user"
@@ -34,15 +35,17 @@ func GatherAuthorizedKeys(files []string) ([]keys.PublicKey, error) {
 	return out, errs
 }
 
-func AuthorizedKeysClientAuthorizer(paths []string) auth.AuthorizeClientFunc {
+func AuthorizedKeysClientAuthorizer(paths []string) auth.ClientAuthorizer {
 	return AuthorizedKeysClientAuthorizerWithLogger(paths, nil)
 }
 
-func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.AuthorizeClientFunc {
+func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.ClientAuthorizer {
 	configuredPaths := append([]string(nil), paths...)
 	logger = logging.Resolve(logger)
 
-	return func(identity auth.ClientIdentity) error {
+	return auth.ClientAuthorizerFunc(func(_ context.Context, req auth.ClientAuthorizationRequest) error {
+		identity := req.Identity
+
 		account, err := user.Lookup(identity.Username)
 		if err != nil {
 			return eris.Wrapf(err, "lookup local user %q", identity.Username)
@@ -68,7 +71,7 @@ func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.L
 			return eris.Errorf("no authorized keys found for user %q", identity.Username)
 		}
 		return eris.Errorf("client public key is not authorized for user %q", identity.Username)
-	}
+	})
 }
 
 func resolveAuthorizedKeysPaths(homeDir string, paths []string) []string {

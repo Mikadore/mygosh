@@ -25,25 +25,15 @@ RUN go build -o /out/mygosh ./bin
 
 FROM debian:bookworm-slim AS runtime
 
-ENV MYGOSH_HOME=/var/lib/mygosh
-ENV MYGOSH_CONFIG_FILE=mygosh.toml
-ENV MYGOSH_LISTEN_HOST=0.0.0.0
-
-WORKDIR ${MYGOSH_HOME}
+WORKDIR /workspace
 
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends bash ca-certificates \
-	&& rm -rf /var/lib/apt/lists/* \
-	&& mkdir -p /usr/share/mygosh /docker-entrypoint.d
+	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/mygosh /usr/local/bin/mygosh
-COPY mygosh.toml /usr/share/mygosh/mygosh.toml
-COPY docker/server/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY docker/server/entrypoint.d/ /docker-entrypoint.d/
-
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /docker-entrypoint.d/*.sh
+COPY mygosh.toml ./mygosh.toml
 
 EXPOSE 42022
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["mygosh", "server"]

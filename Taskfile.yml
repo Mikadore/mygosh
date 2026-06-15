@@ -42,4 +42,4 @@ tasks:
   docker:server:
     desc: Build and run the mygosh server in Docker Compose
     cmds:
-      - docker compose up --build --remove-orphans {{.DOCKER_SERVICE}}
+      - docker compose up --watch --build --remove-orphans {{.DOCKER_SERVICE}}

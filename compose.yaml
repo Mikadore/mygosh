@@ -7,8 +7,21 @@ services:
     init: true
     ports:
       - "42022:42022"
-    environment:
-      MYGOSH_LISTEN_HOST: 0.0.0.0
     volumes:
-      - ./mygosh.toml:/usr/share/mygosh/mygosh.toml:ro
-      - ./docker/server/entrypoint.d:/docker-entrypoint.d:ro
+      - type: bind
+        source: ${HOME}/.mygosh
+        target: /root/.mygosh
+    develop:
+      watch:
+        - action: rebuild
+          path: .
+          ignore:
+            - .git/
+            - build/
+            - dist/
+            - mygosh.toml
+
+        - action: sync+restart
+          path: ./mygosh.toml
+          target: /workspace/mygosh.toml
+          initial_sync: true

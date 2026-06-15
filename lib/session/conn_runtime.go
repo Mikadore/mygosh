@@ -135,6 +135,14 @@ func (r *connRuntime) Close() error {
 	return r.closeTarget()
 }
 
+func (r *connRuntime) fail(cause error) error {
+	if cause == nil {
+		cause = context.Canceled
+	}
+	r.cancel(cause)
+	return r.closeTarget()
+}
+
 func (r *connRuntime) wrapError(err error, message string) error {
 	if cause := context.Cause(r.ctx); cause != nil {
 		return eris.Wrap(cause, message)

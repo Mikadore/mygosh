@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package mygosh.service.v1;
+
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/Mikadore/mygosh/lib/service/servicepb;servicepb";
+
+message PtyRequest {
+  string term = 1;
+  uint32 rows = 2 [(buf.validate.field).uint32.lte = 65535];
+  uint32 cols = 3 [(buf.validate.field).uint32.lte = 65535];
+}
+
+message ShellRequest {}
+
+message ExecRequest {
+  string command = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message WindowChange {
+  uint32 rows = 1 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+  uint32 cols = 2 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+}
+
+message ExitStatus {
+  int32 code = 1;
+}

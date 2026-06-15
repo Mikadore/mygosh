@@ -18,62 +18,189 @@ func TestSendReceiveProtoRoundTripsSessionEnvelopes(t *testing.T) {
 		message *sessionpb.Envelope
 	}{
 		{
-			name: "open",
+			name: "channel open",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_Open{
-					Open: &sessionpb.OpenRequest{
-						Term: "xterm-256color",
-						Rows: 24,
-						Cols: 80,
+				Kind: &sessionpb.Envelope_ChannelOpen{
+					ChannelOpen: &sessionpb.ChannelOpen{
+						ChannelType:     "session",
+						SenderChannelId: 7,
+						InitialWindow:   65536,
+						MaxPacketSize:   16384,
+						Payload:         []byte("open-payload"),
 					},
 				},
 			},
 		},
 		{
-			name: "open ok",
+			name: "channel open success",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_OpenOk{
-					OpenOk: &sessionpb.OpenResponse{SessionId: "session-1"},
+				Kind: &sessionpb.Envelope_ChannelOpenResult{
+					ChannelOpenResult: &sessionpb.ChannelOpenResult{
+						RecipientChannelId: 7,
+						Result: &sessionpb.ChannelOpenResult_Success{
+							Success: &sessionpb.ChannelOpenAccept{
+								SenderChannelId: 9,
+								InitialWindow:   65536,
+								MaxPacketSize:   16384,
+								Payload:         []byte("accepted"),
+							},
+						},
+					},
 				},
 			},
 		},
 		{
-			name: "data",
+			name: "channel open reject",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_Data{
-					Data: &sessionpb.Data{Data: []byte{0x00, 0x01, 'h', 'i', 0xff}},
+				Kind: &sessionpb.Envelope_ChannelOpenResult{
+					ChannelOpenResult: &sessionpb.ChannelOpenResult{
+						RecipientChannelId: 7,
+						Result: &sessionpb.ChannelOpenResult_Reject{
+							Reject: &sessionpb.ChannelOpenReject{
+								Code:    "unsupported",
+								Message: "unsupported channel type",
+								Payload: []byte("rejected"),
+							},
+						},
+					},
 				},
 			},
 		},
 		{
-			name: "err",
+			name: "channel data",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_Err{
-					Err: &sessionpb.Error{Code: "failed", Message: "failed"},
+				Kind: &sessionpb.Envelope_ChannelData{
+					ChannelData: &sessionpb.ChannelData{
+						RecipientChannelId: 9,
+						Data:               []byte{0x00, 0x01, 'h', 'i', 0xff},
+					},
 				},
 			},
 		},
 		{
-			name: "resize",
+			name: "channel window adjust",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_Resize{
-					Resize: &sessionpb.Resize{Rows: 40, Cols: 120},
+				Kind: &sessionpb.Envelope_ChannelWindowAdjust{
+					ChannelWindowAdjust: &sessionpb.ChannelWindowAdjust{
+						RecipientChannelId: 9,
+						BytesToAdd:         1024,
+					},
 				},
 			},
 		},
 		{
-			name: "close",
+			name: "channel eof",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_Close{
-					Close: &sessionpb.Close{Reason: "stdin closed"},
+				Kind: &sessionpb.Envelope_ChannelEof{
+					ChannelEof: &sessionpb.ChannelEof{RecipientChannelId: 9},
 				},
 			},
 		},
 		{
-			name: "exit status",
+			name: "channel close",
 			message: &sessionpb.Envelope{
-				Kind: &sessionpb.Envelope_ExitStatus{
-					ExitStatus: &sessionpb.ExitStatus{Code: 12},
+				Kind: &sessionpb.Envelope_ChannelClose{
+					ChannelClose: &sessionpb.ChannelClose{RecipientChannelId: 9},
+				},
+			},
+		},
+		{
+			name: "channel request",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ChannelRequest{
+					ChannelRequest: &sessionpb.ChannelRequest{
+						RecipientChannelId: 9,
+						RequestId:          12,
+						RequestType:        "exec",
+						WantReply:          true,
+						Payload:            []byte("request-payload"),
+					},
+				},
+			},
+		},
+		{
+			name: "channel result success",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ChannelResult{
+					ChannelResult: &sessionpb.ChannelResult{
+						RecipientChannelId: 9,
+						RequestId:          12,
+						Result: &sessionpb.ChannelResult_Success{
+							Success: &sessionpb.OperationSuccess{Payload: []byte("ok")},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "channel result reject",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_ChannelResult{
+					ChannelResult: &sessionpb.ChannelResult{
+						RecipientChannelId: 9,
+						RequestId:          12,
+						Result: &sessionpb.ChannelResult_Reject{
+							Reject: &sessionpb.OperationReject{
+								Code:    "failed",
+								Message: "failed",
+								Payload: []byte("reject"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "global request",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_GlobalRequest{
+					GlobalRequest: &sessionpb.GlobalRequest{
+						RequestId:   21,
+						RequestType: "keepalive",
+						WantReply:   true,
+						Payload:     []byte("ping"),
+					},
+				},
+			},
+		},
+		{
+			name: "global result success",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_GlobalResult{
+					GlobalResult: &sessionpb.GlobalResult{
+						RequestId: 21,
+						Result: &sessionpb.GlobalResult_Success{
+							Success: &sessionpb.OperationSuccess{Payload: []byte("pong")},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "global result reject",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_GlobalResult{
+					GlobalResult: &sessionpb.GlobalResult{
+						RequestId: 21,
+						Result: &sessionpb.GlobalResult_Reject{
+							Reject: &sessionpb.OperationReject{
+								Code:    "denied",
+								Message: "denied",
+								Payload: []byte("nope"),
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "disconnect",
+			message: &sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Disconnect{
+					Disconnect: &sessionpb.Disconnect{
+						Code:    "protocol-error",
+						Message: "unexpected frame",
+					},
 				},
 			},
 		},
@@ -188,14 +315,17 @@ func TestDataPayloadIsUnchanged(t *testing.T) {
 	sender, receiver := makeTransportPair(t)
 	payload := []byte{0x00, 0x01, 'h', 'i', 0xff}
 	expected := &sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Data{
-			Data: &sessionpb.Data{Data: payload},
+		Kind: &sessionpb.Envelope_ChannelData{
+			ChannelData: &sessionpb.ChannelData{
+				RecipientChannelId: 11,
+				Data:               payload,
+			},
 		},
 	}
 
 	var got sessionpb.Envelope
 	requireProtoRoundTrip(t, sender, receiver, expected, &got)
-	require.Equal(t, payload, got.GetData().GetData())
+	require.Equal(t, payload, got.GetChannelData().GetData())
 }
 
 func TestReceiveProtoRejectsEmptyFrame(t *testing.T) {
@@ -217,14 +347,14 @@ func TestReceiveProtoRejectsEnvelopeWithoutKind(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestReceiveProtoRejectsInvalidResize(t *testing.T) {
+func TestReceiveProtoRejectsInvalidWindowAdjust(t *testing.T) {
 	sender, receiver := makeTransportPair(t)
 
 	packet, err := proto.Marshal(&sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Resize{
-			Resize: &sessionpb.Resize{
-				Rows: 0,
-				Cols: 80,
+		Kind: &sessionpb.Envelope_ChannelWindowAdjust{
+			ChannelWindowAdjust: &sessionpb.ChannelWindowAdjust{
+				RecipientChannelId: 9,
+				BytesToAdd:         0,
 			},
 		},
 	})

@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package mygosh.session.v1;
+
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/Mikadore/mygosh/lib/session/sessionpb;sessionpb";
+
+message Envelope {
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+
+    ChannelOpen channel_open = 1;
+    ChannelOpenResult channel_open_result = 2;
+    ChannelData channel_data = 3;
+    ChannelWindowAdjust channel_window_adjust = 4;
+    ChannelEof channel_eof = 5;
+    ChannelClose channel_close = 6;
+    ChannelRequest channel_request = 7;
+    ChannelResult channel_result = 8;
+    GlobalRequest global_request = 9;
+    GlobalResult global_result = 10;
+    Disconnect disconnect = 11;
+  }
+}
+
+message ChannelOpen {
+  string channel_type = 1 [(buf.validate.field).string.min_len = 1];
+  uint64 sender_channel_id = 2;
+  uint32 initial_window = 3 [(buf.validate.field).uint32.gt = 0];
+  uint32 max_packet_size = 4 [(buf.validate.field).uint32.gt = 0];
+  bytes payload = 5;
+}
+
+message ChannelOpenResult {
+  uint64 recipient_channel_id = 1;
+
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    ChannelOpenAccept success = 2;
+    ChannelOpenReject reject = 3;
+  }
+}
+
+message ChannelOpenAccept {
+  uint64 sender_channel_id = 1;
+  uint32 initial_window = 2 [(buf.validate.field).uint32.gt = 0];
+  uint32 max_packet_size = 3 [(buf.validate.field).uint32.gt = 0];
+  bytes payload = 4;
+}
+
+message ChannelOpenReject {
+  string code = 1;
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  bytes payload = 3;
+}
+
+message ChannelData {
+  uint64 recipient_channel_id = 1;
+  bytes data = 2;
+}
+
+message ChannelWindowAdjust {
+  uint64 recipient_channel_id = 1;
+  uint32 bytes_to_add = 2 [(buf.validate.field).uint32.gt = 0];
+}
+
+message ChannelEof {
+  uint64 recipient_channel_id = 1;
+}
+
+message ChannelClose {
+  uint64 recipient_channel_id = 1;
+}
+
+message ChannelRequest {
+  uint64 recipient_channel_id = 1;
+  uint64 request_id = 2;
+  string request_type = 3 [(buf.validate.field).string.min_len = 1];
+  bool want_reply = 4;
+  bytes payload = 5;
+}
+
+message ChannelResult {
+  uint64 recipient_channel_id = 1;
+  uint64 request_id = 2;
+
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    OperationSuccess success = 3;
+    OperationReject reject = 4;
+  }
+}
+
+message GlobalRequest {
+  uint64 request_id = 1;
+  string request_type = 2 [(buf.validate.field).string.min_len = 1];
+  bool want_reply = 3;
+  bytes payload = 4;
+}
+
+message GlobalResult {
+  uint64 request_id = 1;
+
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    OperationSuccess success = 2;
+    OperationReject reject = 3;
+  }
+}
+
+message OperationSuccess {
+  bytes payload = 1;
+}
+
+message OperationReject {
+  string code = 1;
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  bytes payload = 3;
+}
+
+message Disconnect {
+  string code = 1;
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+}

@@ -4,10 +4,8 @@ import (
 	"context"
 	"net"
 
-	"github.com/charmbracelet/log"
-
+	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/session"
-	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
@@ -17,7 +15,12 @@ var defaultAuthorizedKeysPaths = []string{
 	"~/.ssh/authorized_keys",
 }
 
-func RunServer(ctx context.Context, cfg settings.Settings) error {
+func RunServer(ctx context.Context, appRoot *root.Root) error {
+	if appRoot == nil {
+		return eris.New("project root is required")
+	}
+	logger := appRoot.Logger.With("command", "server")
+	cfg := appRoot.Settings
 	addr := cfg.ListenAddress()
 
 	listener, err := net.Listen("tcp", addr)
@@ -29,7 +32,7 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	// logging and application error handling
 	//nolint:errcheck
 	defer listener.Close()
-	log.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
+	logger.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
 
 	conn, err := listener.Accept()
 	if err != nil {
@@ -40,16 +43,17 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	// logging and application error handling
 	//nolint:errcheck
 	defer conn.Close()
-	log.Info("accepted connection", "remote", conn.RemoteAddr())
+	logger.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	serverHostKey, err := trust.LookupHostKey(trust.DefaultHostKeyPath)
+	serverHostKey, err := trust.LookupHostKeyWithLogger(trust.DefaultHostKeyPath, logger)
 	if err != nil {
 		return err
 	}
 
 	established, err := session.Accept(ctx, conn, session.ServerConfig{
 		HostKey:         serverHostKey,
-		AuthorizeClient: trust.AuthorizedKeysClientAuthorizer(defaultAuthorizedKeysPaths),
+		AuthorizeClient: trust.AuthorizedKeysClientAuthorizerWithLogger(defaultAuthorizedKeysPaths, logger),
+		Logger:          logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
@@ -57,7 +61,7 @@ func RunServer(ctx context.Context, cfg settings.Settings) error {
 	defer established.Close()
 
 	meta := established.Metadata()
-	log.Info("authenticated client", "username", meta.ClientIdentity.Username, "fingerprint", meta.ClientIdentity.PublicKey.FingerprintSHA256())
-	log.Info("authenticated session established", "session_protocol", "disabled")
+	logger.Info("authenticated client", "username", meta.ClientIdentity.Username, "fingerprint", meta.ClientIdentity.PublicKey.FingerprintSHA256())
+	logger.Info("authenticated session established", "session_protocol", "disabled")
 	return nil
 }

@@ -9,7 +9,8 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/charmbracelet/log"
+	"github.com/Mikadore/mygosh/lib/logging"
+	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 	"github.com/samber/lo"
 )
@@ -34,7 +35,12 @@ func GatherAuthorizedKeys(files []string) ([]keys.PublicKey, error) {
 }
 
 func AuthorizedKeysClientAuthorizer(paths []string) auth.AuthorizeClientFunc {
+	return AuthorizedKeysClientAuthorizerWithLogger(paths, nil)
+}
+
+func AuthorizedKeysClientAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.AuthorizeClientFunc {
 	configuredPaths := append([]string(nil), paths...)
+	logger = logging.Resolve(logger)
 
 	return func(identity auth.ClientIdentity) error {
 		account, err := user.Lookup(identity.Username)
@@ -43,7 +49,7 @@ func AuthorizedKeysClientAuthorizer(paths []string) auth.AuthorizeClientFunc {
 		}
 
 		resolvedPaths := resolveAuthorizedKeysPaths(account.HomeDir, configuredPaths)
-		log.Debug("gathering authorized_keys", "username", identity.Username, "files", resolvedPaths)
+		logger.Debug("gathering authorized_keys", "username", identity.Username, "files", resolvedPaths)
 
 		authorizedKeys, gatherErr := GatherAuthorizedKeys(resolvedPaths)
 		for _, authorizedKey := range authorizedKeys {
@@ -51,7 +57,7 @@ func AuthorizedKeysClientAuthorizer(paths []string) auth.AuthorizeClientFunc {
 				continue
 			}
 
-			log.Info("authorized client key matched local user", "username", identity.Username, "fingerprint", identity.PublicKey.FingerprintSHA256())
+			logger.Info("authorized client key matched local user", "username", identity.Username, "fingerprint", identity.PublicKey.FingerprintSHA256())
 			return nil
 		}
 

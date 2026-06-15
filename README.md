@@ -5,7 +5,7 @@ It is not SSH-compatible and does not use Go SSH libraries.
 
 The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, a minimal authenticated session abstraction, and small file-backed trust stubs in `lib/trust`. The session layer now owns connection shutdown plus handshake/auth timeout enforcement during construction. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the post-auth session model is rebuilt on top of the new boundary.
 
-The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory.
+The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory. Startup now builds a small application root in `app/root` that owns settings, the current Charm logger, and future app-scoped shutdown-managed services.
 
 ## Current Direction
 
@@ -16,6 +16,7 @@ The current repository baseline is:
 - protobuf framing above transport goes through `transport.SendProto` / `transport.ReceiveProto`
 - auth protocol/state transitions live in `lib/auth`
 - file-backed trust stubs live in `lib/trust`
+- app-scoped wiring for settings and logging lives in `app/root`
 - auth traffic uses `mygosh.auth.v1.AuthFrame`
 - post-auth traffic uses `mygosh.session.v1.Envelope`
 - session construction enforces built-in handshake/auth timeouts through an internal session runtime
@@ -69,6 +70,8 @@ mygosh serve      # use mygosh.toml log.level, or none if unset
 mygosh -v serve   # INFO and above
 mygosh -vv serve  # DEBUG and above
 ```
+
+The current logger is constructed explicitly by the application root and passed through the active client/server/session/auth/trust path. That is intentional groundwork for later raw-TTY log redirection and telemetry/export wiring.
 
 ## Run
 

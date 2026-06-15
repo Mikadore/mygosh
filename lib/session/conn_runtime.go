@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/log"
+	"github.com/Mikadore/mygosh/lib/logging"
+	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -24,13 +25,15 @@ type connRuntime struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
+	logger *charmlog.Logger
+
 	mu        sync.Mutex
 	target    io.Closer
 	timer     *time.Timer
 	closeOnce sync.Once
 }
 
-func newConnRuntime(parent context.Context, target io.Closer) *connRuntime {
+func newConnRuntime(parent context.Context, target io.Closer, logger *charmlog.Logger) *connRuntime {
 	parent = normalizeContext(parent)
 
 	ctx, cancel := context.WithCancelCause(parent)
@@ -38,6 +41,7 @@ func newConnRuntime(parent context.Context, target io.Closer) *connRuntime {
 		ctx:    ctx,
 		cancel: cancel,
 		target: target,
+		logger: logging.Resolve(logger),
 	}
 	go func() {
 		<-runtime.ctx.Done()
@@ -85,7 +89,7 @@ func (r *connRuntime) startTimer(phase string, timeout time.Duration) error {
 	}
 
 	r.timer = time.AfterFunc(timeout, func() {
-		log.Info("connection phase timed out", "phase", phase, "timeout", timeout)
+		r.logger.Info("connection phase timed out", "phase", phase, "timeout", timeout)
 		r.cancel(context.DeadlineExceeded)
 		_ = r.closeTarget()
 	})

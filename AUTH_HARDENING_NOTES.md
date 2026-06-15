@@ -8,7 +8,7 @@ Keep the current `lib/auth` boundary focused on proving key ownership and extrac
 
 Build the richer policy and account-selection work around that boundary instead of pushing filesystem and local-account concerns into the auth state machine.
 
-Model trust, account lookup, key lookup, and signing as runtime-wired services, but avoid package-global singleton registries such as `auth.UserDB` or `trust.Keystore`. The application should construct one set of trust services at startup and pass narrow interfaces into `session` and `auth`. This keeps dependencies explicit, makes tests straightforward, and leaves room for later IPC-backed helpers or privilege-separated daemon processes.
+Model trust, account lookup, key lookup, signing, logging, and future telemetry as runtime-wired services, but avoid package-global singleton registries such as `auth.UserDB` or `trust.Keystore`. The application should construct one set of these services at startup inside the app `Root` and pass narrow interfaces into `session` and `auth`. This keeps dependencies explicit, makes tests straightforward, and leaves room for later IPC-backed helpers or privilege-separated daemon processes.
 
 Prefer service objects that describe privilege and policy boundaries over one large keystore object:
 
@@ -29,7 +29,7 @@ The long-term auth path should treat signing as a capability, not as direct acce
    A separate account-resolution layer should decide which local account and session policy that identity maps to.
 
 2. Introduce explicit provider interfaces at the auth/session boundary.
-   Keep constructors in `app/client`, `app/server`, or a small app wiring package.
+   Keep constructors in `app/root`, `app/client`, `app/server`, or another small app wiring package at the application edge.
    Pass dependencies through config structs rather than reading package globals from deep protocol code.
    Use `context.Context` on provider methods so cancellation, deadlines, audit metadata, and future IPC calls have a natural path.
 
@@ -99,9 +99,9 @@ type HostKeyVerifier interface {
 }
 ```
 
-These are sketches, not final names. Keep interfaces small and define them near the package that consumes them when possible. Concrete file-backed implementations belong in `lib/trust`; app-level wiring decides which implementation is used.
+These are sketches, not final names. Keep interfaces small and define them near the package that consumes them when possible. Concrete file-backed implementations belong in `lib/trust`; the app `Root` and app-level wiring decide which implementation is used.
 
-If a dependency graph eventually becomes tedious to wire by hand, consider a small app container or dependency-injection library only at the application edge. Do not put a runtime service locator inside `lib/auth`, `lib/session`, or `lib/trust`.
+If a dependency graph eventually becomes tedious to wire by hand, consider a small app container or dependency-injection library only at the application edge, centered around the app `Root`. Do not put a runtime service locator inside `lib/auth`, `lib/session`, or `lib/trust`.
 
 ## Process-Separation Direction
 
@@ -113,11 +113,11 @@ Design provider methods as if they may later cross a process boundary:
 - preserve structured rejection reasons for logging and future RPC replies
 - keep filesystem policy, user lookup, and signing authority in replaceable implementations
 
-The first implementation can remain simple and file-backed. The architectural goal is not daemonization now; it is keeping the boundary plain enough that daemonization later does not require rewriting the auth state machine.
+The first implementation can remain simple and file-backed. The architectural goal is not daemonization now; it is keeping the boundary plain enough that daemonization later does not require rewriting the auth state machine or the app `Root` wiring.
 
 ## Highest-value near-term work
 
 1. Introduce a signer abstraction and use it from auth instead of calling `keys.Keypair.Sign` directly.
 2. Introduce richer `AuthorizedKeyEntry`, `ClientAuthorizer`, and account-resolution types without changing wire behavior.
 3. Add a real file-backed host-key verifier for the client side.
-4. Move local-user, key lookup, signing, and filesystem policy out of the app stub path and behind small plain-data interfaces.
+4. Move local-user, key lookup, signing, and filesystem policy into `Root`-owned services behind small plain-data interfaces.

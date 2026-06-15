@@ -6,8 +6,9 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
+	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/transport"
-	"github.com/charmbracelet/log"
+	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -20,6 +21,7 @@ type ClientConfig struct {
 	Username            string
 	ClientIdentity      keys.Keypair
 	VerifyServerHostKey HostKeyVerifier
+	Logger              *charmlog.Logger
 }
 
 func (c ClientConfig) Validate() error {
@@ -41,6 +43,7 @@ func (c ClientConfig) Validate() error {
 type ServerConfig struct {
 	HostKey         keys.Keypair
 	AuthorizeClient AuthorizeClientFunc
+	Logger          *charmlog.Logger
 }
 
 func (c ServerConfig) Validate() error {
@@ -69,7 +72,7 @@ func AuthenticateClient(messageTransport *transport.Transport, channelBinding []
 		return Result{}, eris.Wrap(err, "validate client auth config")
 	}
 
-	machine := newAuthMachine("client", messageTransport, channelBinding)
+	machine := newAuthMachine("client", messageTransport, channelBinding, cfg.Logger)
 	return machine.authenticateClient(cfg)
 }
 
@@ -78,7 +81,7 @@ func AuthenticateServer(messageTransport *transport.Transport, channelBinding []
 		return Result{}, eris.Wrap(err, "validate server auth config")
 	}
 
-	machine := newAuthMachine("server", messageTransport, channelBinding)
+	machine := newAuthMachine("server", messageTransport, channelBinding, cfg.Logger)
 	return machine.authenticateServer(cfg)
 }
 
@@ -100,25 +103,27 @@ type authMachine struct {
 	state          authState
 	transport      *transport.Transport
 	channelBinding []byte
+	logger         *charmlog.Logger
 }
 
-func newAuthMachine(role string, messageTransport *transport.Transport, channelBinding []byte) *authMachine {
+func newAuthMachine(role string, messageTransport *transport.Transport, channelBinding []byte, logger *charmlog.Logger) *authMachine {
 	return &authMachine{
 		role:           role,
 		state:          authStateNoiseEstablished,
 		transport:      messageTransport,
 		channelBinding: cloneBytes(channelBinding),
+		logger:         logging.Resolve(logger),
 	}
 }
 
 func (m *authMachine) debug(message string, keyvals ...any) {
 	fields := append([]any{"role", m.role, "state", m.state}, keyvals...)
-	log.Debug(message, fields...)
+	m.logger.Debug(message, fields...)
 }
 
 func (m *authMachine) info(message string, keyvals ...any) {
 	fields := append([]any{"role", m.role, "state", m.state}, keyvals...)
-	log.Info(message, fields...)
+	m.logger.Info(message, fields...)
 }
 
 func (m *authMachine) advance(expected authState, next authState) error {

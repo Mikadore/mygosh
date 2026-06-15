@@ -24,6 +24,7 @@ Today the repository has completed the auth/session split:
 ## Repository Layout
 
 - `bin/`: binary entrypoint and Cobra command setup.
+- `app/root/`: application root wiring for settings, logging, and future app-scoped services/shutdown hooks.
 - `app/client/`: client application flow, TCP dialing, current file-backed identity/host-key verification wiring, and provisional terminal demo code not used by the default CLI path.
 - `app/server/`: server application flow, TCP listening, current file-backed client authorization wiring, and provisional shell demo code not used by the default CLI path.
 - `lib/transport/`: concrete Noise-backed framed transport plus protobuf send/receive helpers.
@@ -34,11 +35,12 @@ Today the repository has completed the auth/session split:
 - `lib/trust/`: file-backed trust helpers and current stubs for `known_hosts`, `authorized_keys`, and OpenSSH private-key lookup.
 - `lib/tty/`: local raw terminal and server PTY mechanics.
 - `lib/settings/`: config loading and validation.
-- `lib/logging/`: global Charmbracelet logger setup.
+- `lib/logging/`: logger construction and small logging helpers used by the app root and library seams.
 
 ## Development Rules
 
 - Prefer small, composable layers over large all-in-one abstractions.
+- Keep app-scoped services such as settings, logging, and future telemetry rooted in `app/root`; avoid package-global service registries.
 - Keep TCP ownership in `app/client` and `app/server`; do not move dialing/listening or TCP tuning into `lib/transport`.
 - Keep `transport.Transport` focused on encrypted frame send/receive.
 - Keep protobuf marshaling/validation above transport in helper functions rather than making it the transport identity.
@@ -49,6 +51,7 @@ Today the repository has completed the auth/session split:
 - Use deterministic protobuf serialization only for blobs or payloads that are signed.
 - Use `github.com/rotisserie/eris` for wrapped errors.
 - Use `github.com/charmbracelet/log` for logging.
+- Prefer passing explicit `*log.Logger` instances through app/session/auth/trust wiring over mutating a global default logger.
 - Do not target Windows.
 - Do not add SSH compatibility, ControlMaster, or reconnect/resume unless the roadmap explicitly moves to that step.
 - Prefer the smallest change that improves the authenticated session and channel-open path without closing off future process separation.

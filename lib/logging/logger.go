@@ -1,36 +1,64 @@
 package logging
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
+	"sync"
 
-	"github.com/charmbracelet/log"
+	charmlog "github.com/charmbracelet/log"
 
 	"github.com/Mikadore/mygosh/lib/settings"
 )
 
-func Configure(cfg settings.LogSettings) {
+var (
+	nopOnce   sync.Once
+	nopLogger *charmlog.Logger
+)
+
+func New(cfg settings.LogSettings) *charmlog.Logger {
 	output := io.Writer(os.Stderr)
 	if !enabledLevel(cfg.Level) {
 		output = io.Discard
 	}
 
-	formatter := log.TextFormatter
+	formatter := charmlog.TextFormatter
 	if cfg.JSON {
-		formatter = log.JSONFormatter
+		formatter = charmlog.JSONFormatter
 	}
 
-	parsed, err := log.ParseLevel(strings.ToLower(strings.TrimSpace(cfg.Level)))
+	parsed, err := charmlog.ParseLevel(strings.ToLower(strings.TrimSpace(cfg.Level)))
 	if err != nil {
-		parsed = log.InfoLevel
+		parsed = charmlog.InfoLevel
 	}
 
-	log.SetDefault(log.NewWithOptions(output, log.Options{
+	return charmlog.NewWithOptions(output, charmlog.Options{
 		Level:           parsed,
 		Formatter:       formatter,
 		ReportTimestamp: true,
-	}))
+	})
+}
+
+func Nop() *charmlog.Logger {
+	nopOnce.Do(func() {
+		nopLogger = charmlog.NewWithOptions(io.Discard, charmlog.Options{
+			Level:           charmlog.InfoLevel,
+			ReportTimestamp: true,
+		})
+	})
+	return nopLogger
+}
+
+func Resolve(logger *charmlog.Logger) *charmlog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return Nop()
+}
+
+func IntoContext(ctx context.Context, logger *charmlog.Logger) context.Context {
+	return context.WithValue(ctx, charmlog.ContextKey, Resolve(logger))
 }
 
 func enabledLevel(level string) bool {

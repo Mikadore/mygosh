@@ -7,10 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/charmbracelet/log"
-
+	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/session"
-	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
@@ -29,13 +27,19 @@ func makeAddr(addr string, port int) string {
 	}
 }
 
-func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) error {
+func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error {
+	if appRoot == nil {
+		return eris.New("project root is required")
+	}
 	if args.Address == "" {
 		return eris.New("connect address is required")
 	}
 	if strings.TrimSpace(args.Command) != "" {
 		return eris.New("remote command execution is not supported yet")
 	}
+
+	logger := appRoot.Logger.With("command", "client")
+	cfg := appRoot.Settings
 
 	conn, err := net.Dial("tcp", makeAddr(args.Address, cfg.Core.Port))
 	if err != nil {
@@ -46,9 +50,9 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	// logging and application error handling
 	//nolint:errcheck
 	defer conn.Close()
-	log.Info("connected", "addr", conn.RemoteAddr())
+	logger.Info("connected", "addr", conn.RemoteAddr())
 
-	clientIdentity, err := trust.LookupClientIdentity(trust.DefaultClientIdentityPath)
+	clientIdentity, err := trust.LookupClientIdentityWithLogger(trust.DefaultClientIdentityPath, logger)
 	if err != nil {
 		return err
 	}
@@ -57,15 +61,16 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 		ReferenceIdentity:   referenceIdentity(args.Address),
 		Username:            localUsername(),
 		ClientIdentity:      clientIdentity,
-		VerifyServerHostKey: trust.KnownHostsHostKeyVerifier(trust.DefaultKnownHostsPath),
+		VerifyServerHostKey: trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
+		Logger:              logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
 	defer established.Close()
 
-	log.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
-	log.Info("authenticated session established", "session_protocol", "disabled")
+	logger.Info("server identity", "fingerprint", established.Metadata().ServerHostKey.FingerprintSHA256())
+	logger.Info("authenticated session established", "session_protocol", "disabled")
 	return nil
 }
 

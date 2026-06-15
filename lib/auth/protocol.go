@@ -7,6 +7,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -110,15 +111,28 @@ func newAuthMachine(role string, messageTransport *transport.Transport, channelB
 	}
 }
 
+func (m *authMachine) debug(message string, keyvals ...any) {
+	fields := append([]any{"role", m.role, "state", m.state}, keyvals...)
+	log.Debug(message, fields...)
+}
+
+func (m *authMachine) info(message string, keyvals ...any) {
+	fields := append([]any{"role", m.role, "state", m.state}, keyvals...)
+	log.Info(message, fields...)
+}
+
 func (m *authMachine) advance(expected authState, next authState) error {
 	if m.state != expected {
 		return eris.Errorf("%s auth state %q cannot transition to %q", m.role, m.state, next)
 	}
 	m.state = next
+	m.debug("auth state advanced", "from", expected, "to", next)
 	return nil
 }
 
 func (m *authMachine) authenticateClient(cfg ClientConfig) (Result, error) {
+	m.debug("starting client authentication", "reference_identity", cfg.ReferenceIdentity, "username", cfg.Username)
+
 	clientNonce, err := randomBytes(NonceSize)
 	if err != nil {
 		return Result{}, eris.Wrap(err, "generate client nonce")
@@ -176,6 +190,7 @@ func (m *authMachine) authenticateClient(cfg ClientConfig) (Result, error) {
 	if err := cfg.VerifyServerHostKey(cfg.ReferenceIdentity, serverHostKey); err != nil {
 		return Result{}, eris.Wrap(err, "verify server host key")
 	}
+	m.debug("verified server host key", "reference_identity", cfg.ReferenceIdentity, "fingerprint", serverHostKey.FingerprintSHA256())
 
 	serverAuthHash, err := HashServerAuthMessage(serverAuth)
 	if err != nil {
@@ -227,6 +242,7 @@ func (m *authMachine) authenticateClient(cfg ClientConfig) (Result, error) {
 	if err := m.advance(authStateClientAuthSent, authStateAuthenticated); err != nil {
 		return Result{}, err
 	}
+	m.debug("client authentication complete", "reference_identity", cfg.ReferenceIdentity, "server_fingerprint", serverHostKey.FingerprintSHA256())
 
 	return Result{
 		ReferenceIdentity: cfg.ReferenceIdentity,
@@ -239,11 +255,13 @@ func (m *authMachine) authenticateServer(cfg ServerConfig) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	m.debug("received host auth init", "reference_identity", hostAuthInit.GetReferenceIdentity())
 	if err := m.advance(authStateNoiseEstablished, authStateHostAuthInitRecv); err != nil {
 		return Result{}, err
 	}
 	if hostAuthInit.GetMygoshAuthVersion() != ProtocolVersion {
 		err := eris.Errorf("unsupported auth version %q", hostAuthInit.GetMygoshAuthVersion())
+		m.info("rejecting host auth init", "code", "unsupported-auth-version", "reference_identity", hostAuthInit.GetReferenceIdentity(), "version", hostAuthInit.GetMygoshAuthVersion())
 		sendAuthError(m.transport, "unsupported-auth-version", err.Error())
 		return Result{}, err
 	}
@@ -299,22 +317,26 @@ func (m *authMachine) authenticateServer(cfg ServerConfig) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	m.debug("received client auth request", "username", clientAuthRequest.GetUsername())
 	if err := m.advance(authStateServerAuthSent, authStateClientAuthRecv); err != nil {
 		return Result{}, err
 	}
 
 	clientPublicKey, err := keys.ParsePublicKey(clientAuthRequest.GetClientPublicKeyOrCert())
 	if err != nil {
+		m.info("rejecting client auth", "code", "invalid-client-key", "username", clientAuthRequest.GetUsername())
 		sendClientAuthReject(m.transport, "invalid-client-key", "invalid client public key")
 		return Result{}, eris.Wrap(err, "parse client public key")
 	}
 	if !(&clientPublicKey).IsSigning() {
 		err := eris.New("client public key must be an ed25519 signing key")
+		m.info("rejecting client auth", "code", "invalid-client-key", "username", clientAuthRequest.GetUsername(), "algorithm", clientPublicKey.Algorithm)
 		sendClientAuthReject(m.transport, "invalid-client-key", err.Error())
 		return Result{}, err
 	}
 	if clientAuthRequest.GetClientSigAlg() != string(clientPublicKey.Algorithm) {
 		err := eris.Errorf("client signature algorithm %q does not match key algorithm %q", clientAuthRequest.GetClientSigAlg(), clientPublicKey.Algorithm)
+		m.info("rejecting client auth", "code", "invalid-client-sig-alg", "username", clientAuthRequest.GetUsername(), "client_sig_alg", clientAuthRequest.GetClientSigAlg(), "key_algorithm", clientPublicKey.Algorithm)
 		sendClientAuthReject(m.transport, "invalid-client-sig-alg", err.Error())
 		return Result{}, err
 	}
@@ -328,11 +350,13 @@ func (m *authMachine) authenticateServer(cfg ServerConfig) (Result, error) {
 		ClientSigAlg:          clientAuthRequest.GetClientSigAlg(),
 	}).MarshalBinary()
 	if err != nil {
+		m.info("rejecting client auth", "code", "invalid-client-auth", "username", clientAuthRequest.GetUsername())
 		sendClientAuthReject(m.transport, "invalid-client-auth", "failed to encode client auth payload")
 		return Result{}, eris.Wrap(err, "encode client auth payload")
 	}
 	if !(&clientPublicKey).Verify(clientAuthPayload, clientAuthRequest.GetSignature()) {
 		err := eris.New("client auth signature verification failed")
+		m.info("rejecting client auth", "code", "invalid-client-signature", "username", clientAuthRequest.GetUsername(), "fingerprint", clientPublicKey.FingerprintSHA256())
 		sendClientAuthReject(m.transport, "invalid-client-signature", err.Error())
 		return Result{}, err
 	}
@@ -342,6 +366,7 @@ func (m *authMachine) authenticateServer(cfg ServerConfig) (Result, error) {
 		PublicKey: clonePublicKey(clientPublicKey),
 	}
 	if err := cfg.AuthorizeClient(clientIdentity); err != nil {
+		m.info("rejecting client auth", "code", "unauthorized-client", "username", clientIdentity.Username, "fingerprint", clientIdentity.PublicKey.FingerprintSHA256())
 		sendClientAuthReject(m.transport, "unauthorized-client", err.Error())
 		return Result{}, eris.Wrap(err, "authorize client")
 	}
@@ -352,6 +377,7 @@ func (m *authMachine) authenticateServer(cfg ServerConfig) (Result, error) {
 	if err := m.advance(authStateClientAuthRecv, authStateAuthenticated); err != nil {
 		return Result{}, err
 	}
+	m.debug("client authentication complete", "reference_identity", hostAuthInit.GetReferenceIdentity(), "username", clientIdentity.Username, "fingerprint", clientIdentity.PublicKey.FingerprintSHA256())
 
 	return Result{
 		ReferenceIdentity: hostAuthInit.GetReferenceIdentity(),

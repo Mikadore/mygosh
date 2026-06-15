@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -59,11 +61,12 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, er
 	}
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
+	log.Debug("starting session connect", "role", RoleClient, "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
 	runtime := newConnRuntime(ctx, conn)
 
 	var messageTransport *transport.Transport
-	err := runtime.runWithTimeout(handshakeTimeout, func() error {
+	err := runtime.runWithTimeout("handshake", handshakeTimeout, func() error {
 		var err error
 		messageTransport, err = transport.HandshakeClient(conn)
 		return err
@@ -74,9 +77,10 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, er
 		return nil, wrapped
 	}
 	runtime.setTarget(messageTransport)
+	log.Debug("noise transport established", "role", RoleClient, "remote", remoteAddrString(conn))
 
 	var result auth.Result
-	err = runtime.runWithTimeout(authTimeout, func() error {
+	err = runtime.runWithTimeout("auth", authTimeout, func() error {
 		var err error
 		result, err = auth.AuthenticateClient(messageTransport, messageTransport.ChannelBinding(), auth.ClientConfig{
 			ReferenceIdentity:   cfg.ReferenceIdentity,
@@ -91,6 +95,7 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Session, er
 		_ = runtime.Close()
 		return nil, wrapped
 	}
+	log.Debug("session connect authenticated", "role", RoleClient, "reference_identity", result.ReferenceIdentity, "server_fingerprint", result.ServerHostKey.FingerprintSHA256())
 
 	return &Session{
 		runtime:   runtime,
@@ -110,11 +115,12 @@ func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, err
 	}
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
+	log.Debug("starting session accept", "role", RoleServer, "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
 	runtime := newConnRuntime(ctx, conn)
 
 	var messageTransport *transport.Transport
-	err := runtime.runWithTimeout(handshakeTimeout, func() error {
+	err := runtime.runWithTimeout("handshake", handshakeTimeout, func() error {
 		var err error
 		messageTransport, err = transport.HandshakeServer(conn)
 		return err
@@ -125,9 +131,10 @@ func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, err
 		return nil, wrapped
 	}
 	runtime.setTarget(messageTransport)
+	log.Debug("noise transport established", "role", RoleServer, "remote", remoteAddrString(conn))
 
 	var result auth.Result
-	err = runtime.runWithTimeout(authTimeout, func() error {
+	err = runtime.runWithTimeout("auth", authTimeout, func() error {
 		var err error
 		result, err = auth.AuthenticateServer(messageTransport, messageTransport.ChannelBinding(), auth.ServerConfig{
 			HostKey:         cfg.HostKey,
@@ -140,6 +147,7 @@ func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Session, err
 		_ = runtime.Close()
 		return nil, wrapped
 	}
+	log.Debug("session accept authenticated", "role", RoleServer, "reference_identity", result.ReferenceIdentity, "username", result.ClientIdentity.Username, "client_fingerprint", result.ClientIdentity.PublicKey.FingerprintSHA256())
 
 	return &Session{
 		runtime:   runtime,
@@ -167,6 +175,7 @@ func (s *Session) Metadata() Metadata {
 
 func (s *Session) Run(ctx context.Context) error {
 	ctx = normalizeContext(ctx)
+	log.Debug("session run loop started", "role", s.role, "reference_identity", s.metadata.ReferenceIdentity)
 
 	stopCh := make(chan struct{})
 	go func() {
@@ -182,6 +191,7 @@ func (s *Session) Run(ctx context.Context) error {
 		var frame sessionpb.Envelope
 		if err := transport.ReceiveProto(s.transport, &frame); err != nil {
 			if eris.Is(err, io.EOF) {
+				log.Debug("session stream closed", "role", s.role)
 				return nil
 			}
 			if s.runtime != nil {
@@ -193,6 +203,7 @@ func (s *Session) Run(ctx context.Context) error {
 			return eris.Wrap(err, "receive session frame")
 		}
 
+		log.Debug("received unsupported session frame", "role", s.role, "frame_kind", envelopeKind(&frame))
 		return eris.Errorf("session protocol not implemented: received %T", frame.Kind)
 	}
 }
@@ -246,4 +257,18 @@ func validateTimeouts(handshakeTimeout time.Duration, authTimeout time.Duration)
 		return eris.New("auth timeout must not be negative")
 	}
 	return nil
+}
+
+func remoteAddrString(conn net.Conn) string {
+	if conn == nil || conn.RemoteAddr() == nil {
+		return ""
+	}
+	return conn.RemoteAddr().String()
+}
+
+func envelopeKind(frame *sessionpb.Envelope) string {
+	if frame == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("%T", frame.Kind)
 }

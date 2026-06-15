@@ -2,6 +2,7 @@ package keys
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -120,6 +121,14 @@ func (k PublicKey) Validate() error {
 	default:
 		return eris.Errorf("validate public key: unsupported algorithm %q", k.Algorithm)
 	}
+}
+
+// Compare returns a stable total ordering for public keys.
+func (k PublicKey) Compare(other PublicKey) int {
+	return cmp.Or(
+		cmp.Compare(string(k.Algorithm), string(other.Algorithm)),
+		bytes.Compare(k.Bytes, other.Bytes),
+	)
 }
 
 func (k Keypair) Validate() error {

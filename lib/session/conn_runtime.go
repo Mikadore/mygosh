@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -51,12 +52,12 @@ func (r *connRuntime) setTarget(target io.Closer) {
 	r.target = target
 }
 
-func (r *connRuntime) runWithTimeout(timeout time.Duration, fn func() error) error {
+func (r *connRuntime) runWithTimeout(phase string, timeout time.Duration, fn func() error) error {
 	if err := context.Cause(r.ctx); err != nil {
 		return err
 	}
 
-	if err := r.startTimer(timeout); err != nil {
+	if err := r.startTimer(phase, timeout); err != nil {
 		return err
 	}
 	defer r.stopTimer()
@@ -68,7 +69,7 @@ func (r *connRuntime) runWithTimeout(timeout time.Duration, fn func() error) err
 	return err
 }
 
-func (r *connRuntime) startTimer(timeout time.Duration) error {
+func (r *connRuntime) startTimer(phase string, timeout time.Duration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -84,6 +85,7 @@ func (r *connRuntime) startTimer(timeout time.Duration) error {
 	}
 
 	r.timer = time.AfterFunc(timeout, func() {
+		log.Info("connection phase timed out", "phase", phase, "timeout", timeout)
 		r.cancel(context.DeadlineExceeded)
 		_ = r.closeTarget()
 	})

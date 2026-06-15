@@ -14,7 +14,7 @@ Today the repository has completed the auth/session split:
 - session traffic uses its own protobuf `Envelope` schema in `lib/session/sessionpb`
 - `lib/transport.Transport` is the concrete Noise-backed framed secure connection
 - protobuf marshaling sits above transport in `transport.SendProto` / `transport.ReceiveProto`
-- `lib/session` currently stops at authenticated session construction plus a minimal post-auth receive-loop stub
+- `lib/session` currently includes authenticated session construction plus an initial post-auth session/channel multiplexer
 - `lib/session` owns an internal connection runtime for parent-context shutdown plus handshake/auth timeouts
 - `lib/trust` holds the current file-backed trust stubs for private-key lookup, `known_hosts`, and `authorized_keys`
 - the default CLI client loads `~/.mygosh/id_ed25519` and verifies the server against `~/.mygosh/known_hosts`
@@ -54,6 +54,7 @@ Today the repository has completed the auth/session split:
 - Prefer passing explicit `*log.Logger` instances through app/session/auth/trust wiring over mutating a global default logger.
 - Do not target Windows.
 - Do not add SSH compatibility, ControlMaster, or reconnect/resume unless the roadmap explicitly moves to that step.
+- Factor potential process separation and the security impact of changes into further development and architecture decisions, even when the immediate implementation stays in-process.
 - Prefer the smallest change that improves the authenticated session and channel-open path without closing off future process separation.
 
 ## Auth And Session Direction
@@ -82,14 +83,13 @@ Today the repository has completed the auth/session split:
 
 - Channels are opened after authentication.
 - The current terminal behavior should become one future `session` channel variant.
-- `StartShell` is the PTY-backed command path.
-- `StartExec` is the non-PTY command path.
+- Future PTY-backed and non-PTY command paths should stay behind the session/channel model rather than bypassing it.
 - The old client/server terminal plumbing currently lives in `app` as demo-only code and is intentionally unused by the default CLI path.
-- Do not tie channel routing to `session_id`; reserve `session_id` for opaque audit/logging if it remains in the protocol.
+- Do not introduce channel routing keyed to a future `session_id`; keep any such identifier, if added later, reserved for opaque audit/logging.
 
 ## Process-Separation Biases
 
-`PROCESS_SEPARATION.md` is guidance, not the immediate priority. Keep its boundaries in mind without forcing a process split now.
+The repository currently references `PROCESS_SEPARATION.md`, but that file is not present in this checkout. Treat process separation as an architectural constraint and design bias without forcing an immediate process split.
 
 - Keep one receive owner per connection; do not let unrelated goroutines compete over `ReceiveFrame` / `ReceiveProto`.
 - Avoid spreading host-key access, authorization policy, account lookup, or PTY launch policy into `transport` or `auth`.

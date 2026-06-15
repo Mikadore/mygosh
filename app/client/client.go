@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"net"
 	"os"
@@ -11,9 +10,9 @@ import (
 	"github.com/charmbracelet/log"
 
 	"github.com/Mikadore/mygosh/lib/auth"
-	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/settings"
+	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
 
@@ -30,11 +29,6 @@ func makeAddr(addr string, port int) string {
 		return addr
 	}
 }
-
-const (
-	demoServerHostSeed = "mygosh-demo-server-host-key-v1"
-	demoClientSeed     = "mygosh-demo-client-key-v1"
-)
 
 func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) error {
 	if args.Address == "" {
@@ -55,12 +49,12 @@ func RunClient(ctx context.Context, cfg settings.Settings, args ConnectArgs) err
 	defer conn.Close()
 	log.Info("connected", "addr", conn.RemoteAddr())
 
-	serverHostKey, err := demoEd25519Keypair(demoServerHostSeed)
+	serverHostKey, err := trust.LookupHostKey(trust.DefaultHostKeyPath)
 	if err != nil {
 		return err
 	}
 
-	clientIdentity, err := demoEd25519Keypair(demoClientSeed)
+	clientIdentity, err := trust.LookupClientIdentity(trust.DefaultClientIdentityPath)
 	if err != nil {
 		return err
 	}
@@ -95,13 +89,4 @@ func localUsername() string {
 		return "unknown"
 	}
 	return user
-}
-
-func demoEd25519Keypair(seedText string) (keys.Keypair, error) {
-	seed := sha256.Sum256([]byte(seedText))
-	keypair, err := keys.GenerateEd25519FromSeed(seed[:])
-	if err != nil {
-		return keys.Keypair{}, eris.Wrap(err, "derive demo auth key")
-	}
-	return keypair, nil
 }

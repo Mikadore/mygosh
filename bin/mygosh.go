@@ -64,11 +64,11 @@ func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 	})
 
 	cmdRoot.AddCommand(&cobra.Command{
-		Use:   "connect [address] [command]",
+		Use:   "connect [user@]address[:port] [command]",
 		Short: "connect to a mygosh server",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			connectArgs := client.ConnectArgs{Address: args[0]}
+			connectArgs := client.ConnectArgs{Target: args[0]}
 			if len(args) > 1 {
 				connectArgs.Command = strings.Join(args[1:], " ")
 			}

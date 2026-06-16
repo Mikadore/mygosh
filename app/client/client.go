@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -15,25 +14,16 @@ import (
 )
 
 type ConnectArgs struct {
-	Address string
+	Target  string
 	Command string
-}
-
-func makeAddr(addr string, port int) string {
-	_, p, err := net.SplitHostPort(addr)
-	if err != nil || len(p) == 0 {
-		return net.JoinHostPort(addr, fmt.Sprintf("%d", port))
-	} else {
-		return addr
-	}
 }
 
 func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error {
 	if appRoot == nil {
 		return eris.New("project root is required")
 	}
-	if args.Address == "" {
-		return eris.New("connect address is required")
+	if args.Target == "" {
+		return eris.New("connect target is required")
 	}
 	if strings.TrimSpace(args.Command) != "" {
 		return eris.New("remote command execution is not supported yet")
@@ -42,9 +32,14 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	logger := appRoot.Logger.With("command", "client")
 	cfg := appRoot.Settings
 
-	conn, err := net.Dial("tcp", makeAddr(args.Address, cfg.Core.Port))
+	target, err := parseConnectTarget(args.Target)
 	if err != nil {
-		return eris.Wrapf(err, "connect to %s", args.Address)
+		return err
+	}
+
+	conn, err := net.Dial("tcp", target.dialAddress(cfg.Core.Port))
+	if err != nil {
+		return eris.Wrapf(err, "connect to %s", args.Target)
 	}
 	//TODO: implement comprehensive connection lifecycle
 	// and integrate connection closing/termination with
@@ -59,8 +54,8 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	}
 
 	established, err := connection.Connect(ctx, conn, connection.ClientConfig{
-		ReferenceIdentity:      referenceIdentity(args.Address),
-		Username:               localUsername(),
+		ReferenceIdentity:      target.referenceIdentity(),
+		Username:               target.resolvedUsername(),
 		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
 		VerifyServerHostKey:    trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
 		Logger:                 logger,
@@ -73,14 +68,6 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	logger.Info("server identity", "fingerprint", established.Auth.ServerHostKey.FingerprintSHA256())
 	logger.Info("authenticated session established", "session_protocol", "disabled")
 	return nil
-}
-
-func referenceIdentity(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err == nil && host != "" {
-		return host
-	}
-	return addr
 }
 
 func localUsername() string {

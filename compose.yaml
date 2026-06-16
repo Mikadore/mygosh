@@ -24,4 +24,4 @@ services:
         - action: sync+restart
           path: ./mygosh.toml
           target: /workspace/mygosh.toml
-          initial_sync: true
+          #initial_sync: true

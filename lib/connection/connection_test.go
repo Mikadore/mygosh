@@ -37,7 +37,14 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 				if identity.PublicKey.Algorithm != expectedPublicKey.Algorithm || !bytes.Equal(identity.PublicKey.Bytes, expectedPublicKey.Bytes) {
 					return auth.ClientKeyAuthorizationResult{}, eris.New("unexpected client public key")
 				}
-				return auth.ClientKeyAuthorizationResult{Source: "test"}, nil
+				return auth.ClientKeyAuthorizationResult{
+					Source: "test",
+					Account: auth.LocalAccount{
+						Username: "alice",
+						UID:      "1000",
+						GID:      "1000",
+					},
+				}, nil
 			}),
 		})
 		if err == nil {
@@ -64,6 +71,11 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 	require.Equal(t, "alice", serverSession.Auth.ClientIdentity.Username)
 	require.Equal(t, clientIdentity.PublicKey(), serverSession.Auth.ClientIdentity.PublicKey)
 	require.Equal(t, "test", serverSession.Auth.ClientKeyAuthorization.Source)
+	require.Equal(t, auth.LocalAccount{
+		Username: "alice",
+		UID:      "1000",
+		GID:      "1000",
+	}, serverSession.Auth.ClientKeyAuthorization.Account)
 }
 
 func TestConnectRejectsUnexpectedHostKey(t *testing.T) {

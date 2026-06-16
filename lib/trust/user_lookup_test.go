@@ -63,7 +63,14 @@ func TestAuthorizedKeysClientKeyAuthorizerMatchesKeyForUser(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "authorized_keys", result.Source)
+	require.Equal(t, path, result.Source)
+	require.Equal(t, auth.LocalAccount{
+		Username: currentUser.Username,
+		UID:      currentUser.Uid,
+		GID:      currentUser.Gid,
+		Name:     currentUser.Name,
+		HomeDir:  currentUser.HomeDir,
+	}, result.Account)
 }
 
 func TestAuthorizedKeysClientKeyAuthorizerRejectsUnexpectedKey(t *testing.T) {

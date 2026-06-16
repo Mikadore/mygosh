@@ -54,24 +54,52 @@ func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *charmlo
 		resolvedPaths := resolveAuthorizedKeysPaths(account.HomeDir, configuredPaths)
 		logger.Debug("gathering authorized_keys", "username", identity.Username, "files", resolvedPaths)
 
-		authorizedKeys, gatherErr := GatherAuthorizedKeys(resolvedPaths)
-		for _, authorizedKey := range authorizedKeys {
-			if authorizedKey.Compare(identity.PublicKey) != 0 {
-				continue
-			}
-
-			logger.Info("authorized client key matched local user", "username", identity.Username, "fingerprint", identity.PublicKey.FingerprintSHA256())
-			return auth.ClientKeyAuthorizationResult{Source: "authorized_keys"}, nil
+		matchedPath, authorizedKeyCount, gatherErr := matchAuthorizedKey(resolvedPaths, identity.PublicKey)
+		if matchedPath != "" {
+			logger.Info("authorized client key matched local user", "username", identity.Username, "uid", account.Uid, "gid", account.Gid, "source", matchedPath, "fingerprint", identity.PublicKey.FingerprintSHA256())
+			return auth.ClientKeyAuthorizationResult{
+				Source: matchedPath,
+				Account: auth.LocalAccount{
+					Username: account.Username,
+					UID:      account.Uid,
+					GID:      account.Gid,
+					Name:     account.Name,
+					HomeDir:  account.HomeDir,
+				},
+			}, nil
 		}
-
 		if gatherErr != nil {
 			return auth.ClientKeyAuthorizationResult{}, eris.Wrapf(gatherErr, "load authorized_keys for user %q", identity.Username)
 		}
-		if len(authorizedKeys) == 0 {
+		if authorizedKeyCount == 0 {
 			return auth.ClientKeyAuthorizationResult{}, eris.Errorf("no authorized keys found for user %q", identity.Username)
 		}
 		return auth.ClientKeyAuthorizationResult{}, eris.Errorf("client public key is not authorized for user %q", identity.Username)
 	})
+}
+
+func matchAuthorizedKey(paths []string, presentedKey keys.PublicKey) (string, int, error) {
+	var errs error
+	authorizedKeyCount := 0
+
+	for _, path := range paths {
+		authorizedKeys, err := ReadAuthorizedKeys(path)
+		if err != nil {
+			if !eris.Is(err, os.ErrNotExist) {
+				errs = errors.Join(errs, err)
+			}
+			continue
+		}
+
+		authorizedKeyCount += len(authorizedKeys)
+		for _, authorizedKey := range authorizedKeys {
+			if authorizedKey.Compare(presentedKey) == 0 {
+				return path, authorizedKeyCount, nil
+			}
+		}
+	}
+
+	return "", authorizedKeyCount, errs
 }
 
 func resolveAuthorizedKeysPaths(homeDir string, paths []string) []string {

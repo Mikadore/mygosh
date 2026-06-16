@@ -124,12 +124,23 @@ type ClientKeyAuthorizationRequest struct {
 	Identity          ClientIdentity
 }
 
+type LocalAccount struct {
+	Username string
+	UID      string
+	GID      string
+	Name     string
+	HomeDir  string
+}
+
 type ClientKeyAuthorizationResult struct {
-	Source string
+	Source  string
+	Account LocalAccount
 }
 
 // ClientKeyAuthorizer is still part of the auth exchange because the server
 // must send an auth OK/reject response before any session channel can open.
+// Successful authorization may also return actionable local account metadata
+// for later session, permission, and execution decisions.
 type ClientKeyAuthorizer interface {
 	AuthorizeClientKey(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error)
 }

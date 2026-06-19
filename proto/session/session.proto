@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package mygosh.session.v1;
+package session;
 
 import "buf/validate/validate.proto";
 

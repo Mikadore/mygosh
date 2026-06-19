@@ -6,8 +6,8 @@ The auth/session split is now real enough to plan from:
 
 - Noise handshake still begins from `app/client` and `app/server`, but authenticated session construction happens through `lib/establish.Connect` and `lib/establish.Accept`.
 - `lib/transport.Transport` is the concrete Noise-backed framed connection.
-- Auth traffic uses `mygosh.auth.v1.AuthFrame`.
-- Post-auth traffic uses `mygosh.session.v1.Envelope`.
+- Auth traffic uses `auth.AuthFrame`.
+- Post-auth traffic uses `session.Envelope`.
 - `lib/session` owns the role-agnostic post-auth protocol boundary plus the shared connection runtime used during establishment.
 - `lib/session` still stops at a role-agnostic post-auth receive-loop stub plus the initial channel/global-request multiplexer.
 - The default CLI currently completes Noise, authenticates, logs success, and exits.

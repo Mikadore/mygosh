@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: mygosh/session/v1/session.proto
+// source: session/session.proto
 
 package sessionpb
 
@@ -44,7 +44,7 @@ type Envelope struct {
 
 func (x *Envelope) Reset() {
 	*x = Envelope{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[0]
+	mi := &file_session_session_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -56,7 +56,7 @@ func (x *Envelope) String() string {
 func (*Envelope) ProtoMessage() {}
 
 func (x *Envelope) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[0]
+	mi := &file_session_session_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -69,7 +69,7 @@ func (x *Envelope) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Envelope.ProtoReflect.Descriptor instead.
 func (*Envelope) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{0}
+	return file_session_session_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Envelope) GetKind() isEnvelope_Kind {
@@ -261,7 +261,7 @@ type ChannelOpen struct {
 
 func (x *ChannelOpen) Reset() {
 	*x = ChannelOpen{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[1]
+	mi := &file_session_session_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -273,7 +273,7 @@ func (x *ChannelOpen) String() string {
 func (*ChannelOpen) ProtoMessage() {}
 
 func (x *ChannelOpen) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[1]
+	mi := &file_session_session_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -286,7 +286,7 @@ func (x *ChannelOpen) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelOpen.ProtoReflect.Descriptor instead.
 func (*ChannelOpen) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{1}
+	return file_session_session_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ChannelOpen) GetChannelType() string {
@@ -338,7 +338,7 @@ type ChannelOpenResult struct {
 
 func (x *ChannelOpenResult) Reset() {
 	*x = ChannelOpenResult{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[2]
+	mi := &file_session_session_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -350,7 +350,7 @@ func (x *ChannelOpenResult) String() string {
 func (*ChannelOpenResult) ProtoMessage() {}
 
 func (x *ChannelOpenResult) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[2]
+	mi := &file_session_session_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -363,7 +363,7 @@ func (x *ChannelOpenResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelOpenResult.ProtoReflect.Descriptor instead.
 func (*ChannelOpenResult) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{2}
+	return file_session_session_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ChannelOpenResult) GetRecipientChannelId() uint64 {
@@ -426,7 +426,7 @@ type ChannelOpenAccept struct {
 
 func (x *ChannelOpenAccept) Reset() {
 	*x = ChannelOpenAccept{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[3]
+	mi := &file_session_session_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +438,7 @@ func (x *ChannelOpenAccept) String() string {
 func (*ChannelOpenAccept) ProtoMessage() {}
 
 func (x *ChannelOpenAccept) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[3]
+	mi := &file_session_session_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +451,7 @@ func (x *ChannelOpenAccept) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelOpenAccept.ProtoReflect.Descriptor instead.
 func (*ChannelOpenAccept) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{3}
+	return file_session_session_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ChannelOpenAccept) GetSenderChannelId() uint64 {
@@ -493,7 +493,7 @@ type ChannelOpenReject struct {
 
 func (x *ChannelOpenReject) Reset() {
 	*x = ChannelOpenReject{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[4]
+	mi := &file_session_session_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -505,7 +505,7 @@ func (x *ChannelOpenReject) String() string {
 func (*ChannelOpenReject) ProtoMessage() {}
 
 func (x *ChannelOpenReject) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[4]
+	mi := &file_session_session_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -518,7 +518,7 @@ func (x *ChannelOpenReject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelOpenReject.ProtoReflect.Descriptor instead.
 func (*ChannelOpenReject) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{4}
+	return file_session_session_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ChannelOpenReject) GetCode() string {
@@ -552,7 +552,7 @@ type ChannelData struct {
 
 func (x *ChannelData) Reset() {
 	*x = ChannelData{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[5]
+	mi := &file_session_session_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -564,7 +564,7 @@ func (x *ChannelData) String() string {
 func (*ChannelData) ProtoMessage() {}
 
 func (x *ChannelData) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[5]
+	mi := &file_session_session_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -577,7 +577,7 @@ func (x *ChannelData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelData.ProtoReflect.Descriptor instead.
 func (*ChannelData) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{5}
+	return file_session_session_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ChannelData) GetRecipientChannelId() uint64 {
@@ -604,7 +604,7 @@ type ChannelWindowAdjust struct {
 
 func (x *ChannelWindowAdjust) Reset() {
 	*x = ChannelWindowAdjust{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[6]
+	mi := &file_session_session_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -616,7 +616,7 @@ func (x *ChannelWindowAdjust) String() string {
 func (*ChannelWindowAdjust) ProtoMessage() {}
 
 func (x *ChannelWindowAdjust) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[6]
+	mi := &file_session_session_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -629,7 +629,7 @@ func (x *ChannelWindowAdjust) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelWindowAdjust.ProtoReflect.Descriptor instead.
 func (*ChannelWindowAdjust) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{6}
+	return file_session_session_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ChannelWindowAdjust) GetRecipientChannelId() uint64 {
@@ -655,7 +655,7 @@ type ChannelEof struct {
 
 func (x *ChannelEof) Reset() {
 	*x = ChannelEof{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[7]
+	mi := &file_session_session_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -667,7 +667,7 @@ func (x *ChannelEof) String() string {
 func (*ChannelEof) ProtoMessage() {}
 
 func (x *ChannelEof) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[7]
+	mi := &file_session_session_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -680,7 +680,7 @@ func (x *ChannelEof) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelEof.ProtoReflect.Descriptor instead.
 func (*ChannelEof) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{7}
+	return file_session_session_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ChannelEof) GetRecipientChannelId() uint64 {
@@ -699,7 +699,7 @@ type ChannelClose struct {
 
 func (x *ChannelClose) Reset() {
 	*x = ChannelClose{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[8]
+	mi := &file_session_session_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -711,7 +711,7 @@ func (x *ChannelClose) String() string {
 func (*ChannelClose) ProtoMessage() {}
 
 func (x *ChannelClose) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[8]
+	mi := &file_session_session_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -724,7 +724,7 @@ func (x *ChannelClose) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelClose.ProtoReflect.Descriptor instead.
 func (*ChannelClose) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{8}
+	return file_session_session_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ChannelClose) GetRecipientChannelId() uint64 {
@@ -747,7 +747,7 @@ type ChannelRequest struct {
 
 func (x *ChannelRequest) Reset() {
 	*x = ChannelRequest{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[9]
+	mi := &file_session_session_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +759,7 @@ func (x *ChannelRequest) String() string {
 func (*ChannelRequest) ProtoMessage() {}
 
 func (x *ChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[9]
+	mi := &file_session_session_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +772,7 @@ func (x *ChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelRequest.ProtoReflect.Descriptor instead.
 func (*ChannelRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{9}
+	return file_session_session_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ChannelRequest) GetRecipientChannelId() uint64 {
@@ -825,7 +825,7 @@ type ChannelResult struct {
 
 func (x *ChannelResult) Reset() {
 	*x = ChannelResult{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[10]
+	mi := &file_session_session_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -837,7 +837,7 @@ func (x *ChannelResult) String() string {
 func (*ChannelResult) ProtoMessage() {}
 
 func (x *ChannelResult) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[10]
+	mi := &file_session_session_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -850,7 +850,7 @@ func (x *ChannelResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChannelResult.ProtoReflect.Descriptor instead.
 func (*ChannelResult) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{10}
+	return file_session_session_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ChannelResult) GetRecipientChannelId() uint64 {
@@ -920,7 +920,7 @@ type GlobalRequest struct {
 
 func (x *GlobalRequest) Reset() {
 	*x = GlobalRequest{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[11]
+	mi := &file_session_session_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -932,7 +932,7 @@ func (x *GlobalRequest) String() string {
 func (*GlobalRequest) ProtoMessage() {}
 
 func (x *GlobalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[11]
+	mi := &file_session_session_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -945,7 +945,7 @@ func (x *GlobalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalRequest.ProtoReflect.Descriptor instead.
 func (*GlobalRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{11}
+	return file_session_session_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GlobalRequest) GetRequestId() uint64 {
@@ -990,7 +990,7 @@ type GlobalResult struct {
 
 func (x *GlobalResult) Reset() {
 	*x = GlobalResult{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[12]
+	mi := &file_session_session_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1002,7 +1002,7 @@ func (x *GlobalResult) String() string {
 func (*GlobalResult) ProtoMessage() {}
 
 func (x *GlobalResult) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[12]
+	mi := &file_session_session_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1015,7 +1015,7 @@ func (x *GlobalResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GlobalResult.ProtoReflect.Descriptor instead.
 func (*GlobalResult) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{12}
+	return file_session_session_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *GlobalResult) GetRequestId() uint64 {
@@ -1075,7 +1075,7 @@ type OperationSuccess struct {
 
 func (x *OperationSuccess) Reset() {
 	*x = OperationSuccess{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[13]
+	mi := &file_session_session_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1087,7 +1087,7 @@ func (x *OperationSuccess) String() string {
 func (*OperationSuccess) ProtoMessage() {}
 
 func (x *OperationSuccess) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[13]
+	mi := &file_session_session_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1100,7 +1100,7 @@ func (x *OperationSuccess) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationSuccess.ProtoReflect.Descriptor instead.
 func (*OperationSuccess) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{13}
+	return file_session_session_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *OperationSuccess) GetPayload() []byte {
@@ -1121,7 +1121,7 @@ type OperationReject struct {
 
 func (x *OperationReject) Reset() {
 	*x = OperationReject{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[14]
+	mi := &file_session_session_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1133,7 +1133,7 @@ func (x *OperationReject) String() string {
 func (*OperationReject) ProtoMessage() {}
 
 func (x *OperationReject) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[14]
+	mi := &file_session_session_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1146,7 +1146,7 @@ func (x *OperationReject) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationReject.ProtoReflect.Descriptor instead.
 func (*OperationReject) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{14}
+	return file_session_session_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *OperationReject) GetCode() string {
@@ -1180,7 +1180,7 @@ type Disconnect struct {
 
 func (x *Disconnect) Reset() {
 	*x = Disconnect{}
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[15]
+	mi := &file_session_session_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1192,7 +1192,7 @@ func (x *Disconnect) String() string {
 func (*Disconnect) ProtoMessage() {}
 
 func (x *Disconnect) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_session_v1_session_proto_msgTypes[15]
+	mi := &file_session_session_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1205,7 +1205,7 @@ func (x *Disconnect) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Disconnect.ProtoReflect.Descriptor instead.
 func (*Disconnect) Descriptor() ([]byte, []int) {
-	return file_mygosh_session_v1_session_proto_rawDescGZIP(), []int{15}
+	return file_session_session_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Disconnect) GetCode() string {
@@ -1222,26 +1222,26 @@ func (x *Disconnect) GetMessage() string {
 	return ""
 }
 
-var File_mygosh_session_v1_session_proto protoreflect.FileDescriptor
+var File_session_session_proto protoreflect.FileDescriptor
 
-const file_mygosh_session_v1_session_proto_rawDesc = "" +
+const file_session_session_proto_rawDesc = "" +
 	"\n" +
-	"\x1fmygosh/session/v1/session.proto\x12\x11mygosh.session.v1\x1a\x1bbuf/validate/validate.proto\"\xd0\x06\n" +
-	"\bEnvelope\x12C\n" +
-	"\fchannel_open\x18\x01 \x01(\v2\x1e.mygosh.session.v1.ChannelOpenH\x00R\vchannelOpen\x12V\n" +
-	"\x13channel_open_result\x18\x02 \x01(\v2$.mygosh.session.v1.ChannelOpenResultH\x00R\x11channelOpenResult\x12C\n" +
-	"\fchannel_data\x18\x03 \x01(\v2\x1e.mygosh.session.v1.ChannelDataH\x00R\vchannelData\x12\\\n" +
-	"\x15channel_window_adjust\x18\x04 \x01(\v2&.mygosh.session.v1.ChannelWindowAdjustH\x00R\x13channelWindowAdjust\x12@\n" +
-	"\vchannel_eof\x18\x05 \x01(\v2\x1d.mygosh.session.v1.ChannelEofH\x00R\n" +
-	"channelEof\x12F\n" +
-	"\rchannel_close\x18\x06 \x01(\v2\x1f.mygosh.session.v1.ChannelCloseH\x00R\fchannelClose\x12L\n" +
-	"\x0fchannel_request\x18\a \x01(\v2!.mygosh.session.v1.ChannelRequestH\x00R\x0echannelRequest\x12I\n" +
-	"\x0echannel_result\x18\b \x01(\v2 .mygosh.session.v1.ChannelResultH\x00R\rchannelResult\x12I\n" +
-	"\x0eglobal_request\x18\t \x01(\v2 .mygosh.session.v1.GlobalRequestH\x00R\rglobalRequest\x12F\n" +
+	"\x15session/session.proto\x12\asession\x1a\x1bbuf/validate/validate.proto\"\xe2\x05\n" +
+	"\bEnvelope\x129\n" +
+	"\fchannel_open\x18\x01 \x01(\v2\x14.session.ChannelOpenH\x00R\vchannelOpen\x12L\n" +
+	"\x13channel_open_result\x18\x02 \x01(\v2\x1a.session.ChannelOpenResultH\x00R\x11channelOpenResult\x129\n" +
+	"\fchannel_data\x18\x03 \x01(\v2\x14.session.ChannelDataH\x00R\vchannelData\x12R\n" +
+	"\x15channel_window_adjust\x18\x04 \x01(\v2\x1c.session.ChannelWindowAdjustH\x00R\x13channelWindowAdjust\x126\n" +
+	"\vchannel_eof\x18\x05 \x01(\v2\x13.session.ChannelEofH\x00R\n" +
+	"channelEof\x12<\n" +
+	"\rchannel_close\x18\x06 \x01(\v2\x15.session.ChannelCloseH\x00R\fchannelClose\x12B\n" +
+	"\x0fchannel_request\x18\a \x01(\v2\x17.session.ChannelRequestH\x00R\x0echannelRequest\x12?\n" +
+	"\x0echannel_result\x18\b \x01(\v2\x16.session.ChannelResultH\x00R\rchannelResult\x12?\n" +
+	"\x0eglobal_request\x18\t \x01(\v2\x16.session.GlobalRequestH\x00R\rglobalRequest\x12<\n" +
 	"\rglobal_result\x18\n" +
-	" \x01(\v2\x1f.mygosh.session.v1.GlobalResultH\x00R\fglobalResult\x12?\n" +
+	" \x01(\v2\x15.session.GlobalResultH\x00R\fglobalResult\x125\n" +
 	"\n" +
-	"disconnect\x18\v \x01(\v2\x1d.mygosh.session.v1.DisconnectH\x00R\n" +
+	"disconnect\x18\v \x01(\v2\x13.session.DisconnectH\x00R\n" +
 	"disconnectB\r\n" +
 	"\x04kind\x12\x05\xbaH\x02\b\x01\"\xe0\x01\n" +
 	"\vChannelOpen\x12*\n" +
@@ -1249,11 +1249,11 @@ const file_mygosh_session_v1_session_proto_rawDesc = "" +
 	"\x11sender_channel_id\x18\x02 \x01(\x04R\x0fsenderChannelId\x12.\n" +
 	"\x0einitial_window\x18\x03 \x01(\rB\a\xbaH\x04*\x02 \x00R\rinitialWindow\x12/\n" +
 	"\x0fmax_packet_size\x18\x04 \x01(\rB\a\xbaH\x04*\x02 \x00R\rmaxPacketSize\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\"\xd8\x01\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\"\xc4\x01\n" +
 	"\x11ChannelOpenResult\x120\n" +
-	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12@\n" +
-	"\asuccess\x18\x02 \x01(\v2$.mygosh.session.v1.ChannelOpenAcceptH\x00R\asuccess\x12>\n" +
-	"\x06reject\x18\x03 \x01(\v2$.mygosh.session.v1.ChannelOpenRejectH\x00R\x06rejectB\x0f\n" +
+	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x126\n" +
+	"\asuccess\x18\x02 \x01(\v2\x1a.session.ChannelOpenAcceptH\x00R\asuccess\x124\n" +
+	"\x06reject\x18\x03 \x01(\v2\x1a.session.ChannelOpenRejectH\x00R\x06rejectB\x0f\n" +
 	"\x06result\x12\x05\xbaH\x02\b\x01\"\xba\x01\n" +
 	"\x11ChannelOpenAccept\x12*\n" +
 	"\x11sender_channel_id\x18\x01 \x01(\x04R\x0fsenderChannelId\x12.\n" +
@@ -1283,13 +1283,13 @@ const file_mygosh_session_v1_session_proto_rawDesc = "" +
 	"\frequest_type\x18\x03 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\vrequestType\x12\x1d\n" +
 	"\n" +
 	"want_reply\x18\x04 \x01(\bR\twantReply\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\"\xf0\x01\n" +
+	"\apayload\x18\x05 \x01(\fR\apayload\"\xdc\x01\n" +
 	"\rChannelResult\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x02 \x01(\x04R\trequestId\x12?\n" +
-	"\asuccess\x18\x03 \x01(\v2#.mygosh.session.v1.OperationSuccessH\x00R\asuccess\x12<\n" +
-	"\x06reject\x18\x04 \x01(\v2\".mygosh.session.v1.OperationRejectH\x00R\x06rejectB\x0f\n" +
+	"request_id\x18\x02 \x01(\x04R\trequestId\x125\n" +
+	"\asuccess\x18\x03 \x01(\v2\x19.session.OperationSuccessH\x00R\asuccess\x122\n" +
+	"\x06reject\x18\x04 \x01(\v2\x18.session.OperationRejectH\x00R\x06rejectB\x0f\n" +
 	"\x06result\x12\x05\xbaH\x02\b\x01\"\x93\x01\n" +
 	"\rGlobalRequest\x12\x1d\n" +
 	"\n" +
@@ -1297,12 +1297,12 @@ const file_mygosh_session_v1_session_proto_rawDesc = "" +
 	"\frequest_type\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\vrequestType\x12\x1d\n" +
 	"\n" +
 	"want_reply\x18\x03 \x01(\bR\twantReply\x12\x18\n" +
-	"\apayload\x18\x04 \x01(\fR\apayload\"\xbd\x01\n" +
+	"\apayload\x18\x04 \x01(\fR\apayload\"\xa9\x01\n" +
 	"\fGlobalResult\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\x04R\trequestId\x12?\n" +
-	"\asuccess\x18\x02 \x01(\v2#.mygosh.session.v1.OperationSuccessH\x00R\asuccess\x12<\n" +
-	"\x06reject\x18\x03 \x01(\v2\".mygosh.session.v1.OperationRejectH\x00R\x06rejectB\x0f\n" +
+	"request_id\x18\x01 \x01(\x04R\trequestId\x125\n" +
+	"\asuccess\x18\x02 \x01(\v2\x19.session.OperationSuccessH\x00R\asuccess\x122\n" +
+	"\x06reject\x18\x03 \x01(\v2\x18.session.OperationRejectH\x00R\x06rejectB\x0f\n" +
 	"\x06result\x12\x05\xbaH\x02\b\x01\",\n" +
 	"\x10OperationSuccess\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\"b\n" +
@@ -1316,54 +1316,54 @@ const file_mygosh_session_v1_session_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\amessageB<Z:github.com/Mikadore/mygosh/lib/session/sessionpb;sessionpbb\x06proto3"
 
 var (
-	file_mygosh_session_v1_session_proto_rawDescOnce sync.Once
-	file_mygosh_session_v1_session_proto_rawDescData []byte
+	file_session_session_proto_rawDescOnce sync.Once
+	file_session_session_proto_rawDescData []byte
 )
 
-func file_mygosh_session_v1_session_proto_rawDescGZIP() []byte {
-	file_mygosh_session_v1_session_proto_rawDescOnce.Do(func() {
-		file_mygosh_session_v1_session_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_mygosh_session_v1_session_proto_rawDesc), len(file_mygosh_session_v1_session_proto_rawDesc)))
+func file_session_session_proto_rawDescGZIP() []byte {
+	file_session_session_proto_rawDescOnce.Do(func() {
+		file_session_session_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_session_session_proto_rawDesc), len(file_session_session_proto_rawDesc)))
 	})
-	return file_mygosh_session_v1_session_proto_rawDescData
+	return file_session_session_proto_rawDescData
 }
 
-var file_mygosh_session_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
-var file_mygosh_session_v1_session_proto_goTypes = []any{
-	(*Envelope)(nil),            // 0: mygosh.session.v1.Envelope
-	(*ChannelOpen)(nil),         // 1: mygosh.session.v1.ChannelOpen
-	(*ChannelOpenResult)(nil),   // 2: mygosh.session.v1.ChannelOpenResult
-	(*ChannelOpenAccept)(nil),   // 3: mygosh.session.v1.ChannelOpenAccept
-	(*ChannelOpenReject)(nil),   // 4: mygosh.session.v1.ChannelOpenReject
-	(*ChannelData)(nil),         // 5: mygosh.session.v1.ChannelData
-	(*ChannelWindowAdjust)(nil), // 6: mygosh.session.v1.ChannelWindowAdjust
-	(*ChannelEof)(nil),          // 7: mygosh.session.v1.ChannelEof
-	(*ChannelClose)(nil),        // 8: mygosh.session.v1.ChannelClose
-	(*ChannelRequest)(nil),      // 9: mygosh.session.v1.ChannelRequest
-	(*ChannelResult)(nil),       // 10: mygosh.session.v1.ChannelResult
-	(*GlobalRequest)(nil),       // 11: mygosh.session.v1.GlobalRequest
-	(*GlobalResult)(nil),        // 12: mygosh.session.v1.GlobalResult
-	(*OperationSuccess)(nil),    // 13: mygosh.session.v1.OperationSuccess
-	(*OperationReject)(nil),     // 14: mygosh.session.v1.OperationReject
-	(*Disconnect)(nil),          // 15: mygosh.session.v1.Disconnect
+var file_session_session_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_session_session_proto_goTypes = []any{
+	(*Envelope)(nil),            // 0: session.Envelope
+	(*ChannelOpen)(nil),         // 1: session.ChannelOpen
+	(*ChannelOpenResult)(nil),   // 2: session.ChannelOpenResult
+	(*ChannelOpenAccept)(nil),   // 3: session.ChannelOpenAccept
+	(*ChannelOpenReject)(nil),   // 4: session.ChannelOpenReject
+	(*ChannelData)(nil),         // 5: session.ChannelData
+	(*ChannelWindowAdjust)(nil), // 6: session.ChannelWindowAdjust
+	(*ChannelEof)(nil),          // 7: session.ChannelEof
+	(*ChannelClose)(nil),        // 8: session.ChannelClose
+	(*ChannelRequest)(nil),      // 9: session.ChannelRequest
+	(*ChannelResult)(nil),       // 10: session.ChannelResult
+	(*GlobalRequest)(nil),       // 11: session.GlobalRequest
+	(*GlobalResult)(nil),        // 12: session.GlobalResult
+	(*OperationSuccess)(nil),    // 13: session.OperationSuccess
+	(*OperationReject)(nil),     // 14: session.OperationReject
+	(*Disconnect)(nil),          // 15: session.Disconnect
 }
-var file_mygosh_session_v1_session_proto_depIdxs = []int32{
-	1,  // 0: mygosh.session.v1.Envelope.channel_open:type_name -> mygosh.session.v1.ChannelOpen
-	2,  // 1: mygosh.session.v1.Envelope.channel_open_result:type_name -> mygosh.session.v1.ChannelOpenResult
-	5,  // 2: mygosh.session.v1.Envelope.channel_data:type_name -> mygosh.session.v1.ChannelData
-	6,  // 3: mygosh.session.v1.Envelope.channel_window_adjust:type_name -> mygosh.session.v1.ChannelWindowAdjust
-	7,  // 4: mygosh.session.v1.Envelope.channel_eof:type_name -> mygosh.session.v1.ChannelEof
-	8,  // 5: mygosh.session.v1.Envelope.channel_close:type_name -> mygosh.session.v1.ChannelClose
-	9,  // 6: mygosh.session.v1.Envelope.channel_request:type_name -> mygosh.session.v1.ChannelRequest
-	10, // 7: mygosh.session.v1.Envelope.channel_result:type_name -> mygosh.session.v1.ChannelResult
-	11, // 8: mygosh.session.v1.Envelope.global_request:type_name -> mygosh.session.v1.GlobalRequest
-	12, // 9: mygosh.session.v1.Envelope.global_result:type_name -> mygosh.session.v1.GlobalResult
-	15, // 10: mygosh.session.v1.Envelope.disconnect:type_name -> mygosh.session.v1.Disconnect
-	3,  // 11: mygosh.session.v1.ChannelOpenResult.success:type_name -> mygosh.session.v1.ChannelOpenAccept
-	4,  // 12: mygosh.session.v1.ChannelOpenResult.reject:type_name -> mygosh.session.v1.ChannelOpenReject
-	13, // 13: mygosh.session.v1.ChannelResult.success:type_name -> mygosh.session.v1.OperationSuccess
-	14, // 14: mygosh.session.v1.ChannelResult.reject:type_name -> mygosh.session.v1.OperationReject
-	13, // 15: mygosh.session.v1.GlobalResult.success:type_name -> mygosh.session.v1.OperationSuccess
-	14, // 16: mygosh.session.v1.GlobalResult.reject:type_name -> mygosh.session.v1.OperationReject
+var file_session_session_proto_depIdxs = []int32{
+	1,  // 0: session.Envelope.channel_open:type_name -> session.ChannelOpen
+	2,  // 1: session.Envelope.channel_open_result:type_name -> session.ChannelOpenResult
+	5,  // 2: session.Envelope.channel_data:type_name -> session.ChannelData
+	6,  // 3: session.Envelope.channel_window_adjust:type_name -> session.ChannelWindowAdjust
+	7,  // 4: session.Envelope.channel_eof:type_name -> session.ChannelEof
+	8,  // 5: session.Envelope.channel_close:type_name -> session.ChannelClose
+	9,  // 6: session.Envelope.channel_request:type_name -> session.ChannelRequest
+	10, // 7: session.Envelope.channel_result:type_name -> session.ChannelResult
+	11, // 8: session.Envelope.global_request:type_name -> session.GlobalRequest
+	12, // 9: session.Envelope.global_result:type_name -> session.GlobalResult
+	15, // 10: session.Envelope.disconnect:type_name -> session.Disconnect
+	3,  // 11: session.ChannelOpenResult.success:type_name -> session.ChannelOpenAccept
+	4,  // 12: session.ChannelOpenResult.reject:type_name -> session.ChannelOpenReject
+	13, // 13: session.ChannelResult.success:type_name -> session.OperationSuccess
+	14, // 14: session.ChannelResult.reject:type_name -> session.OperationReject
+	13, // 15: session.GlobalResult.success:type_name -> session.OperationSuccess
+	14, // 16: session.GlobalResult.reject:type_name -> session.OperationReject
 	17, // [17:17] is the sub-list for method output_type
 	17, // [17:17] is the sub-list for method input_type
 	17, // [17:17] is the sub-list for extension type_name
@@ -1371,12 +1371,12 @@ var file_mygosh_session_v1_session_proto_depIdxs = []int32{
 	0,  // [0:17] is the sub-list for field type_name
 }
 
-func init() { file_mygosh_session_v1_session_proto_init() }
-func file_mygosh_session_v1_session_proto_init() {
-	if File_mygosh_session_v1_session_proto != nil {
+func init() { file_session_session_proto_init() }
+func file_session_session_proto_init() {
+	if File_session_session_proto != nil {
 		return
 	}
-	file_mygosh_session_v1_session_proto_msgTypes[0].OneofWrappers = []any{
+	file_session_session_proto_msgTypes[0].OneofWrappers = []any{
 		(*Envelope_ChannelOpen)(nil),
 		(*Envelope_ChannelOpenResult)(nil),
 		(*Envelope_ChannelData)(nil),
@@ -1389,15 +1389,15 @@ func file_mygosh_session_v1_session_proto_init() {
 		(*Envelope_GlobalResult)(nil),
 		(*Envelope_Disconnect)(nil),
 	}
-	file_mygosh_session_v1_session_proto_msgTypes[2].OneofWrappers = []any{
+	file_session_session_proto_msgTypes[2].OneofWrappers = []any{
 		(*ChannelOpenResult_Success)(nil),
 		(*ChannelOpenResult_Reject)(nil),
 	}
-	file_mygosh_session_v1_session_proto_msgTypes[10].OneofWrappers = []any{
+	file_session_session_proto_msgTypes[10].OneofWrappers = []any{
 		(*ChannelResult_Success)(nil),
 		(*ChannelResult_Reject)(nil),
 	}
-	file_mygosh_session_v1_session_proto_msgTypes[12].OneofWrappers = []any{
+	file_session_session_proto_msgTypes[12].OneofWrappers = []any{
 		(*GlobalResult_Success)(nil),
 		(*GlobalResult_Reject)(nil),
 	}
@@ -1405,17 +1405,17 @@ func file_mygosh_session_v1_session_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mygosh_session_v1_session_proto_rawDesc), len(file_mygosh_session_v1_session_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_session_proto_rawDesc), len(file_session_session_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_mygosh_session_v1_session_proto_goTypes,
-		DependencyIndexes: file_mygosh_session_v1_session_proto_depIdxs,
-		MessageInfos:      file_mygosh_session_v1_session_proto_msgTypes,
+		GoTypes:           file_session_session_proto_goTypes,
+		DependencyIndexes: file_session_session_proto_depIdxs,
+		MessageInfos:      file_session_session_proto_msgTypes,
 	}.Build()
-	File_mygosh_session_v1_session_proto = out.File
-	file_mygosh_session_v1_session_proto_goTypes = nil
-	file_mygosh_session_v1_session_proto_depIdxs = nil
+	File_session_session_proto = out.File
+	file_session_session_proto_goTypes = nil
+	file_session_session_proto_depIdxs = nil
 }

@@ -18,8 +18,8 @@ The current repository baseline is:
 - role-specific handshake/auth/session composition lives in `lib/establish`
 - file-backed trust stubs live in `lib/trust`
 - app-scoped wiring for settings and logging lives in `app/root`
-- auth traffic uses `mygosh.auth.v1.AuthFrame`
-- post-auth traffic uses `mygosh.session.v1.Envelope`
+- auth traffic uses `auth.AuthFrame`
+- post-auth traffic uses `session.Envelope`
 - `lib/session` contains an initial session/channel multiplexer with channel open, data, request, window-adjust, and disconnect handling
 - `lib/session` stays role agnostic and implements the mygosh session protocol boundary
 - the establishment path enforces built-in handshake/auth timeouts through `lib/session.Runtime`

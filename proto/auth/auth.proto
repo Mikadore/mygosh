@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package mygosh.auth.v1;
+package auth;
 
 import "buf/validate/validate.proto";
 

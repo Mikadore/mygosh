@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: mygosh/service/v1/session_service.proto
+// source: service/command.proto
 
 package servicepb
 
@@ -33,7 +33,7 @@ type PtyRequest struct {
 
 func (x *PtyRequest) Reset() {
 	*x = PtyRequest{}
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[0]
+	mi := &file_service_command_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -45,7 +45,7 @@ func (x *PtyRequest) String() string {
 func (*PtyRequest) ProtoMessage() {}
 
 func (x *PtyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[0]
+	mi := &file_service_command_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -58,7 +58,7 @@ func (x *PtyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PtyRequest.ProtoReflect.Descriptor instead.
 func (*PtyRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_service_v1_session_service_proto_rawDescGZIP(), []int{0}
+	return file_service_command_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PtyRequest) GetTerm() string {
@@ -90,7 +90,7 @@ type ShellRequest struct {
 
 func (x *ShellRequest) Reset() {
 	*x = ShellRequest{}
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[1]
+	mi := &file_service_command_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -102,7 +102,7 @@ func (x *ShellRequest) String() string {
 func (*ShellRequest) ProtoMessage() {}
 
 func (x *ShellRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[1]
+	mi := &file_service_command_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -115,7 +115,7 @@ func (x *ShellRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShellRequest.ProtoReflect.Descriptor instead.
 func (*ShellRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_service_v1_session_service_proto_rawDescGZIP(), []int{1}
+	return file_service_command_proto_rawDescGZIP(), []int{1}
 }
 
 type ExecRequest struct {
@@ -127,7 +127,7 @@ type ExecRequest struct {
 
 func (x *ExecRequest) Reset() {
 	*x = ExecRequest{}
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[2]
+	mi := &file_service_command_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +139,7 @@ func (x *ExecRequest) String() string {
 func (*ExecRequest) ProtoMessage() {}
 
 func (x *ExecRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[2]
+	mi := &file_service_command_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +152,7 @@ func (x *ExecRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecRequest.ProtoReflect.Descriptor instead.
 func (*ExecRequest) Descriptor() ([]byte, []int) {
-	return file_mygosh_service_v1_session_service_proto_rawDescGZIP(), []int{2}
+	return file_service_command_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ExecRequest) GetCommand() string {
@@ -172,7 +172,7 @@ type WindowChange struct {
 
 func (x *WindowChange) Reset() {
 	*x = WindowChange{}
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[3]
+	mi := &file_service_command_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -184,7 +184,7 @@ func (x *WindowChange) String() string {
 func (*WindowChange) ProtoMessage() {}
 
 func (x *WindowChange) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[3]
+	mi := &file_service_command_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -197,7 +197,7 @@ func (x *WindowChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WindowChange.ProtoReflect.Descriptor instead.
 func (*WindowChange) Descriptor() ([]byte, []int) {
-	return file_mygosh_service_v1_session_service_proto_rawDescGZIP(), []int{3}
+	return file_service_command_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *WindowChange) GetRows() uint32 {
@@ -223,7 +223,7 @@ type ExitStatus struct {
 
 func (x *ExitStatus) Reset() {
 	*x = ExitStatus{}
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[4]
+	mi := &file_service_command_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -235,7 +235,7 @@ func (x *ExitStatus) String() string {
 func (*ExitStatus) ProtoMessage() {}
 
 func (x *ExitStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_mygosh_service_v1_session_service_proto_msgTypes[4]
+	mi := &file_service_command_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -248,7 +248,7 @@ func (x *ExitStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitStatus.ProtoReflect.Descriptor instead.
 func (*ExitStatus) Descriptor() ([]byte, []int) {
-	return file_mygosh_service_v1_session_service_proto_rawDescGZIP(), []int{4}
+	return file_service_command_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ExitStatus) GetCode() int32 {
@@ -258,11 +258,11 @@ func (x *ExitStatus) GetCode() int32 {
 	return 0
 }
 
-var File_mygosh_service_v1_session_service_proto protoreflect.FileDescriptor
+var File_service_command_proto protoreflect.FileDescriptor
 
-const file_mygosh_service_v1_session_service_proto_rawDesc = "" +
+const file_service_command_proto_rawDesc = "" +
 	"\n" +
-	"'mygosh/service/v1/session_service.proto\x12\x11mygosh.service.v1\x1a\x1bbuf/validate/validate.proto\"^\n" +
+	"\x15service/command.proto\x12\aservice\x1a\x1bbuf/validate/validate.proto\"^\n" +
 	"\n" +
 	"PtyRequest\x12\x12\n" +
 	"\x04term\x18\x01 \x01(\tR\x04term\x12\x1d\n" +
@@ -279,26 +279,26 @@ const file_mygosh_service_v1_session_service_proto_rawDesc = "" +
 	"\x04code\x18\x01 \x01(\x05R\x04codeB<Z:github.com/Mikadore/mygosh/lib/service/servicepb;servicepbb\x06proto3"
 
 var (
-	file_mygosh_service_v1_session_service_proto_rawDescOnce sync.Once
-	file_mygosh_service_v1_session_service_proto_rawDescData []byte
+	file_service_command_proto_rawDescOnce sync.Once
+	file_service_command_proto_rawDescData []byte
 )
 
-func file_mygosh_service_v1_session_service_proto_rawDescGZIP() []byte {
-	file_mygosh_service_v1_session_service_proto_rawDescOnce.Do(func() {
-		file_mygosh_service_v1_session_service_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_mygosh_service_v1_session_service_proto_rawDesc), len(file_mygosh_service_v1_session_service_proto_rawDesc)))
+func file_service_command_proto_rawDescGZIP() []byte {
+	file_service_command_proto_rawDescOnce.Do(func() {
+		file_service_command_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_service_command_proto_rawDesc), len(file_service_command_proto_rawDesc)))
 	})
-	return file_mygosh_service_v1_session_service_proto_rawDescData
+	return file_service_command_proto_rawDescData
 }
 
-var file_mygosh_service_v1_session_service_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
-var file_mygosh_service_v1_session_service_proto_goTypes = []any{
-	(*PtyRequest)(nil),   // 0: mygosh.service.v1.PtyRequest
-	(*ShellRequest)(nil), // 1: mygosh.service.v1.ShellRequest
-	(*ExecRequest)(nil),  // 2: mygosh.service.v1.ExecRequest
-	(*WindowChange)(nil), // 3: mygosh.service.v1.WindowChange
-	(*ExitStatus)(nil),   // 4: mygosh.service.v1.ExitStatus
+var file_service_command_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_service_command_proto_goTypes = []any{
+	(*PtyRequest)(nil),   // 0: service.PtyRequest
+	(*ShellRequest)(nil), // 1: service.ShellRequest
+	(*ExecRequest)(nil),  // 2: service.ExecRequest
+	(*WindowChange)(nil), // 3: service.WindowChange
+	(*ExitStatus)(nil),   // 4: service.ExitStatus
 }
-var file_mygosh_service_v1_session_service_proto_depIdxs = []int32{
+var file_service_command_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
 	0, // [0:0] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -306,26 +306,26 @@ var file_mygosh_service_v1_session_service_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for field type_name
 }
 
-func init() { file_mygosh_service_v1_session_service_proto_init() }
-func file_mygosh_service_v1_session_service_proto_init() {
-	if File_mygosh_service_v1_session_service_proto != nil {
+func init() { file_service_command_proto_init() }
+func file_service_command_proto_init() {
+	if File_service_command_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mygosh_service_v1_session_service_proto_rawDesc), len(file_mygosh_service_v1_session_service_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_service_command_proto_rawDesc), len(file_service_command_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_mygosh_service_v1_session_service_proto_goTypes,
-		DependencyIndexes: file_mygosh_service_v1_session_service_proto_depIdxs,
-		MessageInfos:      file_mygosh_service_v1_session_service_proto_msgTypes,
+		GoTypes:           file_service_command_proto_goTypes,
+		DependencyIndexes: file_service_command_proto_depIdxs,
+		MessageInfos:      file_service_command_proto_msgTypes,
 	}.Build()
-	File_mygosh_service_v1_session_service_proto = out.File
-	file_mygosh_service_v1_session_service_proto_goTypes = nil
-	file_mygosh_service_v1_session_service_proto_depIdxs = nil
+	File_service_command_proto = out.File
+	file_service_command_proto_goTypes = nil
+	file_service_command_proto_depIdxs = nil
 }

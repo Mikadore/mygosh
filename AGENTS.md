@@ -67,7 +67,7 @@ Today the repository has completed the auth/session split:
 - `lib/establish.Connect` and `lib/establish.Accept` are the authenticated session construction entry points today.
 - `lib/session` may own shared connection-runtime details such as target handoff, cancellation, and handshake/auth timeout enforcement, but not role-specific policy.
 - Auth code should run the authentication protocol with the supplied identities and keys; it should not decide local policy, `known_hosts` file paths, `authorized_keys` parsing, selected service, or requested channel type.
-- Auth protocol messages live only in `mygosh.auth.v1.AuthFrame`; session protocol messages live only in `mygosh.session.v1.Envelope`.
+- Auth protocol messages live only in `auth.AuthFrame`; session protocol messages live only in `session.Envelope`.
 - Auth messages must not include which service or channel the client wants to run.
 - Every auth initiation or request must have a corresponding reply, including rejection and error paths.
 - Signed auth payloads use deterministic protobuf serialization; do not reintroduce a second canonicalization scheme for auth blobs.

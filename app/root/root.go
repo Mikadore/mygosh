@@ -15,16 +15,27 @@ type ShutdownFunc func(context.Context) error
 type Root struct {
 	Settings settings.Settings
 	Logger   *slog.Logger
+	Logging  *logging.Service
 
 	mu        sync.Mutex
 	shutdowns []ShutdownFunc
 }
 
-func New(cfg settings.Settings) *Root {
-	return &Root{
-		Settings: cfg,
-		Logger:   logging.New(cfg.Log),
+func New(cfg settings.Settings) (*Root, error) {
+	loggingService, err := logging.NewService(cfg.Log)
+	if err != nil {
+		return nil, err
 	}
+
+	root := &Root{
+		Settings: cfg,
+		Logger:   loggingService.Logger(),
+		Logging:  loggingService,
+	}
+	root.RegisterShutdown(func(context.Context) error {
+		return loggingService.Close()
+	})
+	return root, nil
 }
 
 func (r *Root) RegisterShutdown(fn ShutdownFunc) {

@@ -4,8 +4,11 @@ port = 42022
 shell = "/bin/bash"
 
 [log]
-# One of: DEBUG INFO WARN ERROR FATAL
+# One of: DEBUG INFO WARN ERROR FATAL NONE
 level = "DEBUG"
 
-# Output logs as JSON
+# Output console logs as JSON
 json = false
+
+# Append structured JSON logs to this file
+file = "mygosh.log"

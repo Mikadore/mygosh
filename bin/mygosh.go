@@ -47,7 +47,11 @@ func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 				return err
 			}
 			cfg = loaded
-			appRoot = root.New(cfg)
+			createdRoot, err := root.New(cfg)
+			if err != nil {
+				return err
+			}
+			appRoot = createdRoot
 			return nil
 		},
 	}

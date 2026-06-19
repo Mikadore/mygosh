@@ -59,6 +59,7 @@ shell = "/bin/bash"
 [log]
 level = "DEBUG"
 json = false
+file = "mygosh.log"
 ```
 
 `mygosh.toml` is currently expected to exist in the working directory; config defaults apply to missing fields inside that file, not to a missing file.
@@ -77,7 +78,9 @@ mygosh -v serve   # INFO and above
 mygosh -vv serve  # DEBUG and above
 ```
 
-The current `*slog.Logger` is constructed explicitly by the application root and passed through the active client/server/session/auth/trust path. Charm only formats its console output. That is intentional groundwork for later file logging, raw-TTY console suppression, and telemetry/export wiring at the handler layer.
+When `log.file` is set, logs are appended to that path as structured JSON with file permissions `0600`. The path is relative to the process working directory unless configured as an absolute path. Console logs continue to use Charm's text or JSON presentation according to `log.json`.
+
+The application root owns the logging service and passes its `*slog.Logger` through the active client/server/session/auth/trust path. Console output can be enabled or disabled through the service without interrupting file logging, allowing a future interactive client to suppress console logs while its TTY is raw.
 
 ## Run
 

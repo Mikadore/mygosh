@@ -27,6 +27,7 @@ type CoreSettings struct {
 type LogSettings struct {
 	Level string `mapstructure:"level"`
 	JSON  bool   `mapstructure:"json"`
+	File  string `mapstructure:"file"`
 }
 
 func Load(verbosity int) (Settings, error) {
@@ -38,6 +39,7 @@ func Load(verbosity int) (Settings, error) {
 	reader.SetDefault("core.shell", "/bin/sh")
 	reader.SetDefault("log.level", "")
 	reader.SetDefault("log.json", false)
+	reader.SetDefault("log.file", "")
 
 	if err := reader.ReadInConfig(); err != nil {
 		return Settings{}, eris.Wrapf(err, "read config file %s", ConfigFile)
@@ -52,6 +54,7 @@ func Load(verbosity int) (Settings, error) {
 	cfg.Verbosity = verbosity
 	cfg.Core.Host = strings.TrimSpace(cfg.Core.Host)
 	cfg.Log.Level = strings.ToUpper(strings.TrimSpace(cfg.Log.Level))
+	cfg.Log.File = strings.TrimSpace(cfg.Log.File)
 	if cfg.Log.Level == "WARNING" {
 		cfg.Log.Level = "WARN"
 	}

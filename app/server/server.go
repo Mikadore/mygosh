@@ -6,7 +6,7 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/auth"
-	"github.com/Mikadore/mygosh/lib/connection"
+	"github.com/Mikadore/mygosh/lib/establish"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
@@ -51,7 +51,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		return err
 	}
 
-	established, err := connection.Accept(ctx, conn, connection.ServerConfig{
+	established, err := establish.Accept(ctx, conn, establish.ServerConfig{
 		HostKeyProvider:    auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
 		AuthorizeClientKey: trust.AuthorizedKeysClientKeyAuthorizerWithLogger(defaultAuthorizedKeysPaths, logger),
 		Logger:             logger,

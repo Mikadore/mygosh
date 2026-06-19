@@ -14,8 +14,8 @@ Today the repository has completed the auth/session split:
 - session traffic uses its own protobuf `Envelope` schema in `lib/session/sessionpb`
 - `lib/transport.Transport` is the concrete Noise-backed framed secure connection
 - protobuf marshaling sits above transport in `transport.SendProto` / `transport.ReceiveProto`
-- `lib/session` currently includes authenticated session construction plus an initial post-auth session/channel multiplexer
-- `lib/session` owns an internal connection runtime for parent-context shutdown plus handshake/auth timeouts
+- `lib/establish` composes Noise, auth, trust hooks, timeout enforcement, and session construction
+- `lib/session` owns the role-agnostic post-auth session/channel multiplexer plus the shared connection runtime
 - `lib/trust` holds the current file-backed trust stubs for private-key lookup, `known_hosts`, and `authorized_keys`
 - the default CLI client loads `~/.mygosh/id_ed25519` and verifies the server against `~/.mygosh/known_hosts`
 - the default CLI server loads `~/.mygosh/host_ed25519` and authorizes client keys from `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys`
@@ -29,7 +29,8 @@ Today the repository has completed the auth/session split:
 - `app/server/`: server application flow, TCP listening, current file-backed client authorization wiring, and provisional shell demo code not used by the default CLI path.
 - `lib/transport/`: concrete Noise-backed framed transport plus protobuf send/receive helpers.
 - `lib/auth/`: auth frame schema, authentication protocol/state machine, signed payloads, and auth transcript handling.
-- `lib/session/`: authenticated global session model and minimal post-auth protocol boundary.
+- `lib/establish/`: role-specific Noise/auth/session composition for client and server setup.
+- `lib/session/`: role-agnostic authenticated global session model and post-auth protocol boundary.
 - `lib/bincoder/`: small binary encoding helpers for framing and key formats.
 - `lib/keys/`: key generation, parsing, serialization, and signing helpers.
 - `lib/trust/`: file-backed trust helpers and current stubs for `known_hosts`, `authorized_keys`, and OpenSSH private-key lookup.
@@ -61,9 +62,9 @@ Today the repository has completed the auth/session split:
 
 - `lib/session/session.go` should model the global authenticated session itself, not PTY/client/server terminal behavior.
 - Authentication protocol logic and auth state transitions should live in `lib/auth`.
-- Session construction chooses and validates identities, keys, and trust hooks, then calls into the auth machinery.
-- `lib/session.Connect` and `lib/session.Accept` are the authenticated session construction entry points today.
-- `lib/session` may own internal connection-runtime details such as target handoff, cancellation, and handshake/auth timeout enforcement.
+- Session establishment chooses and validates identities, keys, and trust hooks, then calls into the auth machinery.
+- `lib/establish.Connect` and `lib/establish.Accept` are the authenticated session construction entry points today.
+- `lib/session` may own shared connection-runtime details such as target handoff, cancellation, and handshake/auth timeout enforcement, but not role-specific policy.
 - Auth code should run the authentication protocol with the supplied identities and keys; it should not decide local policy, `known_hosts` file paths, `authorized_keys` parsing, selected service, or requested channel type.
 - Auth protocol messages live only in `mygosh.auth.v1.AuthFrame`; session protocol messages live only in `mygosh.session.v1.Envelope`.
 - Auth messages must not include which service or channel the client wants to run.

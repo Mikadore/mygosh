@@ -3,7 +3,7 @@
 `mygosh` is a from-scratch, minimal SSH-like client/server experiment in Go.
 It is not SSH-compatible and does not use Go SSH libraries.
 
-The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, an authenticated session type with an initial post-auth channel/global-request multiplexer, and small file-backed trust stubs in `lib/trust`. The session layer owns connection shutdown plus handshake/auth timeout enforcement during construction. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the app-level flow is rebuilt on top of the newer session boundary.
+The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, a role-agnostic authenticated session type with an initial post-auth channel/global-request multiplexer, and small file-backed trust stubs in `lib/trust`. The role-specific establishment layer composes handshake, authentication, timeout enforcement, and session construction around that session boundary. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the app-level flow is rebuilt on top of the newer session boundary.
 
 The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory. Startup builds a small application root in `app/root` that owns settings, the current Charm logger, and future app-scoped shutdown-managed services.
 
@@ -11,16 +11,18 @@ The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` i
 
 The current repository baseline is:
 
-- Noise handshake plus auth completes through `lib/session.Connect` / `lib/session.Accept`
+- Noise handshake plus auth completes through `lib/establish.Connect` / `lib/establish.Accept`
 - the concrete secure connection type is `lib/transport.Transport`
 - protobuf framing above transport goes through `transport.SendProto` / `transport.ReceiveProto`
 - auth protocol/state transitions live in `lib/auth`
+- role-specific handshake/auth/session composition lives in `lib/establish`
 - file-backed trust stubs live in `lib/trust`
 - app-scoped wiring for settings and logging lives in `app/root`
 - auth traffic uses `mygosh.auth.v1.AuthFrame`
 - post-auth traffic uses `mygosh.session.v1.Envelope`
 - `lib/session` contains an initial session/channel multiplexer with channel open, data, request, window-adjust, and disconnect handling
-- session construction enforces built-in handshake/auth timeouts through an internal session runtime
+- `lib/session` stays role agnostic and implements the mygosh session protocol boundary
+- the establishment path enforces built-in handshake/auth timeouts through `lib/session.Runtime`
 - the default client loads its identity from `~/.mygosh/id_ed25519`
 - the default server loads its host key from `~/.mygosh/host_ed25519`
 - the default client verifies server host keys against `~/.mygosh/known_hosts`
@@ -63,7 +65,7 @@ json = false
 
 `core.shell` is currently only used by the provisional demo PTY code under `app/`; it is not exercised by the default auth-only CLI path.
 
-Handshake/auth timeout policy is currently internal to `lib/session` and is not exposed through `mygosh.toml`.
+Handshake/auth timeout policy is currently internal to the `lib/establish` path and shared `lib/session.Runtime`, and is not exposed through `mygosh.toml`.
 
 The trust file paths above are also currently hardcoded and are not configurable through `mygosh.toml`.
 

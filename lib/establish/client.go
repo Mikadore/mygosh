@@ -1,4 +1,4 @@
-package connection
+package establish
 
 import (
 	"context"
@@ -29,8 +29,9 @@ type Client struct {
 	Auth auth.ClientResult
 }
 
-// Connect is the client-side composition point: TCP ownership stays in app
-// code, auth stays role-specific, and the returned Session is role agnostic.
+// Connect is the client-side establishment path: TCP ownership stays in app
+// code, auth stays role-specific, and the returned Session remains role
+// agnostic.
 func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {

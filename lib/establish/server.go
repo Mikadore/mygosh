@@ -1,4 +1,4 @@
-package connection
+package establish
 
 import (
 	"context"
@@ -27,7 +27,7 @@ type Server struct {
 	Auth auth.ServerResult
 }
 
-// Accept is the server-side composition point. It intentionally keeps local
+// Accept is the server-side establishment path. It intentionally keeps local
 // trust and key providers outside the generic session multiplexer.
 func Accept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Server, error) {
 	ctx = normalizeContext(ctx)

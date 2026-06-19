@@ -3,6 +3,7 @@ package trust
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	usermodel "github.com/Mikadore/mygosh/lib/user"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 	"github.com/samber/lo"
 )
@@ -39,7 +39,7 @@ func AuthorizedKeysClientKeyAuthorizer(paths []string) auth.ClientKeyAuthorizer 
 	return AuthorizedKeysClientKeyAuthorizerWithLogger(paths, nil)
 }
 
-func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *charmlog.Logger) auth.ClientKeyAuthorizer {
+func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *slog.Logger) auth.ClientKeyAuthorizer {
 	configuredPaths := append([]string(nil), paths...)
 	logger = logging.Resolve(logger)
 

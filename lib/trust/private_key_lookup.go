@@ -1,13 +1,13 @@
 package trust
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -24,15 +24,15 @@ func LookupClientIdentity(path string) (keys.Keypair, error) {
 	return LookupClientIdentityWithLogger(path, nil)
 }
 
-func LookupHostKeyWithLogger(path string, logger *charmlog.Logger) (keys.Keypair, error) {
+func LookupHostKeyWithLogger(path string, logger *slog.Logger) (keys.Keypair, error) {
 	return lookupPrivateKey("host key", path, logger)
 }
 
-func LookupClientIdentityWithLogger(path string, logger *charmlog.Logger) (keys.Keypair, error) {
+func LookupClientIdentityWithLogger(path string, logger *slog.Logger) (keys.Keypair, error) {
 	return lookupPrivateKey("client identity", path, logger)
 }
 
-func lookupPrivateKey(label string, path string, logger *charmlog.Logger) (keys.Keypair, error) {
+func lookupPrivateKey(label string, path string, logger *slog.Logger) (keys.Keypair, error) {
 	resolvedPath, err := resolveCurrentUserPath(path)
 	if err != nil {
 		return keys.Keypair{}, eris.Wrapf(err, "resolve %s path", label)

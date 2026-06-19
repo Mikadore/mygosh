@@ -4,19 +4,19 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"sync"
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
 type Options struct {
 	Runtime *Runtime
-	Logger  *charmlog.Logger
+	Logger  *slog.Logger
 }
 
 type globalWaitResult struct {
@@ -27,7 +27,7 @@ type globalWaitResult struct {
 type Session struct {
 	runtime *Runtime
 	conn    transport.FramedConn
-	logger  *charmlog.Logger
+	logger  *slog.Logger
 	config  Config
 
 	mu                  sync.Mutex

@@ -51,8 +51,8 @@ Today the repository has completed the auth/session split:
 - Use protobuf for message serialization and protovalidate for schema validation where applicable.
 - Use deterministic protobuf serialization only for blobs or payloads that are signed.
 - Use `github.com/rotisserie/eris` for wrapped errors.
-- Use `github.com/charmbracelet/log` for logging.
-- Prefer passing explicit `*log.Logger` instances through app/session/auth/trust wiring over mutating a global default logger.
+- Use `log/slog` for logging and keep `github.com/charmbracelet/log` confined to `lib/logging` as the console presentation handler.
+- Prefer passing explicit `*slog.Logger` instances through app/session/auth/trust wiring over mutating a global default logger.
 - Do not target Windows.
 - Do not add SSH compatibility, ControlMaster, or reconnect/resume unless the roadmap explicitly moves to that step.
 - Factor potential process separation and the security impact of changes into further development and architecture decisions, even when the immediate implementation stays in-process.

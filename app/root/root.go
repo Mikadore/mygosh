@@ -3,9 +3,8 @@ package root
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
-
-	charmlog "github.com/charmbracelet/log"
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/settings"
@@ -15,7 +14,7 @@ type ShutdownFunc func(context.Context) error
 
 type Root struct {
 	Settings settings.Settings
-	Logger   *charmlog.Logger
+	Logger   *slog.Logger
 
 	mu        sync.Mutex
 	shutdowns []ShutdownFunc

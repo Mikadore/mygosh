@@ -3,13 +3,13 @@ package auth
 import (
 	"bytes"
 	"context"
+	"log/slog"
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/transport"
 	usermodel "github.com/Mikadore/mygosh/lib/user"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -152,7 +152,7 @@ type ClientConfig struct {
 	Username               string
 	ClientIdentityProvider ClientIdentityProvider
 	VerifyServerHostKey    HostKeyVerifier
-	Logger                 *charmlog.Logger
+	Logger                 *slog.Logger
 }
 
 func (c ClientConfig) Validate() error {
@@ -174,7 +174,7 @@ func (c ClientConfig) Validate() error {
 type ServerConfig struct {
 	HostKeyProvider    HostKeyProvider
 	AuthorizeClientKey ClientKeyAuthorizer
-	Logger             *charmlog.Logger
+	Logger             *slog.Logger
 }
 
 func (c ServerConfig) Validate() error {
@@ -224,10 +224,10 @@ type authMachine struct {
 	state          authState
 	conn           transport.BoundFramer
 	channelBinding []byte
-	logger         *charmlog.Logger
+	logger         *slog.Logger
 }
 
-func newAuthMachine(role string, conn transport.BoundFramer, logger *charmlog.Logger) *authMachine {
+func newAuthMachine(role string, conn transport.BoundFramer, logger *slog.Logger) *authMachine {
 	return &authMachine{
 		role:           role,
 		state:          authStateNoiseEstablished,

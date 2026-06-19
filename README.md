@@ -5,7 +5,7 @@ It is not SSH-compatible and does not use Go SSH libraries.
 
 The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, a role-agnostic authenticated session type with an initial post-auth channel/global-request multiplexer, and small file-backed trust stubs in `lib/trust`. The role-specific establishment layer composes handshake, authentication, timeout enforcement, and session construction around that session boundary. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the app-level flow is rebuilt on top of the newer session boundary.
 
-The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory. Startup builds a small application root in `app/root` that owns settings, the current Charm logger, and future app-scoped shutdown-managed services.
+The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory. Startup builds a small application root in `app/root` that owns settings, the application `slog` logger, and future app-scoped shutdown-managed services. Charm is used only as the logger's console presentation handler.
 
 ## Current Direction
 
@@ -77,7 +77,7 @@ mygosh -v serve   # INFO and above
 mygosh -vv serve  # DEBUG and above
 ```
 
-The current logger is constructed explicitly by the application root and passed through the active client/server/session/auth/trust path. That is intentional groundwork for later raw-TTY log redirection and telemetry/export wiring.
+The current `*slog.Logger` is constructed explicitly by the application root and passed through the active client/server/session/auth/trust path. Charm only formats its console output. That is intentional groundwork for later file logging, raw-TTY console suppression, and telemetry/export wiring at the handler layer.
 
 ## Run
 

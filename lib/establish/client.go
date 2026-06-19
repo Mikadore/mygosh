@@ -2,6 +2,7 @@ package establish
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"time"
 
@@ -9,7 +10,6 @@ import (
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/transport"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -21,7 +21,7 @@ type ClientConfig struct {
 	HandshakeTimeout       time.Duration
 	AuthTimeout            time.Duration
 	SessionConfig          session.Config
-	Logger                 *charmlog.Logger
+	Logger                 *slog.Logger
 }
 
 type Client struct {
@@ -47,7 +47,6 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
 	logger := logging.Resolve(cfg.Logger)
-	ctx = logging.IntoContext(ctx, logger)
 	logger.Debug("starting client connection", "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
 	runtime := session.NewRuntime(ctx, conn, logger)

@@ -2,10 +2,10 @@ package trust
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/logging"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -15,7 +15,7 @@ func KnownHostsHostKeyVerifier(path string) auth.HostKeyVerifier {
 	return KnownHostsHostKeyVerifierWithLogger(path, nil)
 }
 
-func KnownHostsHostKeyVerifierWithLogger(path string, logger *charmlog.Logger) auth.HostKeyVerifier {
+func KnownHostsHostKeyVerifierWithLogger(path string, logger *slog.Logger) auth.HostKeyVerifier {
 	logger = logging.Resolve(logger)
 	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
 		resolvedPath, err := resolveCurrentUserPath(path)

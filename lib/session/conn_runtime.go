@@ -3,11 +3,11 @@ package session
 import (
 	"context"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/logging"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
 
@@ -20,7 +20,7 @@ type Runtime struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	logger *charmlog.Logger
+	logger *slog.Logger
 
 	mu        sync.Mutex
 	target    io.Closer
@@ -28,7 +28,7 @@ type Runtime struct {
 	closeOnce sync.Once
 }
 
-func NewRuntime(parent context.Context, target io.Closer, logger *charmlog.Logger) *Runtime {
+func NewRuntime(parent context.Context, target io.Closer, logger *slog.Logger) *Runtime {
 	parent = normalizeContext(parent)
 
 	ctx, cancel := context.WithCancelCause(parent)

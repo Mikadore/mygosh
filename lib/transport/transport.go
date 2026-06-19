@@ -3,13 +3,13 @@ package transport
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/Mikadore/mygosh/lib/logging"
-	charmlog "github.com/charmbracelet/log"
 	"github.com/flynn/noise"
 	"github.com/rotisserie/eris"
 )
@@ -119,7 +119,7 @@ func HandshakeClient(conn net.Conn) (*Transport, error) {
 	return HandshakeClientWithLogger(conn, nil)
 }
 
-func HandshakeClientWithLogger(conn net.Conn, logger *charmlog.Logger) (*Transport, error) {
+func HandshakeClientWithLogger(conn net.Conn, logger *slog.Logger) (*Transport, error) {
 	config, err := createConfig(true)
 	if err != nil {
 		return nil, err
@@ -131,7 +131,7 @@ func HandshakeServer(conn net.Conn) (*Transport, error) {
 	return HandshakeServerWithLogger(conn, nil)
 }
 
-func HandshakeServerWithLogger(conn net.Conn, logger *charmlog.Logger) (*Transport, error) {
+func HandshakeServerWithLogger(conn net.Conn, logger *slog.Logger) (*Transport, error) {
 	config, err := createConfig(false)
 	if err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func HandshakeServerWithLogger(conn net.Conn, logger *charmlog.Logger) (*Transpo
 	return handshake(conn, config, logger)
 }
 
-func handshake(conn net.Conn, config noise.Config, logger *charmlog.Logger) (*Transport, error) {
+func handshake(conn net.Conn, config noise.Config, logger *slog.Logger) (*Transport, error) {
 	t := Transport{conn: conn}
 	state, err := noise.NewHandshakeState(config)
 	if err != nil {

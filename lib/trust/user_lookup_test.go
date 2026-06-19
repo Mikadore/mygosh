@@ -5,12 +5,13 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"os"
-	"os/user"
+	osuser "os/user"
 	"path/filepath"
 	"testing"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
+	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )
@@ -45,7 +46,7 @@ func TestGatherAuthorizedKeysSkipsMissingFiles(t *testing.T) {
 }
 
 func TestAuthorizedKeysClientKeyAuthorizerMatchesKeyForUser(t *testing.T) {
-	currentUser, err := user.Current()
+	currentUser, err := osuser.Current()
 	require.NoError(t, err)
 
 	keypair, err := keys.GenerateEd25519()
@@ -64,17 +65,13 @@ func TestAuthorizedKeysClientKeyAuthorizerMatchesKeyForUser(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, path, result.Source)
-	require.Equal(t, auth.LocalAccount{
-		Username: currentUser.Username,
-		UID:      currentUser.Uid,
-		GID:      currentUser.Gid,
-		Name:     currentUser.Name,
-		HomeDir:  currentUser.HomeDir,
-	}, result.Account)
+	expectedAccount, err := usermodel.LookupAccount(currentUser.Username)
+	require.NoError(t, err)
+	require.Equal(t, expectedAccount, result.Account)
 }
 
 func TestAuthorizedKeysClientKeyAuthorizerRejectsUnexpectedKey(t *testing.T) {
-	currentUser, err := user.Current()
+	currentUser, err := osuser.Current()
 	require.NoError(t, err)
 
 	authorizedKey, err := keys.GenerateEd25519()

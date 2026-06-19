@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strings"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
+	usermodel "github.com/Mikadore/mygosh/lib/user"
 	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 	"github.com/samber/lo"
@@ -46,7 +46,7 @@ func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *charmlo
 	return auth.ClientKeyAuthorizerFunc(func(_ context.Context, req auth.ClientKeyAuthorizationRequest) (auth.ClientKeyAuthorizationResult, error) {
 		identity := req.Identity
 
-		account, err := user.Lookup(identity.Username)
+		account, err := usermodel.LookupAccount(identity.Username)
 		if err != nil {
 			return auth.ClientKeyAuthorizationResult{}, eris.Wrapf(err, "lookup local user %q", identity.Username)
 		}
@@ -56,16 +56,10 @@ func AuthorizedKeysClientKeyAuthorizerWithLogger(paths []string, logger *charmlo
 
 		matchedPath, authorizedKeyCount, gatherErr := matchAuthorizedKey(resolvedPaths, identity.PublicKey)
 		if matchedPath != "" {
-			logger.Info("authorized client key matched local user", "username", identity.Username, "uid", account.Uid, "gid", account.Gid, "source", matchedPath, "fingerprint", identity.PublicKey.FingerprintSHA256())
+			logger.Info("authorized client key matched local user", "username", identity.Username, "uid", account.UID(), "gid", account.GID(), "source", matchedPath, "fingerprint", identity.PublicKey.FingerprintSHA256())
 			return auth.ClientKeyAuthorizationResult{
-				Source: matchedPath,
-				Account: auth.LocalAccount{
-					Username: account.Username,
-					UID:      account.Uid,
-					GID:      account.Gid,
-					Name:     account.Name,
-					HomeDir:  account.HomeDir,
-				},
+				Source:  matchedPath,
+				Account: account,
 			}, nil
 		}
 		if gatherErr != nil {

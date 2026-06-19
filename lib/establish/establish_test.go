@@ -10,6 +10,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/transport"
+	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 	"github.com/stretchr/testify/require"
 )
@@ -39,10 +40,12 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 				}
 				return auth.ClientKeyAuthorizationResult{
 					Source: "test",
-					Account: auth.LocalAccount{
+					Account: usermodel.Account{
 						Username: "alice",
-						UID:      "1000",
-						GID:      "1000",
+						Id:       1000,
+						PrimaryGroup: usermodel.Group{
+							Id: 1000,
+						},
 					},
 				}, nil
 			}),
@@ -71,10 +74,12 @@ func TestConnectAcceptAuthenticatesSession(t *testing.T) {
 	require.Equal(t, "alice", serverSession.Auth.ClientIdentity.Username)
 	require.Equal(t, clientIdentity.PublicKey(), serverSession.Auth.ClientIdentity.PublicKey)
 	require.Equal(t, "test", serverSession.Auth.ClientKeyAuthorization.Source)
-	require.Equal(t, auth.LocalAccount{
+	require.Equal(t, usermodel.Account{
 		Username: "alice",
-		UID:      "1000",
-		GID:      "1000",
+		Id:       1000,
+		PrimaryGroup: usermodel.Group{
+			Id: 1000,
+		},
 	}, serverSession.Auth.ClientKeyAuthorization.Account)
 }
 

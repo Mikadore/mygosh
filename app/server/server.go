@@ -65,8 +65,8 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		"authenticated client",
 		"requested_username", established.Auth.ClientIdentity.Username,
 		"local_username", established.Auth.ClientKeyAuthorization.Account.Username,
-		"uid", established.Auth.ClientKeyAuthorization.Account.UID,
-		"gid", established.Auth.ClientKeyAuthorization.Account.GID,
+		"uid", established.Auth.ClientKeyAuthorization.Account.UID(),
+		"gid", established.Auth.ClientKeyAuthorization.Account.GID(),
 		"source", established.Auth.ClientKeyAuthorization.Source,
 		"fingerprint", established.Auth.ClientIdentity.PublicKey.FingerprintSHA256(),
 	)

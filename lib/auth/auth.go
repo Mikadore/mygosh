@@ -8,6 +8,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/transport"
+	usermodel "github.com/Mikadore/mygosh/lib/user"
 	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
 )
@@ -124,17 +125,9 @@ type ClientKeyAuthorizationRequest struct {
 	Identity          ClientIdentity
 }
 
-type LocalAccount struct {
-	Username string
-	UID      string
-	GID      string
-	Name     string
-	HomeDir  string
-}
-
 type ClientKeyAuthorizationResult struct {
 	Source  string
-	Account LocalAccount
+	Account usermodel.Account
 }
 
 // ClientKeyAuthorizer is still part of the auth exchange because the server

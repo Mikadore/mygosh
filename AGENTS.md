@@ -19,14 +19,14 @@ Today the repository has completed the auth/session split:
 - `lib/trust` holds the current file-backed trust stubs for private-key lookup, `known_hosts`, and `authorized_keys`
 - the default CLI client loads `~/.mygosh/id_ed25519` and verifies the server against `~/.mygosh/known_hosts`
 - the default CLI server loads `~/.mygosh/host_ed25519` and authorizes client keys from `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys`
-- the default CLI flow authenticates and exits; interactive terminal behavior is not wired into the current session path
+- the default CLI runs a provisional one-channel remote PTY flow after authentication
 
 ## Repository Layout
 
 - `bin/`: binary entrypoint and Cobra command setup.
 - `app/root/`: application root wiring for settings, logging, and future app-scoped services/shutdown hooks.
-- `app/client/`: client application flow, TCP dialing, current file-backed identity/host-key verification wiring, and provisional terminal demo code not used by the default CLI path.
-- `app/server/`: server application flow, TCP listening, current file-backed client authorization wiring, and provisional shell demo code not used by the default CLI path.
+- `app/client/`: client application flow, TCP dialing, current file-backed identity/host-key verification wiring, and provisional terminal client code.
+- `app/server/`: server application flow, TCP listening, current file-backed client authorization wiring, and provisional PTY command execution.
 - `lib/transport/`: concrete Noise-backed framed transport plus protobuf send/receive helpers.
 - `lib/auth/`: auth frame schema, authentication protocol/state machine, signed payloads, and auth transcript handling.
 - `lib/establish/`: role-specific Noise/auth/session composition for client and server setup.
@@ -84,9 +84,9 @@ Today the repository has completed the auth/session split:
 ## Channel Direction
 
 - Channels are opened after authentication.
-- The current terminal behavior should become one future `session` channel variant.
+- The current terminal behavior is a provisional `session` channel variant.
 - Future PTY-backed and non-PTY command paths should stay behind the session/channel model rather than bypassing it.
-- The old client/server terminal plumbing currently lives in `app` as demo-only code and is intentionally unused by the default CLI path.
+- The client/server PTY plumbing lives in `app` as intentionally provisional demo code; future role-specific `Session` types remain stubs.
 - Do not introduce channel routing keyed to a future `session_id`; keep any such identifier, if added later, reserved for opaque audit/logging.
 
 ## Process-Separation Biases
@@ -119,13 +119,13 @@ The repository currently references `PROCESS_SEPARATION.md`, but that file is no
   ./run-tmux.sh
   ```
 
-- Current auth-only smoke tests expect `~/.mygosh/id_ed25519`, `~/.mygosh/host_ed25519`, and `~/.mygosh/known_hosts`, plus a matching server-side `authorized_keys` entry.
-- Expected current manual behavior is one client connected to one server process, successful authentication, then clean exit.
-- The default CLI path does not currently enter raw terminal mode. Only verify terminal restoration if you explicitly rewire the provisional demo PTY code.
+- Current interactive smoke tests expect `~/.mygosh/id_ed25519`, `~/.mygosh/host_ed25519`, and `~/.mygosh/known_hosts`, plus a matching server-side `authorized_keys` entry.
+- Expected current manual behavior is one client connected to one server process, successful authentication, then one PTY-backed command session.
+- Verify input/output, resize forwarding, exit status, authorized-account execution, and terminal restoration.
 
 ## Current Design Biases
 
-- Authenticated session construction is in place; the next priority is building the post-auth session/channel-open path and a clearer auth/permissions flow on top of the new boundary.
-- Keep the current PTY path provisional until it can sit behind the channel model.
+- Authenticated session construction and a provisional PTY channel are in place; the next priority is a clearer auth/permissions flow and hardened channel/process ownership.
+- Keep the current app-level PTY path provisional while the real client/server session abstractions are designed.
 - Add batching, escape sequences like `~.`, reconnect/resume, and broader execution policy only after the session/channel layer is boring.
 - When in doubt, choose the smallest change that improves the session/channel path and trust-policy seams without closing off future auth, authorization, permissions, or process-separation work.

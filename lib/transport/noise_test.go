@@ -21,22 +21,29 @@ func makeTransportPair(t *testing.T) (*Transport, *Transport) {
 	require.NoError(t, a.SetDeadline(deadline))
 	require.NoError(t, b.SetDeadline(deadline))
 
-	var initiator *Transport
-	var responder *Transport
-	var err error
+	type handshakeResult struct {
+		transport *Transport
+		err       error
+	}
 
-	errs := make(chan error, 2)
+	initiatorResult := make(chan handshakeResult, 1)
+	responderResult := make(chan handshakeResult, 1)
 	go func() {
-		initiator, err = HandshakeClient(a)
-		errs <- err
+		initiator, err := HandshakeClient(a)
+		initiatorResult <- handshakeResult{transport: initiator, err: err}
 	}()
 	go func() {
-		responder, err = HandshakeServer(b)
-		errs <- err
+		responder, err := HandshakeServer(b)
+		responderResult <- handshakeResult{transport: responder, err: err}
 	}()
 
-	require.NoError(t, <-errs)
-	require.NoError(t, <-errs)
+	initiatorHandshake := <-initiatorResult
+	responderHandshake := <-responderResult
+	require.NoError(t, initiatorHandshake.err)
+	require.NoError(t, responderHandshake.err)
+
+	initiator := initiatorHandshake.transport
+	responder := responderHandshake.transport
 	require.NotNil(t, initiator)
 	require.NotNil(t, responder)
 	require.NotEmpty(t, initiator.ChannelBinding())

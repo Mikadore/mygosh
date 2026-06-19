@@ -9,8 +9,8 @@ The auth/session split is now real enough to plan from:
 - Auth traffic uses `auth.AuthFrame`.
 - Post-auth traffic uses `session.Envelope`.
 - `lib/session` owns the role-agnostic post-auth protocol boundary plus the shared connection runtime used during establishment.
-- `lib/session` still stops at a role-agnostic post-auth receive-loop stub plus the initial channel/global-request multiplexer.
-- The default CLI currently completes Noise, authenticates, logs success, and exits.
+- `lib/session` owns the role-agnostic receive loop plus the initial channel/global-request multiplexer.
+- The default CLI currently completes Noise/auth, opens one session channel, and runs a provisional PTY-backed command.
 
 The app layer also now uses minimal file-backed trust stubs:
 

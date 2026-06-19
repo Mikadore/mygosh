@@ -17,6 +17,9 @@ var defaultAuthorizedKeysPaths = []string{
 }
 
 func RunServer(ctx context.Context, appRoot *root.Root) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if appRoot == nil {
 		return eris.New("project root is required")
 	}
@@ -28,6 +31,10 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	if err != nil {
 		return eris.Wrapf(err, "listen on %s", addr)
 	}
+	stopClosingListener := context.AfterFunc(ctx, func() {
+		_ = listener.Close()
+	})
+	defer stopClosingListener()
 	//TODO: implement comprehensive connection lifecycle
 	// and integrate connection closing/termination with
 	// logging and application error handling
@@ -37,6 +44,9 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 
 	conn, err := listener.Accept()
 	if err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
 		return eris.Wrap(err, "accept connection")
 	}
 	//TODO: implement comprehensive connection lifecycle
@@ -70,6 +80,11 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		"source", established.Auth.ClientKeyAuthorization.Source,
 		"fingerprint", established.Auth.ClientIdentity.PublicKey.FingerprintSHA256(),
 	)
-	logger.Info("authenticated session established", "session_protocol", "disabled")
-	return nil
+	logger.Info("authenticated session established", "session_protocol", "terminal-demo")
+	return NewShellDemo(
+		established.Session,
+		cfg.Core.Shell,
+		established.Auth.ClientKeyAuthorization.Account,
+		logger,
+	).Run(ctx)
 }

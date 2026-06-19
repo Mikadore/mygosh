@@ -57,14 +57,14 @@ type Channel struct {
 	stateCh    chan struct{}
 }
 
-func newPendingChannel(sess *Session, localID uint64, typ string) *Channel {
+func newPendingChannel(sess *Session, localID uint64, typ string, handler ChannelHandler) *Channel {
 	return &Channel{
 		sess:            sess,
 		id:              localID,
 		typ:             typ,
 		openWait:        make(chan error, 1),
 		pendingRequests: make(map[uint64]chan channelWaitResult),
-		handler:         normalizeChannelHandler(nil),
+		handler:         normalizeChannelHandler(handler),
 		stateCh:         make(chan struct{}),
 	}
 }

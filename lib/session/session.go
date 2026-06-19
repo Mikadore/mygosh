@@ -38,6 +38,7 @@ type Session struct {
 	runStarted          bool
 
 	writeMu sync.Mutex
+	running chan struct{}
 	closed  chan struct{}
 	once    sync.Once
 }
@@ -67,6 +68,7 @@ func New(conn transport.FramedConn, cfg Config, opts Options) (*Session, error) 
 		config:        cfg.withDefaults(),
 		channels:      make(map[uint64]*Channel),
 		pendingGlobal: make(map[uint64]chan globalWaitResult),
+		running:       make(chan struct{}),
 		closed:        make(chan struct{}),
 	}
 
@@ -87,6 +89,7 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 		return errSessionRunStarted
 	}
 	s.runStarted = true
+	close(s.running)
 	s.mu.Unlock()
 
 	handler = normalizeHandler(handler)
@@ -146,6 +149,10 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 }
 
 func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (*Channel, error) {
+	return s.OpenChannelWithHandler(ctx, typ, payload, nil)
+}
+
+func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payload []byte, handler ChannelHandler) (*Channel, error) {
 	ctx = normalizeContext(ctx)
 	if typ == "" {
 		return nil, eris.New("channel type is required")
@@ -160,7 +167,7 @@ func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (
 	localID := s.nextLocalChannelID
 	s.nextLocalChannelID++
 
-	ch := newPendingChannel(s, localID, typ)
+	ch := newPendingChannel(s, localID, typ, handler)
 	s.channels[localID] = ch
 	waitCh := ch.openWait
 	s.mu.Unlock()
@@ -195,6 +202,22 @@ func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (
 		return nil, ctx.Err()
 	case <-s.closed:
 		return nil, s.closeCause()
+	}
+}
+
+func (s *Session) WaitUntilRunning(ctx context.Context) error {
+	if s == nil {
+		return eris.New("session is required")
+	}
+	ctx = normalizeContext(ctx)
+
+	select {
+	case <-s.running:
+		return nil
+	case <-s.closed:
+		return s.closeCause()
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -544,9 +567,17 @@ func (s *Session) handleChannelRequest(ctx context.Context, msg *sessionpb.Chann
 		}
 	}
 
-	return s.sendEnvelope(&sessionpb.Envelope{
+	sendErr := s.sendEnvelope(&sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelResult{ChannelResult: result},
 	})
+	if replyHandler, ok := handler.(ChannelRequestReplyHandler); ok {
+		replyHandler.OnRequestReplied(ctx, ch, ChannelRequest{
+			Type:      msg.GetRequestType(),
+			WantReply: msg.GetWantReply(),
+			Payload:   cloneBytes(msg.GetPayload()),
+		}, response, sendErr)
+	}
+	return sendErr
 }
 
 func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {

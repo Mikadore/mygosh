@@ -82,42 +82,6 @@ func (x *PtyRequest) GetCols() uint32 {
 	return 0
 }
 
-type ShellRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ShellRequest) Reset() {
-	*x = ShellRequest{}
-	mi := &file_service_command_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ShellRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ShellRequest) ProtoMessage() {}
-
-func (x *ShellRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_service_command_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ShellRequest.ProtoReflect.Descriptor instead.
-func (*ShellRequest) Descriptor() ([]byte, []int) {
-	return file_service_command_proto_rawDescGZIP(), []int{1}
-}
-
 type ExecRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Command       string                 `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
@@ -127,7 +91,7 @@ type ExecRequest struct {
 
 func (x *ExecRequest) Reset() {
 	*x = ExecRequest{}
-	mi := &file_service_command_proto_msgTypes[2]
+	mi := &file_service_command_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -139,7 +103,7 @@ func (x *ExecRequest) String() string {
 func (*ExecRequest) ProtoMessage() {}
 
 func (x *ExecRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_service_command_proto_msgTypes[2]
+	mi := &file_service_command_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -152,7 +116,7 @@ func (x *ExecRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecRequest.ProtoReflect.Descriptor instead.
 func (*ExecRequest) Descriptor() ([]byte, []int) {
-	return file_service_command_proto_rawDescGZIP(), []int{2}
+	return file_service_command_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ExecRequest) GetCommand() string {
@@ -162,7 +126,7 @@ func (x *ExecRequest) GetCommand() string {
 	return ""
 }
 
-type WindowChange struct {
+type TerminalSize struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
 	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
@@ -170,21 +134,21 @@ type WindowChange struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *WindowChange) Reset() {
-	*x = WindowChange{}
-	mi := &file_service_command_proto_msgTypes[3]
+func (x *TerminalSize) Reset() {
+	*x = TerminalSize{}
+	mi := &file_service_command_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *WindowChange) String() string {
+func (x *TerminalSize) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*WindowChange) ProtoMessage() {}
+func (*TerminalSize) ProtoMessage() {}
 
-func (x *WindowChange) ProtoReflect() protoreflect.Message {
-	mi := &file_service_command_proto_msgTypes[3]
+func (x *TerminalSize) ProtoReflect() protoreflect.Message {
+	mi := &file_service_command_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -195,19 +159,19 @@ func (x *WindowChange) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use WindowChange.ProtoReflect.Descriptor instead.
-func (*WindowChange) Descriptor() ([]byte, []int) {
-	return file_service_command_proto_rawDescGZIP(), []int{3}
+// Deprecated: Use TerminalSize.ProtoReflect.Descriptor instead.
+func (*TerminalSize) Descriptor() ([]byte, []int) {
+	return file_service_command_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *WindowChange) GetRows() uint32 {
+func (x *TerminalSize) GetRows() uint32 {
 	if x != nil {
 		return x.Rows
 	}
 	return 0
 }
 
-func (x *WindowChange) GetCols() uint32 {
+func (x *TerminalSize) GetCols() uint32 {
 	if x != nil {
 		return x.Cols
 	}
@@ -223,7 +187,7 @@ type ExitStatus struct {
 
 func (x *ExitStatus) Reset() {
 	*x = ExitStatus{}
-	mi := &file_service_command_proto_msgTypes[4]
+	mi := &file_service_command_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -235,7 +199,7 @@ func (x *ExitStatus) String() string {
 func (*ExitStatus) ProtoMessage() {}
 
 func (x *ExitStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_service_command_proto_msgTypes[4]
+	mi := &file_service_command_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -248,7 +212,7 @@ func (x *ExitStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitStatus.ProtoReflect.Descriptor instead.
 func (*ExitStatus) Descriptor() ([]byte, []int) {
-	return file_service_command_proto_rawDescGZIP(), []int{4}
+	return file_service_command_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ExitStatus) GetCode() int32 {
@@ -262,16 +226,15 @@ var File_service_command_proto protoreflect.FileDescriptor
 
 const file_service_command_proto_rawDesc = "" +
 	"\n" +
-	"\x15service/command.proto\x12\aservice\x1a\x1bbuf/validate/validate.proto\"^\n" +
+	"\x15service/command.proto\x12\aservice\x1a\x1bbuf/validate/validate.proto\"b\n" +
 	"\n" +
 	"PtyRequest\x12\x12\n" +
-	"\x04term\x18\x01 \x01(\tR\x04term\x12\x1d\n" +
-	"\x04rows\x18\x02 \x01(\rB\t\xbaH\x06*\x04\x18\xff\xff\x03R\x04rows\x12\x1d\n" +
-	"\x04cols\x18\x03 \x01(\rB\t\xbaH\x06*\x04\x18\xff\xff\x03R\x04cols\"\x0e\n" +
-	"\fShellRequest\"0\n" +
+	"\x04term\x18\x01 \x01(\tR\x04term\x12\x1f\n" +
+	"\x04rows\x18\x02 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\x03 \x00R\x04rows\x12\x1f\n" +
+	"\x04cols\x18\x03 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\x03 \x00R\x04cols\"0\n" +
 	"\vExecRequest\x12!\n" +
 	"\acommand\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\acommand\"P\n" +
-	"\fWindowChange\x12\x1f\n" +
+	"\fTerminalSize\x12\x1f\n" +
 	"\x04rows\x18\x01 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\x03 \x00R\x04rows\x12\x1f\n" +
 	"\x04cols\x18\x02 \x01(\rB\v\xbaH\b*\x06\x18\xff\xff\x03 \x00R\x04cols\" \n" +
 	"\n" +
@@ -290,13 +253,12 @@ func file_service_command_proto_rawDescGZIP() []byte {
 	return file_service_command_proto_rawDescData
 }
 
-var file_service_command_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_service_command_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_service_command_proto_goTypes = []any{
 	(*PtyRequest)(nil),   // 0: service.PtyRequest
-	(*ShellRequest)(nil), // 1: service.ShellRequest
-	(*ExecRequest)(nil),  // 2: service.ExecRequest
-	(*WindowChange)(nil), // 3: service.WindowChange
-	(*ExitStatus)(nil),   // 4: service.ExitStatus
+	(*ExecRequest)(nil),  // 1: service.ExecRequest
+	(*TerminalSize)(nil), // 2: service.TerminalSize
+	(*ExitStatus)(nil),   // 3: service.ExitStatus
 }
 var file_service_command_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -317,7 +279,7 @@ func file_service_command_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_service_command_proto_rawDesc), len(file_service_command_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

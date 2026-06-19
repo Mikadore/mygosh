@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/rotisserie/eris"
@@ -19,10 +20,15 @@ type RawTTY struct {
 	tty      *os.File
 	resizes  <-chan Size
 	oldState *term.State
+	once     sync.Once
+	err      error
 }
 
 func HookRaw(ctx context.Context, tty *os.File) (*RawTTY, error) {
 	var rawTty RawTTY
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	oldState, err := term.MakeRaw(int(tty.Fd()))
 	if err != nil {
@@ -31,20 +37,22 @@ func HookRaw(ctx context.Context, tty *os.File) (*RawTTY, error) {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGWINCH)
-	resizes := make(chan Size)
+	resizes := make(chan Size, 1)
 
 	go func() {
+		defer signal.Stop(sig)
+		defer close(resizes)
 		for {
 			select {
 			case <-sig:
 				w, h, err := term.GetSize(int(tty.Fd()))
 				if err == nil {
-					resizes <- Size{w, h}
+					select {
+					case resizes <- Size{w, h}:
+					default:
+					}
 				}
 			case <-ctx.Done():
-				signal.Stop(sig)
-				close(sig)
-				close(resizes)
 				return
 			}
 		}
@@ -69,5 +77,8 @@ func (t *RawTTY) Resizes() <-chan Size {
 }
 
 func (t *RawTTY) Restore() error {
-	return eris.Wrap(term.Restore(int(t.tty.Fd()), t.oldState), "Failed to restore TTY")
+	t.once.Do(func() {
+		t.err = eris.Wrap(term.Restore(int(t.tty.Fd()), t.oldState), "failed to restore TTY")
+	})
+	return t.err
 }

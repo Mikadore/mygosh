@@ -3,6 +3,7 @@ package tty
 import (
 	"os"
 	"os/exec"
+	"sync"
 
 	"github.com/creack/pty"
 	"github.com/rotisserie/eris"
@@ -11,6 +12,8 @@ import (
 type VTTY struct {
 	tty     *os.File
 	winsize *pty.Winsize
+	mu      sync.Mutex
+	closed  bool
 }
 
 // CreateVTTY currently uses pty.Start as the small first step: it creates a
@@ -62,6 +65,12 @@ func (t *VTTY) Write(p []byte) (int, error) {
 }
 
 func (t *VTTY) Resize(size Size) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return os.ErrClosed
+	}
+
 	t.winsize.Cols = uint16(size.Width)
 	t.winsize.Rows = uint16(size.Height)
 
@@ -69,5 +78,11 @@ func (t *VTTY) Resize(size Size) error {
 }
 
 func (t *VTTY) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil
+	}
+	t.closed = true
 	return t.tty.Close()
 }

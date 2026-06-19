@@ -1,19 +1,19 @@
 # v0.1 Interactive Session TODO
 
-The immediate goal is one secure, working interactive PTY session over the
-authenticated session/channel layer. Keep v0.1 deliberately narrow: one
-interactive channel, no reconnect, no SSH compatibility, and no broad remote
-execution policy.
+The repository now has one working provisional PTY session over the
+authenticated session/channel layer. Keep the next work deliberately narrow:
+one interactive channel, no reconnect, no SSH compatibility, and no broad
+remote execution policy.
 
 ## Release Blockers
 
-- Define the execution privilege model before starting shells.
-  - Refuse to serve interactive sessions as root for v0.1.
-  - Require the authorized account UID to match the server's effective UID.
-  - Run the shell from the account home with a small, explicitly constructed
-    environment.
-  - Defer cross-user execution until there is a dedicated, policy-driven
-    privileged launcher or equivalent privilege separation.
+- Replace the provisional execution privilege behavior with an explicit policy.
+  - The demo currently uses the authorized account UID, GID, supplementary
+    groups, home, and a small environment.
+  - Cross-user execution currently succeeds only when the server process
+    already has permission to assume those credentials.
+  - Add a policy-driven privileged launcher or equivalent privilege separation
+    before treating cross-user/root service mode as production-ready.
 
 - Wire `lib/strictfiles` into all trust-file reads.
   - Protect host and client private keys, `known_hosts`, and `authorized_keys`
@@ -36,7 +36,6 @@ execution policy.
   - Detect duplicate peer channel IDs.
   - Remove canceled channel opens and requests from pending state.
   - Ensure an accepted channel cannot send data before its open-success reply.
-  - Allow locally opened channels to receive requests such as `exit-status`.
   - Keep the receive loop non-blocking by handing work to bounded channel-owned
     runtimes or queues.
 
@@ -48,28 +47,28 @@ execution policy.
   - Send exit status, EOF, and channel close in a defined order.
   - Validate and synchronize resize requests.
 
-## Interactive Session Wiring
+## Implemented Interactive Demo Wiring
 
-- Define constants and validated protobuf payloads for:
+- The demo defines constants and validated protobuf payloads for:
   - the `session` channel;
   - PTY allocation;
   - shell start;
   - window changes;
   - exit status.
 
-- Client flow:
+- The client:
   - start `Session.Run` and wait until it is ready;
   - open one `session` channel;
   - request a PTY using the local terminal type and dimensions;
-  - request an interactive shell;
+  - requests an explicit command, defaulting to client `core.shell`;
   - enter raw mode and copy terminal bytes unchanged in both directions;
   - forward resize events;
   - receive exit status and always restore the local terminal.
 
-- Server flow:
+- The server:
   - accept only the v0.1 `session` channel and valid request ordering;
-  - apply the authenticated account and execution policy;
-  - launch the configured shell behind the channel-owned PTY runtime;
+  - uses the account returned by client-key authorization;
+  - launches `core.shell -c <command>` behind a channel-owned PTY runtime;
   - bridge PTY bytes without transformation;
   - close the process and channel cleanly on EOF, disconnect, or cancellation.
 
@@ -78,7 +77,6 @@ execution policy.
 - Load and validate long-lived server key material before opening the listener.
 - Replace the one-connection server with a bounded accept loop and scoped
   per-connection goroutines.
-- Use context-aware dialing and cancellation.
 - Close listeners, connections, sessions, PTYs, and child processes during
   graceful shutdown.
 - Disable console logging while the client terminal is in raw mode while
@@ -100,7 +98,6 @@ execution policy.
 
 ## Tests And Release Checks
 
-- Fix the shared-error data race in the transport test helper.
 - Make `go test -race ./...` a release gate.
 - Add malicious-session tests for duplicate IDs, empty-frame flooding, queue
   limits, invalid ordering, cancellation cleanup, and post-close traffic.
@@ -114,7 +111,6 @@ execution policy.
 
 ## Deferred Until After v0.1
 
-- Remote command execution.
 - Multiple simultaneous channel types.
 - Environment and agent forwarding.
 - Reconnect or session resume.

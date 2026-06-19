@@ -3,7 +3,7 @@
 `mygosh` is a from-scratch, minimal SSH-like client/server experiment in Go.
 It is not SSH-compatible and does not use Go SSH libraries.
 
-The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, a role-agnostic authenticated session type with an initial post-auth channel/global-request multiplexer, and small file-backed trust stubs in `lib/trust`. The role-specific establishment layer composes handshake, authentication, timeout enforcement, and session construction around that session boundary. The interactive PTY plumbing has been moved out of the core session path and is intentionally disabled while the app-level flow is rebuilt on top of the newer session boundary.
+The current code has a concrete Noise-backed framed `transport.Transport` over TCP, separate auth/session protobuf frame schemas, a role-agnostic authenticated session type with an initial post-auth channel/global-request multiplexer, and small file-backed trust stubs in `lib/trust`. The role-specific establishment layer composes handshake, authentication, timeout enforcement, and session construction around that session boundary. The default CLI now wires a deliberately provisional remote PTY through that authenticated channel layer.
 
 The CLI is one Cobra binary with Viper-backed config loaded from `mygosh.toml` in the current working directory. Startup builds a small application root in `app/root` that owns settings, the application `slog` logger, and future app-scoped shutdown-managed services. Charm is used only as the logger's console presentation handler.
 
@@ -27,7 +27,7 @@ The current repository baseline is:
 - the default server loads its host key from `~/.mygosh/host_ed25519`
 - the default client verifies server host keys against `~/.mygosh/known_hosts`
 - the default server authorizes client keys from `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys`
-- the default CLI path authenticates, logs success, and exits without entering the post-auth session run loop
+- the default CLI opens one `session` channel, requests a PTY, executes an explicit command, and streams terminal bytes
 
 The next project step is to build both a real post-auth session/channel abstraction and a clearer auth/authorization/permissions flow on top of that split. See `PLAN.md` for the near-term plan.
 
@@ -46,7 +46,7 @@ These are stubs, not a complete policy system:
 
 - there is no TOFU or automatic host-key update behavior
 - trust paths are hardcoded today
-- auth succeeds and the CLI exits; post-auth channels exist in `lib/session` but are not wired into the default app flow yet
+- the PTY/exec path is a minimal demo, not a complete execution-policy or privilege-separation design
 
 ## Config
 
@@ -64,7 +64,7 @@ file = "mygosh.log"
 
 `mygosh.toml` is currently expected to exist in the working directory; config defaults apply to missing fields inside that file, not to a missing file.
 
-`core.shell` is currently only used by the provisional demo PTY code under `app/`; it is not exercised by the default auth-only CLI path.
+`core.shell` is used by the client as its default explicit command and by the server to execute the requested command with `-c`.
 
 Handshake/auth timeout policy is currently internal to the `lib/establish` path and shared `lib/session.Runtime`, and is not exposed through `mygosh.toml`.
 
@@ -92,24 +92,20 @@ go run ./bin server
 
 `serve` is accepted as an alias for `server`.
 
-Start a client auth smoke test:
+Start an interactive client:
 
 ```sh
 go run ./bin connect localhost:42022
 ```
 
-Before that smoke test, the current default flow expects:
+Before connecting, the current default flow expects:
 
 - `~/.mygosh/host_ed25519` for the server host private key
 - `~/.mygosh/id_ed25519` for the client identity private key
 - `~/.mygosh/known_hosts` with a matching entry for the server reference identity
 - `~/.mygosh/authorized_keys` or `~/.ssh/authorized_keys` on the server side with the allowed client public key for the requested local username
 
-The current `connect`/`server` flow authenticates and exits.
-
-Post-auth session/channel behavior exists in the library layer but is not wired into the default CLI path yet.
-
-Remote command execution is also not implemented:
+With no command argument, the client requests its configured `core.shell`. An explicit command can also be supplied:
 
 ```sh
 go run ./bin connect localhost:42022 "echo hello"
@@ -121,7 +117,9 @@ Or use tmux:
 ./run-tmux.sh
 ```
 
-That helper currently exercises the same auth-only flow rather than an interactive terminal session.
+That helper starts the one-connection server and an interactive client in adjacent panes.
+
+The server launches the command as the account returned by client-key authorization. If the server process cannot assume that account's UID, GID, and supplementary groups, the `exec` request is rejected.
 
 ## Build
 

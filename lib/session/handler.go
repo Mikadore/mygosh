@@ -16,6 +16,12 @@ type ChannelHandler interface {
 	OnClose(ctx context.Context, ch *Channel)
 }
 
+// ChannelRequestReplyHandler is an optional extension for channel handlers
+// that need to start work only after a requested reply has been written.
+type ChannelRequestReplyHandler interface {
+	OnRequestReplied(ctx context.Context, ch *Channel, req ChannelRequest, response ChannelResponse, sendErr error)
+}
+
 type ChannelOpenRequest struct {
 	Type          string
 	Payload       []byte

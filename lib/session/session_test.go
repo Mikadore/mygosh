@@ -23,6 +23,19 @@ func TestSessionOpenChannelRequiresRun(t *testing.T) {
 	require.ErrorIs(t, err, errSessionNotRunning)
 }
 
+func TestSessionWaitUntilRunning(t *testing.T) {
+	clientSession, serverSession := authenticatedSessionPair(t, Config{})
+	defer serverSession.Close() //nolint:errcheck
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, clientSession.WaitUntilRunning(ctx), context.DeadlineExceeded)
+
+	run := startSessionRun(t, clientSession, nil)
+	require.NoError(t, clientSession.WaitUntilRunning(context.Background()))
+	stopSessionRun(t, run)
+}
+
 func TestSessionNilHandlerRejectsIncomingOpen(t *testing.T) {
 	clientSession, serverSession := authenticatedSessionPair(t, Config{})
 
@@ -127,6 +140,67 @@ func TestSessionChannelRequestRoundTripsPayload(t *testing.T) {
 	require.NotNil(t, response)
 	require.True(t, response.OK)
 	require.Equal(t, []byte("payload"), response.Payload)
+
+	stopSessionRun(t, clientRun)
+	stopSessionRun(t, serverRun)
+}
+
+func TestLocallyOpenedChannelReceivesRequests(t *testing.T) {
+	clientSession, serverSession := authenticatedSessionPair(t, Config{})
+
+	serverChannels := make(chan *Channel, 1)
+	clientRequests := make(chan ChannelRequest, 1)
+	clientRun := startSessionRun(t, clientSession, nil)
+	serverRun := startSessionRun(t, serverSession, testHandler{
+		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
+			serverChannels <- ch
+			return ChannelOpenDecision{OK: true}
+		},
+	})
+
+	_, err := clientSession.OpenChannelWithHandler(context.Background(), "session", nil, testChannelHandler{
+		onRequest: func(_ context.Context, _ *Channel, req ChannelRequest) ChannelResponse {
+			clientRequests <- req
+			return ChannelResponse{OK: true}
+		},
+	})
+	require.NoError(t, err)
+
+	serverChannel := <-serverChannels
+	response, err := serverChannel.SendRequest(context.Background(), "exit-status", []byte("status"), true)
+	require.NoError(t, err)
+	require.True(t, response.OK)
+
+	req := <-clientRequests
+	require.Equal(t, "exit-status", req.Type)
+	require.Equal(t, []byte("status"), req.Payload)
+
+	stopSessionRun(t, clientRun)
+	stopSessionRun(t, serverRun)
+}
+
+func TestSessionChannelDataPreservesTerminalBytes(t *testing.T) {
+	clientSession, serverSession := authenticatedSessionPair(t, Config{})
+
+	serverChannels := make(chan *Channel, 1)
+	clientRun := startSessionRun(t, clientSession, nil)
+	serverRun := startSessionRun(t, serverSession, testHandler{
+		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
+			serverChannels <- ch
+			return ChannelOpenDecision{OK: true}
+		},
+	})
+
+	clientChannel, err := clientSession.OpenChannel(context.Background(), "session", nil)
+	require.NoError(t, err)
+	serverChannel := <-serverChannels
+
+	terminalBytes := []byte{0x00, '\r', '\n', 0x1b, '[', '3', '1', 'm', 0xff}
+	require.NoError(t, clientChannel.Send(context.Background(), terminalBytes))
+
+	got, err := serverChannel.Recv(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, terminalBytes, got)
 
 	stopSessionRun(t, clientRun)
 	stopSessionRun(t, serverRun)
@@ -350,9 +424,9 @@ func startSessionRun(t *testing.T, sess *Session, handler Handler) runningSessio
 		errCh <- sess.Run(ctx, handler)
 	}()
 
-	require.Eventually(t, func() bool {
-		return sess.ensureRunning() == nil
-	}, time.Second, 10*time.Millisecond)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
+	defer waitCancel()
+	require.NoError(t, sess.WaitUntilRunning(waitCtx))
 
 	return runningSession{
 		sess:   sess,

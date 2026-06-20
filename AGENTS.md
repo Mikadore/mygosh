@@ -2,130 +2,292 @@
 
 Guidance for agents working in this repository.
 
+## How To Read This Document
+
+This document deliberately distinguishes:
+
+- **Current implementation facts**: behavior or structure verified in the code as it exists now.
+- **Design intent**: the architecture and security properties future work should move toward.
+- **Known gaps**: current behavior that must not be mistaken for an approved long-term design.
+
+Do not infer that a stated design intent is already implemented. For a detailed review of the current code, see [`REVIEW.md`](REVIEW.md). For the actionable issue list, see [`TODO.md`](TODO.md).
+
 ## Project Intent
 
-`mygosh` is a from-scratch, minimal SSH-like terminal transport in Go. It is not intended to be SSH-compatible, and it must not use Go SSH libraries.
+**Design intent:** `mygosh` is a from-scratch, minimal SSH-like client/server in Go. It is not intended to implement the SSH wire protocol. The goal is a small but credible secure remote-access service supporting public-key authentication, Unix account resolution, interactive shells, command execution, and later port forwarding.
 
-The current roadmap is moving from a provisional PTY demo toward a proper authenticated, client/server-agnostic global session. A session starts when a client connects to a server, the peers complete Noise, and both sides authenticate. Channels are opened only after authentication.
+**Current implementation fact:** the repository does not use an SSH transport or SSH session implementation. It does currently import `golang.org/x/crypto/ssh` for OpenSSH `authorized_keys` and `known_hosts` parsing.
 
-Today the repository has completed the auth/session split:
+**Design intent:** either replace those parser dependencies with small purpose-built parsers or explicitly retain them as narrowly scoped file-format compatibility helpers. Do not introduce an SSH transport/session library.
 
-- auth uses its own protobuf `AuthFrame` schema in `lib/auth/authpb`
-- session traffic uses its own protobuf `Envelope` schema in `lib/session/sessionpb`
-- `lib/transport.Transport` is the concrete Noise-backed framed secure connection
-- protobuf marshaling sits above transport in `transport.SendProto` / `transport.ReceiveProto`
-- `lib/establish` composes Noise, auth, trust hooks, timeout enforcement, and session construction
-- `lib/session` owns the role-agnostic post-auth session/channel multiplexer plus the shared connection runtime
-- `lib/trust` holds the current file-backed trust stubs for private-key lookup, `known_hosts`, and `authorized_keys`
-- the default CLI client loads `~/.mygosh/id_ed25519` and verifies the server against `~/.mygosh/known_hosts`
-- the default CLI server loads `~/.mygosh/host_ed25519` and authorizes client keys from `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys`
-- the default CLI runs a provisional one-channel remote PTY flow after authentication
+## Current Implementation Facts
 
-## Repository Layout
+The following describes the code as it exists now, not the target architecture:
+
+- One Cobra binary provides `server`/`serve` and `connect`.
+- `mygosh.toml` is required in the current working directory.
+- `app/client` owns TCP dialing; `app/server` owns TCP listening and accepting.
+- The server accepts exactly one connection and exits after that connection finishes.
+- `lib/transport.Transport` performs a Noise NN handshake and encrypted length-prefixed frame I/O over a `net.Conn`.
+- Auth traffic uses the protobuf `auth.AuthFrame`; post-auth traffic uses `session.Envelope`.
+- `transport.SendProto` and `transport.ReceiveProto` perform protobuf marshaling and protovalidate validation inside the `lib/transport` package.
+- `lib/establish.Connect` and `lib/establish.Accept` compose connection runtime, Noise, auth, and construction of `lib/session.Session`.
+- `lib/session.Runtime` currently owns cancellation, target handoff, and handshake/auth timeout enforcement even though those phases precede the post-auth mux.
+- `lib/auth` verifies server and client signatures and runs the auth wire state machine.
+- `lib/auth` also defines and invokes client-key authorization and imports the Unix account model. Authentication and authorization are therefore not cleanly separated yet.
+- `lib/session.Session` is the channel/global-request multiplexer. It does not contain authenticated credentials and can be constructed directly over any `transport.FramedConn`; “authenticated session” is a property of the normal app path, not one enforced by the type.
+- `Session.Run` is the sole post-auth frame receiver in the normal path, but it invokes handlers and performs some writes synchronously.
+- `lib/trust` currently combines path expansion, ordinary file reads, OpenSSH-format parsing, host verification, key authorization, `os/user`-backed account lookup, and policy logging.
+- `lib/strictfiles` contains descriptor-based secure-open primitives, but current private-key, `known_hosts`, and `authorized_keys` reads do not use them.
+- The client loads `~/.mygosh/id_ed25519` and checks `~/.mygosh/known_hosts`.
+- The server loads `~/.mygosh/host_ed25519`, resolves the requested username through `os/user`, and checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
+- The client verifies the server signature and host-key policy before using its client signer.
+- The server verifies the client signature before invoking local account/key authorization.
+- After auth, the default app path opens one `session` channel, requests a PTY, then requests execution of a command.
+- The server executes its configured shell as `shell -c <client command>` under the account returned by authorization.
+- The client uses its configured `core.shell` string as the default remote command when no command is supplied. This is not a distinct interactive-shell protocol request.
+- Terminal channel data is carried as raw bytes and tested for byte preservation.
+
+## Known Architectural And Security Gaps
+
+These are current defects or incomplete boundaries. Do not preserve them merely because existing code uses them:
+
+- `lib/auth` couples cryptographic proof, client-key authorization, and Unix account data.
+- Auth success can be sent before a complete service-ready credential result has been centrally validated.
+- Sensitive trust/key files use unchecked, unbounded `os.ReadFile` paths.
+- Trust-file marker, option, revocation, host matching, and malformed-entry semantics are incomplete.
+- Detailed NSS, path, and authorization errors can be returned to unauthenticated peers.
+- Session callbacks and protocol-error writes can block the sole receive loop.
+- Channels, pending requests, queued frames, and total connection memory are not bounded adequately.
+- Channel state permits invalid ordering and incomplete cancellation cleanup.
+- Connection close ownership is duplicated across app code, transport, runtime, and session.
+- PTY process startup and cleanup have paths that can leak or wait indefinitely.
+- Process cancellation does not deliberately own the full child process group.
+- Key/account/auth result values expose mutable slices.
+- There is no explicit connection-level permission model or concrete request authorization layer.
+- Dial endpoint, host verification identity, client-supplied server name, and audit identity are conflated.
+- The current command protocol is PTY-only and does not distinguish shell from non-PTY exec.
+- The client terminal input goroutine is not reliably interruptible.
+
+See [`REVIEW.md`](REVIEW.md#findings) for evidence and [`TODO.md`](TODO.md) for the checklist.
+
+## Target Architecture
+
+The following is design intent and should guide new work.
+
+### Dependency Direction
+
+Application code should compose protocol, security, policy, and Unix-platform components:
+
+```text
+app/client and app/server
+    -> protocol transport/auth/connection/service packages
+    -> security key/secure-file/parser/matcher packages
+    -> Unix account/PTY/process adapters
+```
+
+Protocol packages must not import:
+
+- Unix account models;
+- trust-file paths or filesystem policy;
+- NSS or PAM;
+- service implementations;
+- process-launch policy.
+
+Prefer Go `internal/` packages while public API stability is not a project goal. A directory named `lib` does not itself enforce a library boundary.
+
+### Connection Phases
+
+The intended server sequence is:
+
+1. app accepts and owns a TCP connection;
+2. transport establishes the secure framed channel;
+3. auth verifies the server/client cryptographic proofs;
+4. server app policy resolves the account, trust sources, and connection permissions;
+5. auth sends accept only after a complete immutable credential result exists;
+6. the post-auth connection mux is constructed and becomes the receive owner;
+7. each concrete service request is authorized before resource allocation;
+8. an authorized launch/forward specification is handed to the service runtime.
+
+Ownership should transfer clearly at each successful phase. Only the current/final owner closes the connection.
+
+### Authentication And Credentials
+
+`auth` should prove identities and manage the auth wire exchange. It should expose a staged server flow conceptually equivalent to:
+
+```text
+verified client proof -> app policy -> accept/reject
+```
+
+The server app should construct one immutable per-connection credential snapshot containing:
+
+- authentication method and key fingerprint;
+- requested and resolved username;
+- UID, GID, supplementary groups, home, and login shell;
+- matched policy source;
+- connection-level permissions and constraints.
+
+Services receive the same snapshot for the connection lifetime. Do not expose mutable key or group slices.
+
+All authentication, account resolution, and broad connection permission decisions must complete before auth success. Decisions requiring request-specific data—such as an exact command or forwarding target—must happen after decoding that request but before starting a process or opening a socket.
+
+### Trust And Files
+
+The app decides:
+
+- which files/stores to consult;
+- path templates and precedence;
+- missing-file behavior;
+- strict-mode policy;
+- host identity normalization and TOFU/update policy.
+
+Reusable packages should separately provide:
+
+- race-resistant descriptor-based opening and metadata checks;
+- bounded parsing from an `io.Reader` or already bounded bytes;
+- pure key/host matching;
+- parsed constraints such as forced command, PTY, environment, and forwarding restrictions.
+
+Parsers must not select paths. The auth protocol must not parse trust files or resolve accounts.
+
+### Transport And Wire Code
+
+`transport` should own only:
+
+- Noise handshake and immutable suite configuration;
+- channel binding/exporter material;
+- encrypted frame send/receive;
+- frame size enforcement;
+- deadlines and close.
+
+Protobuf codecs and schema validation should live above transport, either in a wire helper or the protocol package that owns each schema.
+
+Treat encryption or write failure as fatal because Noise cipher state may already have advanced. Distinguish maximum plaintext from maximum ciphertext/frame size.
+
+### Post-Auth Connection And Channels
+
+The global post-auth object should eventually be named `connection` or `mux`; reserve “session” for the shell/exec channel concept.
+
+Maintain:
+
+- exactly one frame decoder/dispatcher;
+- one bounded serialized writer;
+- bounded per-channel workers or event queues;
+- explicit channel state transitions;
+- unique active peer channel IDs;
+- limits on channels, pending operations, queued bytes, frame counts, and control payloads;
+- cancellation that removes pending state;
+- bounded best-effort disconnect and close behavior.
+
+Do not let a handler wait for a reply that only the same blocked receive loop can process.
+
+### Services And Authorization
+
+The session/exec service should support:
+
+- optional PTY setup;
+- exactly one `shell` or `exec` start request;
+- non-PTY execution;
+- separate stdout/stderr for non-PTY exec;
+- filtered environment requests;
+- terminal resize only after PTY acceptance;
+- exit status and exit signal;
+- account/config-selected shell for shell requests.
+
+Before starting work, turn peer input plus immutable credentials into an authorized launch specification. Process code should consume that specification rather than redo authentication or policy.
+
+Future forwarding should follow the same pattern: broad permission in connection credentials, then exact destination/listen authorization before opening sockets.
+
+### Unix Accounts, PAM, And Processes
+
+Use a deliberate NSS-aware account adapter to snapshot account and group data. `os/user` is the current stub; a real login service also needs the login shell and account-status policy.
+
+Leave a policy seam for future PAM checks before auth success. PAM session lifecycle, environment, credential switching, and process launch belong in the privileged account/process layer rather than the auth wire package.
+
+A process owner must:
+
+- own the command, PTY/pipes, process group, wait result, and descriptors;
+- reap each child exactly once;
+- terminate the whole process group on channel/connection/server cancellation;
+- use bounded graceful then forced termination;
+- complete locally without waiting indefinitely for peer acknowledgment.
+
+## Current Repository Layout
+
+This section is factual; package placement is expected to change during boundary cleanup.
 
 - `bin/`: binary entrypoint and Cobra command setup.
-- `app/root/`: application root wiring for settings, logging, and future app-scoped services/shutdown hooks.
-- `app/client/`: client application flow, TCP dialing, current file-backed identity/host-key verification wiring, and provisional terminal client code.
-- `app/server/`: server application flow, TCP listening, current file-backed client authorization wiring, and provisional PTY command execution.
-- `lib/transport/`: concrete Noise-backed framed transport plus protobuf send/receive helpers.
-- `lib/auth/`: auth frame schema, authentication protocol/state machine, signed payloads, and auth transcript handling.
-- `lib/establish/`: role-specific Noise/auth/session composition for client and server setup.
-- `lib/session/`: role-agnostic authenticated global session model and post-auth protocol boundary.
-- `lib/bincoder/`: small binary encoding helpers for framing and key formats.
-- `lib/keys/`: key generation, parsing, serialization, and signing helpers.
-- `lib/trust/`: file-backed trust helpers and current stubs for `known_hosts`, `authorized_keys`, and OpenSSH private-key lookup.
-- `lib/tty/`: local raw terminal and server PTY mechanics.
-- `lib/settings/`: config loading and validation.
-- `lib/logging/`: logger construction and small logging helpers used by the app root and library seams.
+- `app/root/`: settings/logging construction and shutdown hooks.
+- `app/client/`: target parsing, TCP dialing, trust wiring, and terminal demo.
+- `app/server/`: TCP listener, trust/account wiring, and PTY command demo.
+- `lib/transport/`: Noise transport plus currently misplaced protobuf helpers.
+- `lib/auth/`: auth schema, state machine, signed payloads, hooks, and currently coupled authorization result.
+- `lib/establish/`: client/server composition of runtime, Noise, auth, and mux construction.
+- `lib/session/`: post-auth mux plus currently misplaced connection runtime.
+- `lib/service/`: current PTY/exec payload protocol.
+- `lib/strictfiles/`: secure-open primitives not yet integrated into trust paths.
+- `lib/trust/`: current combined trust parsing, file access, verification, authorization, and account lookup.
+- `lib/keys/`, `lib/bincoder/`: key and binary encoding helpers.
+- `lib/user/`: current `os/user`-backed account snapshot.
+- `lib/tty/`: local raw TTY and server PTY mechanics.
+- `lib/settings/`, `lib/logging/`: application configuration and logging infrastructure currently under `lib`.
+- `proto/`: auth, session, and command service protobuf schemas.
 
 ## Development Rules
 
-- Prefer small, composable layers over large all-in-one abstractions.
-- Keep app-scoped services such as settings, logging, and future telemetry rooted in `app/root`; avoid package-global service registries.
-- Keep TCP ownership in `app/client` and `app/server`; do not move dialing/listening or TCP tuning into `lib/transport`.
-- Keep `transport.Transport` focused on encrypted frame send/receive.
-- Keep protobuf marshaling/validation above transport in helper functions rather than making it the transport identity.
-- Keep auth and session wire schemas separate: one protobuf `oneof` auth frame type and one protobuf `oneof` session frame type.
-- Keep file-backed trust lookup outside `lib/auth` and `lib/session`; prefer `lib/trust` plus app-level composition for deployment-specific policy.
-- Keep terminal data contents raw bytes and return terminal bytes unchanged.
-- Use protobuf for message serialization and protovalidate for schema validation where applicable.
-- Use deterministic protobuf serialization only for blobs or payloads that are signed.
-- Use `github.com/rotisserie/eris` for wrapped errors.
-- Use `log/slog` for logging and keep `github.com/charmbracelet/log` confined to `lib/logging` as the console presentation handler.
-- Prefer passing explicit `*slog.Logger` instances through app/session/auth/trust wiring over mutating a global default logger.
-- Keep log fan-out, console toggling, and logfile ownership in the app-root-owned `logging.Service`.
+- Prefer small composable components and explicit ownership.
+- Keep TCP dial/listen/admission policy in app code.
+- Preserve separate auth and post-auth wire schemas.
+- Do not put service/channel intent into auth messages.
+- Keep terminal payload bytes unchanged.
+- Use protobuf and protovalidate where applicable.
+- Use deterministic protobuf serialization only for signed/transcript material.
+- Use `github.com/rotisserie/eris` for wrapped errors unless a refactor deliberately standardizes error handling.
+- Use `log/slog`; keep console presentation details out of protocol/security packages.
+- Pass explicit loggers from app composition; do not mutate a global default logger.
+- Keep private keys, authorization paths, account lookup, PAM, and process policy out of transport.
 - Do not target Windows.
-- Do not add SSH compatibility, ControlMaster, or reconnect/resume unless the roadmap explicitly moves to that step.
-- Factor potential process separation and the security impact of changes into further development and architecture decisions, even when the immediate implementation stays in-process.
-- Prefer the smallest change that improves the authenticated session and channel-open path without closing off future process separation.
+- Do not add SSH wire compatibility, reconnect/resume, ControlMaster-like behavior, or broad algorithm negotiation while the foundation remains unstable.
+- Consider future process separation when defining trust and launch boundaries, but do not force a process split before the plain-data interfaces are stable.
+- Avoid broad compatibility shims for obsolete internal APIs during architectural cleanup; update callers and tests together.
 
-## Auth And Session Direction
+## Testing And Verification
 
-- `lib/session/session.go` should model the global authenticated session itself, not PTY/client/server terminal behavior.
-- Authentication protocol logic and auth state transitions should live in `lib/auth`.
-- Session establishment chooses and validates identities, keys, and trust hooks, then calls into the auth machinery.
-- `lib/establish.Connect` and `lib/establish.Accept` are the authenticated session construction entry points today.
-- `lib/session` may own shared connection-runtime details such as target handoff, cancellation, and handshake/auth timeout enforcement, but not role-specific policy.
-- Auth code should run the authentication protocol with the supplied identities and keys; it should not decide local policy, `known_hosts` file paths, `authorized_keys` parsing, selected service, or requested channel type.
-- Auth protocol messages live only in `auth.AuthFrame`; session protocol messages live only in `session.Envelope`.
-- Auth messages must not include which service or channel the client wants to run.
-- Every auth initiation or request must have a corresponding reply, including rejection and error paths.
-- Signed auth payloads use deterministic protobuf serialization; do not reintroduce a second canonicalization scheme for auth blobs.
-- `Session.Run` should be the post-auth receive owner. Do not add competing `ReceiveFrame` / `ReceiveProto` users around it.
+Run the full suite:
 
-## Trust Direction
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+```
 
-- `lib/trust` should stay focused on trust data lookup and verification, not on transport or channel behavior.
-- File-backed `known_hosts`, `authorized_keys`, and private-key loading are current stubs, not the final policy model.
-- Host-key verification belongs behind the `HostKeyVerifier` seam.
-- Client-key authorization belongs behind the `AuthorizeClient` seam.
-- Local account resolution and broader permissions should remain separate from raw auth success.
+For protocol tests:
 
-## Channel Direction
+- use `net.Pipe` with deadlines for bidirectional behavior;
+- ensure the peer reads when the test expects a write to complete;
+- test malformed messages, invalid ordering, duplicate IDs, cancellation, blocking peers, and limit exhaustion;
+- keep an explicit raw-terminal-byte preservation test.
 
-- Channels are opened after authentication.
-- The current terminal behavior is a provisional `session` channel variant.
-- Future PTY-backed and non-PTY command paths should stay behind the session/channel model rather than bypassing it.
-- The client/server PTY plumbing lives in `app` as intentionally provisional demo code; future role-specific `Session` types remain stubs.
-- Do not introduce channel routing keyed to a future `session_id`; keep any such identifier, if added later, reserved for opaque audit/logging.
+For trust/security tests:
 
-## Process-Separation Biases
+- cover owner/mode/symlink/path-race and size policies;
+- fuzz key, `authorized_keys`, `known_hosts`, and protobuf parsers;
+- test unsupported and revoked semantics explicitly;
+- verify peer-visible errors remain generic.
 
-The repository currently references `PROCESS_SEPARATION.md`, but that file is not present in this checkout. Treat process separation as an architectural constraint and design bias without forcing an immediate process split.
+For process/TTY tests:
 
-- Keep one receive owner per connection; do not let unrelated goroutines compete over `ReceiveFrame` / `ReceiveProto`.
-- Avoid spreading host-key access, authorization policy, account lookup, or PTY launch policy into `transport` or `auth`.
-- Prefer plain data interfaces at trust boundaries so future helper/monitor processes remain possible.
+- cover PTY and non-PTY execution;
+- terminal restoration and input cancellation;
+- resize behavior;
+- exit status/signals;
+- descendant termination and child reaping;
+- disconnect and shutdown cleanup.
 
-## Testing
+Manual smoke testing currently uses:
 
-- Run all tests with:
+```sh
+./run-tmux.sh
+```
 
-  ```sh
-  go test ./...
-  ```
-
-- Prefer focused tests in `lib/auth`, `lib/session`, and `lib/transport` for protocol behavior before changing app-level flows.
-- Prefer focused tests in `lib/trust` for file-backed trust behavior and trust-policy edge cases.
-- Use `github.com/stretchr/testify/require` for new tests.
-- For bidirectional protocol tests, prefer `net.Pipe` with deadlines over `bytes.Buffer`.
-- Keep an explicit test that terminal data bytes are not transformed.
-
-## Manual Smoke Test
-
-- Use the tmux helper:
-
-  ```sh
-  ./run-tmux.sh
-  ```
-
-- Current interactive smoke tests expect `~/.mygosh/id_ed25519`, `~/.mygosh/host_ed25519`, and `~/.mygosh/known_hosts`, plus a matching server-side `authorized_keys` entry.
-- Expected current manual behavior is one client connected to one server process, successful authentication, then one PTY-backed command session.
-- Verify input/output, resize forwarding, exit status, authorized-account execution, and terminal restoration.
-
-## Current Design Biases
-
-- Authenticated session construction and a provisional PTY channel are in place; the next priority is a clearer auth/permissions flow and hardened channel/process ownership.
-- Keep the current app-level PTY path provisional while the real client/server session abstractions are designed.
-- Add batching, escape sequences like `~.`, reconnect/resume, and broader execution policy only after the session/channel layer is boring.
-- When in doubt, choose the smallest change that improves the session/channel path and trust-policy seams without closing off future auth, authorization, permissions, or process-separation work.
+The current smoke path expects the key/trust files documented in [`README.md`](README.md), one accepted connection, successful auth, and one PTY-backed command. Treat successful smoke behavior as demo verification, not evidence of production security.

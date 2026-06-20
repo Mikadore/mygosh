@@ -30,14 +30,14 @@ The following describes the code as it exists now, not the target architecture:
 - The server accepts exactly one connection and exits after that connection finishes.
 - `lib/transport.Transport` performs a Noise NN handshake and encrypted length-prefixed frame I/O over a `net.Conn`.
 - Auth traffic uses the protobuf `auth.AuthFrame`; post-auth traffic uses `session.Envelope`.
-- `transport.SendProto` and `transport.ReceiveProto` perform protobuf marshaling and protovalidate validation inside the `lib/transport` package.
+- `lib/wire` defines transport-neutral `Framer`/`FramedConn` contracts and performs protobuf marshaling plus protovalidate validation.
 - `lib/establish.Connect` and `lib/establish.BeginAccept` compose connection runtime, Noise, auth, and construction of `lib/session.Session`.
 - `BeginAccept` returns a pending server establishment after client proof verification. Its context keeps the complete auth timeout active while app policy runs, and its one-shot `Accept`, `Reject`, and `Close` methods do not expose a mux before acceptance.
 - `lib/session.Runtime` currently owns cancellation, target handoff, and handshake/auth timeout enforcement even though those phases precede the post-auth mux.
 - `lib/auth` verifies server and client signatures, runs the auth wire state machine, and returns an immutable `VerifiedClient` plus a one-shot accept/reject decision. It does not import Unix accounts or authorize client keys.
 - `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs the account-policy seam, and returns immutable connection credentials before wire auth success.
 - The same `Authz` object authorizes a `"session"` channel through a closeable session lease. Account and session policies currently default to no-ops.
-- `lib/session.Session` is the channel/global-request multiplexer. It does not contain authenticated credentials and can be constructed directly over any `transport.FramedConn`; “authenticated session” is a property of the normal app path, not one enforced by the type.
+- `lib/session.Session` is the channel/global-request multiplexer. It does not contain authenticated credentials and can be constructed directly over any `wire.FramedConn`; “authenticated session” is a property of the normal app path, not one enforced by the type.
 - `Session.Run` is the sole post-auth frame receiver in the normal path, but it invokes handlers and performs some writes synchronously.
 - `lib/trust` contains path-independent OpenSSH-format parsers and pure key/host matchers.
 - `lib/strictfiles` provides caller-configurable checked directory/file opens. App-owned `app/securefiles` uses anchored `OpenAt` traversal and bounded reads for every private-key and trust file.
@@ -220,7 +220,8 @@ This section is factual; package placement is expected to change during boundary
 - `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
 - `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and PTY command demo.
 - `app/server/authz/`: account resolution, `authorized_keys` path/file policy, immutable connection credentials, and account/session policy seams.
-- `lib/transport/`: Noise transport plus currently misplaced protobuf helpers.
+- `lib/transport/`: Noise handshake, channel binding, encrypted frame I/O, deadlines, and close.
+- `lib/wire/`: transport-neutral framed-connection contracts and protobuf encoding/validation.
 - `lib/auth/`: auth schema, state machine, signed payloads, proof result, and pending accept/reject decision.
 - `lib/establish/`: client connection composition and pending server establishment lifecycle.
 - `lib/session/`: post-auth mux plus currently misplaced connection runtime.

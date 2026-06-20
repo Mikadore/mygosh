@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -308,7 +309,7 @@ func TestSendReceiveProtoRoundTripsAuthFrames(t *testing.T) {
 
 func TestSendProtoRejectsNilMessage(t *testing.T) {
 	sender, _ := makeTransportPair(t)
-	require.Error(t, SendProto(sender, nil))
+	require.Error(t, wire.SendProto(sender, nil))
 }
 
 func TestDataPayloadIsUnchanged(t *testing.T) {
@@ -368,7 +369,7 @@ func TestReceiveProtoRejectsInvalidWindowAdjust(t *testing.T) {
 func TestSendProtoRejectsInvalidAuthFrame(t *testing.T) {
 	sender, _ := makeTransportPair(t)
 
-	err := SendProto(sender, &authpb.AuthFrame{
+	err := wire.SendProto(sender, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_HostAuthInit{
 			HostAuthInit: &authpb.HostAuthInit{
 				MygoshAuthVersion: "mygosh-auth-v1",
@@ -433,14 +434,14 @@ func TestSendReceiveProtoOverTCPTransport(t *testing.T) {
 	gotCh := make(chan *authpb.AuthFrame, 1)
 	go func() {
 		var got authpb.AuthFrame
-		err := ReceiveProto(serverTransport, &got)
+		err := wire.ReceiveProto(serverTransport, &got)
 		if err == nil {
 			gotCh <- &got
 		}
 		errs <- err
 	}()
 	go func() {
-		errs <- SendProto(clientTransport, expected)
+		errs <- wire.SendProto(clientTransport, expected)
 	}()
 
 	require.NoError(t, <-errs)
@@ -453,10 +454,10 @@ func requireProtoRoundTrip(t *testing.T, sender, receiver *Transport, expected p
 
 	errs := make(chan error, 2)
 	go func() {
-		errs <- SendProto(sender, expected)
+		errs <- wire.SendProto(sender, expected)
 	}()
 	go func() {
-		errs <- ReceiveProto(receiver, got)
+		errs <- wire.ReceiveProto(receiver, got)
 	}()
 
 	require.NoError(t, <-errs)
@@ -472,7 +473,7 @@ func receiveProtoFromRawFrame(t *testing.T, sender, receiver *Transport, frame [
 		sendErrs <- sender.SendFrame(frame)
 	}()
 
-	err := ReceiveProto(receiver, got)
+	err := wire.ReceiveProto(receiver, got)
 	require.NoError(t, <-sendErrs)
 	return err
 }

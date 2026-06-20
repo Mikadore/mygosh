@@ -1,4 +1,4 @@
-package transport
+package wire
 
 import (
 	"buf.build/go/protovalidate"
@@ -6,9 +6,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func SendProto(t Framer, message proto.Message) error {
-	if t == nil {
-		return eris.New("wire: nil transport")
+func SendProto(framer Framer, message proto.Message) error {
+	if framer == nil {
+		return eris.New("wire: nil framer")
 	}
 	if message == nil {
 		return eris.New("wire: nil message")
@@ -22,21 +22,21 @@ func SendProto(t Framer, message proto.Message) error {
 		return eris.Wrap(err, "encode message")
 	}
 
-	if err := t.SendFrame(packet); err != nil {
+	if err := framer.SendFrame(packet); err != nil {
 		return eris.Wrapf(err, "send message (%d bytes)", len(packet))
 	}
 	return nil
 }
 
-func ReceiveProto(t Framer, message proto.Message) error {
-	if t == nil {
-		return eris.New("wire: nil transport")
+func ReceiveProto(framer Framer, message proto.Message) error {
+	if framer == nil {
+		return eris.New("wire: nil framer")
 	}
 	if message == nil {
 		return eris.New("wire: nil message")
 	}
 
-	packet, err := t.ReceiveFrame()
+	packet, err := framer.ReceiveFrame()
 	if err != nil {
 		return err
 	}

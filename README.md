@@ -211,7 +211,8 @@ go vet ./...
 - `app/`: current CLI application composition, networking, and provisional terminal/process flows.
 - `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
 - `app/server/authz/`: account/key authorization, immutable credentials, and account/session policy seams.
-- `lib/transport/`: Noise transport and currently colocated protobuf helpers.
+- `lib/transport/`: Noise handshake, channel binding, and encrypted frame transport.
+- `lib/wire/`: transport-neutral framed connections and protobuf encoding/validation.
 - `lib/auth/`: cryptographic auth protocol and staged accept/reject decision.
 - `lib/establish/`: client composition and pending server establishment lifecycle.
 - `lib/session/`: post-auth mux plus current shared connection runtime.

@@ -10,7 +10,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
-	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
 
@@ -26,7 +26,7 @@ type globalWaitResult struct {
 
 type Session struct {
 	runtime *Runtime
-	conn    transport.FramedConn
+	conn    wire.FramedConn
 	logger  *slog.Logger
 	config  Config
 
@@ -45,7 +45,7 @@ type Session struct {
 
 // New builds the post-auth multiplexer over an already authenticated framed
 // connection. Role-specific auth results belong to the caller.
-func New(conn transport.FramedConn, cfg Config, opts Options) (*Session, error) {
+func New(conn wire.FramedConn, cfg Config, opts Options) (*Session, error) {
 	if conn == nil {
 		return nil, eris.New("session connection is required")
 	}
@@ -123,7 +123,7 @@ func (s *Session) Run(ctx context.Context, handler Handler) error {
 
 	for {
 		var frame sessionpb.Envelope
-		if err := transport.ReceiveProto(s.conn, &frame); err != nil {
+		if err := wire.ReceiveProto(s.conn, &frame); err != nil {
 			if eris.Is(err, io.EOF) {
 				logger.Debug("session stream closed")
 				finalErr = nil
@@ -751,7 +751,7 @@ func (s *Session) sendEnvelope(frame *sessionpb.Envelope) error {
 		return cause
 	}
 
-	if err := transport.SendProto(s.conn, frame); err != nil {
+	if err := wire.SendProto(s.conn, frame); err != nil {
 		if cause := context.Cause(s.runtime.Context()); cause != nil {
 			return cause
 		}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 )
 
@@ -19,13 +18,13 @@ var ErrDecisionMade = eris.New("server auth decision already made")
 // exactly one decision can be attempted.
 type PendingServerAuth struct {
 	mu       sync.Mutex
-	conn     transport.BoundFramer
+	conn     BoundFramer
 	machine  *authMachine
 	verified VerifiedClient
 	decided  bool
 }
 
-func BeginServer(ctx context.Context, conn transport.BoundFramer, cfg ServerConfig) (*PendingServerAuth, error) {
+func BeginServer(ctx context.Context, conn BoundFramer, cfg ServerConfig) (*PendingServerAuth, error) {
 	ctx = normalizeContext(ctx)
 	if conn == nil {
 		return nil, eris.New("auth connection is required")

@@ -6,11 +6,10 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
 )
 
-func RunClient(ctx context.Context, conn transport.BoundFramer, cfg ClientConfig) (ClientResult, error) {
+func RunClient(ctx context.Context, conn BoundFramer, cfg ClientConfig) (ClientResult, error) {
 	ctx = normalizeContext(ctx)
 	if conn == nil {
 		return ClientResult{}, eris.New("auth connection is required")

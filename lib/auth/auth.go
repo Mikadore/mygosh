@@ -8,7 +8,7 @@ import (
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
-	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
 
@@ -89,6 +89,13 @@ func (c ClientConfig) Validate() error {
 type ServerConfig struct {
 	HostKey keys.Keypair
 	Logger  *slog.Logger
+}
+
+// BoundFramer is the framed auth channel plus the Noise channel binding used
+// by signed authentication transcripts.
+type BoundFramer interface {
+	wire.Framer
+	ChannelBinding() []byte
 }
 
 func (c ServerConfig) Validate() error {
@@ -172,12 +179,12 @@ const (
 type authMachine struct {
 	role           string
 	state          authState
-	conn           transport.BoundFramer
+	conn           BoundFramer
 	channelBinding []byte
 	logger         *slog.Logger
 }
 
-func newAuthMachine(role string, conn transport.BoundFramer, logger *slog.Logger) *authMachine {
+func newAuthMachine(role string, conn BoundFramer, logger *slog.Logger) *authMachine {
 	return &authMachine{
 		role:           role,
 		state:          authStateNoiseEstablished,
@@ -206,7 +213,7 @@ func (m *authMachine) advance(expected authState, next authState) error {
 	return nil
 }
 
-func receiveHostAuthInit(messageTransport transport.Framer) (*authpb.HostAuthInit, error) {
+func receiveHostAuthInit(messageTransport wire.Framer) (*authpb.HostAuthInit, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive host auth init")
@@ -222,7 +229,7 @@ func receiveHostAuthInit(messageTransport transport.Framer) (*authpb.HostAuthIni
 	}
 }
 
-func receiveServerAuth(messageTransport transport.Framer) (*authpb.ServerAuth, error) {
+func receiveServerAuth(messageTransport wire.Framer) (*authpb.ServerAuth, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive server auth")
@@ -238,7 +245,7 @@ func receiveServerAuth(messageTransport transport.Framer) (*authpb.ServerAuth, e
 	}
 }
 
-func receiveClientAuthRequest(messageTransport transport.Framer) (*authpb.ClientAuthRequest, error) {
+func receiveClientAuthRequest(messageTransport wire.Framer) (*authpb.ClientAuthRequest, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive client auth request")
@@ -254,7 +261,7 @@ func receiveClientAuthRequest(messageTransport transport.Framer) (*authpb.Client
 	}
 }
 
-func receiveClientAuthResponse(messageTransport transport.Framer) (*authpb.ClientAuthResponse, error) {
+func receiveClientAuthResponse(messageTransport wire.Framer) (*authpb.ClientAuthResponse, error) {
 	frame, err := receiveAuthFrame(messageTransport)
 	if err != nil {
 		return nil, eris.Wrap(err, "receive client auth response")
@@ -270,19 +277,19 @@ func receiveClientAuthResponse(messageTransport transport.Framer) (*authpb.Clien
 	}
 }
 
-func receiveAuthFrame(messageTransport transport.Framer) (*authpb.AuthFrame, error) {
+func receiveAuthFrame(messageTransport wire.Framer) (*authpb.AuthFrame, error) {
 	var frame authpb.AuthFrame
-	if err := transport.ReceiveProto(messageTransport, &frame); err != nil {
+	if err := wire.ReceiveProto(messageTransport, &frame); err != nil {
 		return nil, eris.Wrap(err, "receive auth frame")
 	}
 	return &frame, nil
 }
 
-func sendAuthFrame(messageTransport transport.Framer, frame *authpb.AuthFrame) error {
-	return transport.SendProto(messageTransport, frame)
+func sendAuthFrame(messageTransport wire.Framer, frame *authpb.AuthFrame) error {
+	return wire.SendProto(messageTransport, frame)
 }
 
-func sendAuthError(messageTransport transport.Framer, code string, message string) {
+func sendAuthError(messageTransport wire.Framer, code string, message string) {
 	_ = sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_Error{
 			Error: &authpb.AuthError{
@@ -293,7 +300,7 @@ func sendAuthError(messageTransport transport.Framer, code string, message strin
 	})
 }
 
-func sendClientAuthOK(messageTransport transport.Framer) error {
+func sendClientAuthOK(messageTransport wire.Framer) error {
 	return sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_ClientAuthResponse{
 			ClientAuthResponse: &authpb.ClientAuthResponse{
@@ -305,7 +312,7 @@ func sendClientAuthOK(messageTransport transport.Framer) error {
 	})
 }
 
-func sendClientAuthReject(messageTransport transport.Framer, code string, message string) error {
+func sendClientAuthReject(messageTransport wire.Framer, code string, message string) error {
 	return sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_ClientAuthResponse{
 			ClientAuthResponse: &authpb.ClientAuthResponse{

@@ -337,8 +337,8 @@ Perform only the boundary work needed to make the process split coherent, then e
 
 Useful prerequisites are:
 
-- a transport-neutral framed-connection interface;
-- protocol encoding outside the Noise transport package;
+- the existing transport-neutral framed-connection interface;
+- the existing protocol encoding outside the Noise transport package;
 - a versioned plain-data startup and credential representation;
 - removal of concrete in-process authorization dependencies from session startup;
 - a dedicated worker entrypoint;

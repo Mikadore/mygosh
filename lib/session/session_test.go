@@ -8,6 +8,7 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/transport"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -285,7 +286,7 @@ func TestSessionRunRejectsUnknownChannelData(t *testing.T) {
 	clientRun := startSessionRun(t, clientSession, nil)
 	defer serverSession.Close() //nolint:errcheck
 
-	require.NoError(t, transport.SendProto(serverSession.conn, &sessionpb.Envelope{
+	require.NoError(t, wire.SendProto(serverSession.conn, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelData{
 			ChannelData: &sessionpb.ChannelData{
 				RecipientChannelId: 99,

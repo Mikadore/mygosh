@@ -2,7 +2,6 @@ package transport
 
 import (
 	"bytes"
-	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -10,28 +9,12 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/Mikadore/mygosh/lib/logging"
+	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/flynn/noise"
 	"github.com/rotisserie/eris"
 )
 
 const MaxPayloadSize = 32 * 1024
-
-type Framer interface {
-	SendFrame([]byte) error
-	ReceiveFrame() ([]byte, error)
-}
-
-type FramedConn interface {
-	Framer
-	io.Closer
-}
-
-// BoundFramer exposes the Noise channel binding to auth without making auth
-// depend on the concrete Transport implementation.
-type BoundFramer interface {
-	Framer
-	ChannelBinding() []byte
-}
 
 type Transport struct {
 	conn           net.Conn
@@ -42,6 +25,8 @@ type Transport struct {
 	rx_mux         sync.Mutex
 	channelBinding []byte
 }
+
+var _ wire.FramedConn = (*Transport)(nil)
 
 func (t *Transport) ReceiveFrame() ([]byte, error) {
 	t.rx_mux.Lock()

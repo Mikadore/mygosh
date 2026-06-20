@@ -105,12 +105,26 @@ func checkStat(st unix.Stat_t, opt CheckOptions) error {
 // through symlinks, but the opened directory itself must be owned by the
 // effective user or root and must not be writable by group or other.
 func OpenDir(path string) (CheckedFile, error) {
-	return openChecked(path, unix.O_PATH, 0, CheckOptions{
+	return OpenDirWithOptions(path, CheckOptions{
 		WantDir:         true,
 		OwnerID:         uint32(unix.Geteuid()),
 		AllowSymlinks:   true,
 		AllowGlobalRead: true,
 	})
+}
+
+// OpenDirWithOptions opens a caller-selected directory anchor and validates
+// it with caller-owned ownership and mode policy.
+func OpenDirWithOptions(path string, opt CheckOptions) (CheckedFile, error) {
+	opt.WantDir = true
+	return openChecked(path, unix.O_PATH, 0, opt)
+}
+
+// OpenFile opens and validates a regular file directly. Callers handling
+// credential or trust paths should normally prefer an anchored OpenAt.
+func OpenFile(path string, opt CheckOptions) (CheckedFile, error) {
+	opt.WantDir = false
+	return openChecked(path, unix.O_RDONLY, 0, opt)
 }
 
 // OpenAt opens a regular file read-only beneath the checked directory anchor.

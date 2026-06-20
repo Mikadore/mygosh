@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"sync"
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
@@ -9,62 +10,149 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-func RunServer(ctx context.Context, conn transport.BoundFramer, cfg ServerConfig) (ServerResult, error) {
+const authenticationFailed = "authentication-failed"
+
+var ErrDecisionMade = eris.New("server auth decision already made")
+
+// PendingServerAuth owns the final accept/reject wire response after the
+// client's signature has been verified. It is safe for concurrent use, but
+// exactly one decision can be attempted.
+type PendingServerAuth struct {
+	mu       sync.Mutex
+	conn     transport.BoundFramer
+	machine  *authMachine
+	verified VerifiedClient
+	decided  bool
+}
+
+func BeginServer(ctx context.Context, conn transport.BoundFramer, cfg ServerConfig) (*PendingServerAuth, error) {
 	ctx = normalizeContext(ctx)
 	if conn == nil {
-		return ServerResult{}, eris.New("auth connection is required")
+		return nil, eris.New("auth connection is required")
 	}
 	if err := cfg.Validate(); err != nil {
-		return ServerResult{}, eris.Wrap(err, "validate server auth config")
+		return nil, eris.Wrap(err, "validate server auth config")
 	}
 
 	machine := newAuthMachine("server", conn, cfg.Logger)
-	return machine.authenticateServer(ctx, cfg)
+	verified, err := machine.verifyClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &PendingServerAuth{
+		conn:     conn,
+		machine:  machine,
+		verified: verified,
+	}, nil
 }
 
-func (m *authMachine) authenticateServer(ctx context.Context, cfg ServerConfig) (ServerResult, error) {
+func (p *PendingServerAuth) VerifiedClient() VerifiedClient {
+	if p == nil {
+		return VerifiedClient{}
+	}
+	return VerifiedClient{
+		hostIdentity:      p.verified.hostIdentity,
+		requestedUsername: p.verified.requestedUsername,
+		provenKey:         clonePublicKey(p.verified.provenKey),
+		serverKey:         clonePublicKey(p.verified.serverKey),
+	}
+}
+
+func (p *PendingServerAuth) Accept() error {
+	if err := p.beginDecision(); err != nil {
+		return err
+	}
+	if err := sendClientAuthOK(p.conn); err != nil {
+		return eris.Wrap(err, "send client auth response")
+	}
+	if err := p.machine.advance(authStateClientAuthRecv, authStateAuthenticated); err != nil {
+		return err
+	}
+	p.machine.debug(
+		"client authentication accepted",
+		"reference_identity", p.verified.hostIdentity,
+		"username", p.verified.requestedUsername,
+		"fingerprint", p.verified.provenKey.FingerprintSHA256(),
+	)
+	return nil
+}
+
+func (p *PendingServerAuth) Reject() error {
+	if err := p.beginDecision(); err != nil {
+		return err
+	}
+	if err := sendClientAuthReject(p.conn, authenticationFailed, "authentication failed"); err != nil {
+		return eris.Wrap(err, "send client auth rejection")
+	}
+	p.machine.info(
+		"client authentication rejected",
+		"code", authenticationFailed,
+		"username", p.verified.requestedUsername,
+		"fingerprint", p.verified.provenKey.FingerprintSHA256(),
+	)
+	return nil
+}
+
+func (p *PendingServerAuth) beginDecision() error {
+	if p == nil {
+		return eris.New("pending server auth is required")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.decided {
+		return ErrDecisionMade
+	}
+	p.decided = true
+	return nil
+}
+
+func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (VerifiedClient, error) {
+	if err := ctx.Err(); err != nil {
+		return VerifiedClient{}, err
+	}
+
 	hostAuthInit, err := receiveHostAuthInit(m.conn)
 	if err != nil {
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 	m.debug("received host auth init", "reference_identity", hostAuthInit.GetReferenceIdentity())
 	if err := m.advance(authStateNoiseEstablished, authStateHostAuthInitRecv); err != nil {
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 	if hostAuthInit.GetMygoshAuthVersion() != ProtocolVersion {
 		err := eris.Errorf("unsupported auth version %q", hostAuthInit.GetMygoshAuthVersion())
 		m.info("rejecting host auth init", "code", "unsupported-auth-version", "reference_identity", hostAuthInit.GetReferenceIdentity(), "version", hostAuthInit.GetMygoshAuthVersion())
 		sendAuthError(m.conn, "unsupported-auth-version", err.Error())
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 
 	hostAuthInitHash, err := HashHostAuthInit(hostAuthInit)
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "hash host auth init")
+		return VerifiedClient{}, eris.Wrap(err, "hash host auth init")
 	}
 
 	hostSigner, err := cfg.HostKeyProvider.HostSigner(ctx, HostKeyRequest{
 		ReferenceIdentity: hostAuthInit.GetReferenceIdentity(),
 	})
 	if err != nil {
-		sendAuthError(m.conn, "host-key-unavailable", err.Error())
-		return ServerResult{}, eris.Wrap(err, "select server host key")
+		sendAuthError(m.conn, "host-key-unavailable", "server host key unavailable")
+		return VerifiedClient{}, eris.Wrap(err, "select server host key")
 	}
 
 	hostPublicKey := hostSigner.PublicKey()
 	if !(&hostPublicKey).IsSigning() {
 		err := eris.New("server host signer must expose an ed25519 signing key")
-		sendAuthError(m.conn, "invalid-host-key", err.Error())
-		return ServerResult{}, err
+		sendAuthError(m.conn, "invalid-host-key", "server host key unavailable")
+		return VerifiedClient{}, err
 	}
 	hostPublicKeyBlob, err := hostPublicKey.MarshalBinary()
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "encode server host key")
+		return VerifiedClient{}, eris.Wrap(err, "encode server host key")
 	}
 
 	serverNonce, err := randomBytes(NonceSize)
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "generate server nonce")
+		return VerifiedClient{}, eris.Wrap(err, "generate server nonce")
 	}
 
 	serverAuthPayload, err := (ServerAuthToSign{
@@ -74,12 +162,12 @@ func (m *authMachine) authenticateServer(ctx context.Context, cfg ServerConfig) 
 		ServerNonce:      serverNonce,
 	}).MarshalBinary()
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "encode server auth payload")
+		return VerifiedClient{}, eris.Wrap(err, "encode server auth payload")
 	}
 
 	signature, err := hostSigner.Sign(ctx, serverAuthPayload)
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "sign server auth payload")
+		return VerifiedClient{}, eris.Wrap(err, "sign server auth payload")
 	}
 
 	serverAuthMsg := &authpb.ServerAuth{
@@ -92,43 +180,40 @@ func (m *authMachine) authenticateServer(ctx context.Context, cfg ServerConfig) 
 			ServerAuth: serverAuthMsg,
 		},
 	}); err != nil {
-		return ServerResult{}, eris.Wrap(err, "send server auth")
+		return VerifiedClient{}, eris.Wrap(err, "send server auth")
 	}
 	if err := m.advance(authStateHostAuthInitRecv, authStateServerAuthSent); err != nil {
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 
 	serverAuthHash, err := HashServerAuthMessage(serverAuthMsg)
 	if err != nil {
-		return ServerResult{}, eris.Wrap(err, "hash server auth")
+		return VerifiedClient{}, eris.Wrap(err, "hash server auth")
 	}
 
 	clientAuthRequest, err := receiveClientAuthRequest(m.conn)
 	if err != nil {
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 	m.debug("received client auth request", "username", clientAuthRequest.GetUsername())
 	if err := m.advance(authStateServerAuthSent, authStateClientAuthRecv); err != nil {
-		return ServerResult{}, err
+		return VerifiedClient{}, err
 	}
 
 	clientPublicKey, err := keys.ParsePublicKey(clientAuthRequest.GetClientPublicKeyOrCert())
 	if err != nil {
-		m.info("rejecting client auth", "code", "invalid-client-key", "username", clientAuthRequest.GetUsername())
-		sendClientAuthReject(m.conn, "invalid-client-key", "invalid client public key")
-		return ServerResult{}, eris.Wrap(err, "parse client public key")
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-key")
+		return VerifiedClient{}, eris.Wrap(err, "parse client public key")
 	}
 	if !(&clientPublicKey).IsSigning() {
 		err := eris.New("client public key must be an ed25519 signing key")
-		m.info("rejecting client auth", "code", "invalid-client-key", "username", clientAuthRequest.GetUsername(), "algorithm", clientPublicKey.Algorithm)
-		sendClientAuthReject(m.conn, "invalid-client-key", err.Error())
-		return ServerResult{}, err
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-key")
+		return VerifiedClient{}, err
 	}
 	if clientAuthRequest.GetClientSigAlg() != string(clientPublicKey.Algorithm) {
 		err := eris.Errorf("client signature algorithm %q does not match key algorithm %q", clientAuthRequest.GetClientSigAlg(), clientPublicKey.Algorithm)
-		m.info("rejecting client auth", "code", "invalid-client-sig-alg", "username", clientAuthRequest.GetUsername(), "client_sig_alg", clientAuthRequest.GetClientSigAlg(), "key_algorithm", clientPublicKey.Algorithm)
-		sendClientAuthReject(m.conn, "invalid-client-sig-alg", err.Error())
-		return ServerResult{}, err
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-sig-alg")
+		return VerifiedClient{}, err
 	}
 
 	clientAuthPayload, err := (ClientAuthToSign{
@@ -140,44 +225,35 @@ func (m *authMachine) authenticateServer(ctx context.Context, cfg ServerConfig) 
 		ClientSigAlg:          clientAuthRequest.GetClientSigAlg(),
 	}).MarshalBinary()
 	if err != nil {
-		m.info("rejecting client auth", "code", "invalid-client-auth", "username", clientAuthRequest.GetUsername())
-		sendClientAuthReject(m.conn, "invalid-client-auth", "failed to encode client auth payload")
-		return ServerResult{}, eris.Wrap(err, "encode client auth payload")
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-auth")
+		return VerifiedClient{}, eris.Wrap(err, "encode client auth payload")
 	}
 	if !(&clientPublicKey).Verify(clientAuthPayload, clientAuthRequest.GetSignature()) {
 		err := eris.New("client auth signature verification failed")
-		m.info("rejecting client auth", "code", "invalid-client-signature", "username", clientAuthRequest.GetUsername(), "fingerprint", clientPublicKey.FingerprintSHA256())
-		sendClientAuthReject(m.conn, "invalid-client-signature", err.Error())
-		return ServerResult{}, err
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-signature")
+		return VerifiedClient{}, err
 	}
 
-	clientIdentity := ClientIdentity{
-		Username:  clientAuthRequest.GetUsername(),
-		PublicKey: clonePublicKey(clientPublicKey),
-	}
-	clientKeyAuthorization, err := cfg.AuthorizeClientKey.AuthorizeClientKey(ctx, ClientKeyAuthorizationRequest{
-		ReferenceIdentity: hostAuthInit.GetReferenceIdentity(),
-		ServerHostKey:     clonePublicKey(hostPublicKey),
-		Identity:          clientIdentity,
-	})
+	verified, err := NewVerifiedClient(
+		hostAuthInit.GetReferenceIdentity(),
+		clientAuthRequest.GetUsername(),
+		clientPublicKey,
+		hostPublicKey,
+	)
 	if err != nil {
-		m.info("rejecting client auth", "code", "unauthorized-client", "username", clientIdentity.Username, "fingerprint", clientIdentity.PublicKey.FingerprintSHA256())
-		sendClientAuthReject(m.conn, "unauthorized-client", err.Error())
-		return ServerResult{}, eris.Wrap(err, "authorize client")
+		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-verified-client")
+		return VerifiedClient{}, eris.Wrap(err, "construct verified client")
 	}
+	m.debug(
+		"client cryptographic proof verified",
+		"reference_identity", verified.hostIdentity,
+		"username", verified.requestedUsername,
+		"fingerprint", verified.provenKey.FingerprintSHA256(),
+	)
+	return verified, nil
+}
 
-	if err := sendClientAuthOK(m.conn); err != nil {
-		return ServerResult{}, eris.Wrap(err, "send client auth response")
-	}
-	if err := m.advance(authStateClientAuthRecv, authStateAuthenticated); err != nil {
-		return ServerResult{}, err
-	}
-	m.debug("client authentication complete", "reference_identity", hostAuthInit.GetReferenceIdentity(), "username", clientIdentity.Username, "fingerprint", clientIdentity.PublicKey.FingerprintSHA256())
-
-	return ServerResult{
-		ReferenceIdentity:      hostAuthInit.GetReferenceIdentity(),
-		ServerHostKey:          clonePublicKey(hostPublicKey),
-		ClientIdentity:         clientIdentity,
-		ClientKeyAuthorization: clientKeyAuthorization,
-	}, nil
+func (m *authMachine) rejectInvalidClient(username string, localCode string) {
+	m.info("rejecting invalid client auth", "code", localCode, "username", username)
+	_ = sendClientAuthReject(m.conn, authenticationFailed, "authentication failed")
 }

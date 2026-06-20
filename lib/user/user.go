@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	osuser "os/user"
 
 	"github.com/rotisserie/eris"
@@ -25,6 +26,7 @@ type Account struct {
 	PrimaryGroup        Group
 	SupplementaryGroups []Group
 	HomeDir             string
+	LoginShell          string
 }
 
 func (a Account) UID() string {
@@ -35,7 +37,29 @@ func (a Account) GID() string {
 	return a.PrimaryGroup.GID()
 }
 
-func LookupAccount(username string) (Account, error) {
+type Resolver interface {
+	Resolve(ctx context.Context, username string) (Account, error)
+}
+
+type ResolverFunc func(ctx context.Context, username string) (Account, error)
+
+func (f ResolverFunc) Resolve(ctx context.Context, username string) (Account, error) {
+	if f == nil {
+		return Account{}, eris.New("account resolver is required")
+	}
+	return f(ctx, username)
+}
+
+type OSResolver struct{}
+
+func (OSResolver) Resolve(ctx context.Context, username string) (Account, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Account{}, err
+	}
+
 	usr, err := osuser.Lookup(username)
 	if err != nil {
 		return Account{}, eris.Wrapf(err, "lookup user %q", username)
@@ -64,6 +88,15 @@ func LookupAccount(username string) (Account, error) {
 		SupplementaryGroups: supplementaryGroups,
 		HomeDir:             usr.HomeDir,
 	}, nil
+}
+
+func LookupAccount(username string) (Account, error) {
+	return (OSResolver{}).Resolve(context.Background(), username)
+}
+
+func CloneAccount(account Account) Account {
+	account.SupplementaryGroups = append([]Group(nil), account.SupplementaryGroups...)
+	return account
 }
 
 func lookupGroup(groupID string) (Group, error) {

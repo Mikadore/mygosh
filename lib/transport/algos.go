@@ -11,4 +11,3 @@ var NOISE_CIPHERSUITE noise.CipherSuite = noise.NewCipherSuite(
 	NOISE_CIPHER,
 	NOISE_HASH,
 )
-

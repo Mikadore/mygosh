@@ -80,7 +80,7 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	if !(&serverHostKey).Verify(serverAuthPayload, serverAuth.GetSignature()) {
 		return ClientResult{}, eris.New("server auth signature verification failed")
 	}
-	hostKeyVerification, err := cfg.VerifyServerHostKey.VerifyHostKey(ctx, HostKeyVerificationRequest{
+	err = cfg.VerifyServerHostKey.VerifyHostKey(ctx, HostKeyVerificationRequest{
 		ReferenceIdentity: cfg.ReferenceIdentity,
 		HostKey:           clonePublicKey(serverHostKey),
 	})
@@ -160,10 +160,9 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	m.debug("client authentication complete", "reference_identity", cfg.ReferenceIdentity, "server_fingerprint", serverHostKey.FingerprintSHA256())
 
 	return ClientResult{
-		ReferenceIdentity:   cfg.ReferenceIdentity,
-		ServerHostKey:       clonePublicKey(serverHostKey),
-		ClientIdentity:      ClientIdentity{Username: cfg.Username, PublicKey: clonePublicKey(clientPublicKey)},
-		HostKeyVerification: hostKeyVerification,
+		ReferenceIdentity: cfg.ReferenceIdentity,
+		ServerHostKey:     clonePublicKey(serverHostKey),
+		ClientIdentity:    ClientIdentity{Username: cfg.Username, PublicKey: clonePublicKey(clientPublicKey)},
 	}, nil
 }
 

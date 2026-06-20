@@ -3,21 +3,12 @@ package trust
 import (
 	"errors"
 	"io"
-	"os"
 
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/rotisserie/eris"
 	"github.com/samber/lo"
 	"golang.org/x/crypto/ssh"
 )
-
-func ReadKnownHosts(path string) (map[string][]keys.PublicKey, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, eris.Wrapf(err, "read known_hosts %q", path)
-	}
-	return ParseKnownHosts(contents)
-}
 
 func ParseKnownHosts(contents []byte) (map[string][]keys.PublicKey, error) {
 	out := make(map[string][]keys.PublicKey)
@@ -53,4 +44,13 @@ func ParseKnownHosts(contents []byte) (map[string][]keys.PublicKey, error) {
 	}
 
 	return out, nil
+}
+
+func MatchHostKey(knownHosts map[string][]keys.PublicKey, identity string, presented keys.PublicKey) bool {
+	for _, candidate := range knownHosts[identity] {
+		if candidate.Compare(presented) == 0 {
+			return true
+		}
+	}
+	return false
 }

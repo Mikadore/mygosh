@@ -1,109 +1,179 @@
 package establish
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/transport"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
-	"github.com/rotisserie/eris"
 	"github.com/stretchr/testify/require"
 )
 
-func TestConnectAcceptAuthenticatesSession(t *testing.T) {
-	serverHostKey, err := keys.GenerateEd25519()
-	require.NoError(t, err)
+func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
+	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
 
-	clientIdentity, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-
-	serverSessionCh := make(chan *Server, 1)
-	errs := make(chan error, 2)
+	pendingCh := make(chan *PendingServer, 1)
+	serverErrCh := make(chan error, 1)
 	go func() {
-		session, err := Accept(context.Background(), serverConn, ServerConfig{
+		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
 			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
-			AuthorizeClientKey: auth.ClientKeyAuthorizerFunc(func(_ context.Context, req auth.ClientKeyAuthorizationRequest) (auth.ClientKeyAuthorizationResult, error) {
-				identity := req.Identity
-				if identity.Username != "alice" {
-					return auth.ClientKeyAuthorizationResult{}, eris.Errorf("unexpected username %q", identity.Username)
-				}
-				expectedPublicKey := clientIdentity.PublicKey()
-				if identity.PublicKey.Algorithm != expectedPublicKey.Algorithm || !bytes.Equal(identity.PublicKey.Bytes, expectedPublicKey.Bytes) {
-					return auth.ClientKeyAuthorizationResult{}, eris.New("unexpected client public key")
-				}
-				return auth.ClientKeyAuthorizationResult{
-					Source: "test",
-					Account: usermodel.Account{
-						Username: "alice",
-						Id:       1000,
-						PrimaryGroup: usermodel.Group{
-							Id: 1000,
-						},
-					},
-				}, nil
-			}),
 		})
 		if err == nil {
-			serverSessionCh <- session
+			pendingCh <- pending
 		}
-		errs <- err
+		serverErrCh <- err
 	}()
 
-	clientSession, err := Connect(context.Background(), clientConn, ClientConfig{
-		ReferenceIdentity:      "server.example.test",
-		Username:               "alice",
-		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-		VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
-	})
-	require.NoError(t, err)
-	require.NoError(t, <-errs)
+	clientCh := make(chan *Client, 1)
+	clientErrCh := make(chan error, 1)
+	go func() {
+		client, err := Connect(context.Background(), clientConn, ClientConfig{
+			ReferenceIdentity:      "server.example.test",
+			Username:               "alice",
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+		})
+		if err == nil {
+			clientCh <- client
+		}
+		clientErrCh <- err
+	}()
 
-	serverSession := <-serverSessionCh
-	require.Equal(t, "server.example.test", clientSession.Auth.ReferenceIdentity)
-	require.Equal(t, serverHostKey.PublicKey(), clientSession.Auth.ServerHostKey)
-	require.Equal(t, "alice", clientSession.Auth.ClientIdentity.Username)
-	require.Equal(t, clientIdentity.PublicKey(), clientSession.Auth.ClientIdentity.PublicKey)
-	require.Equal(t, "server.example.test", serverSession.Auth.ReferenceIdentity)
-	require.Equal(t, "alice", serverSession.Auth.ClientIdentity.Username)
-	require.Equal(t, clientIdentity.PublicKey(), serverSession.Auth.ClientIdentity.PublicKey)
-	require.Equal(t, "test", serverSession.Auth.ClientKeyAuthorization.Source)
-	require.Equal(t, usermodel.Account{
-		Username: "alice",
-		Id:       1000,
-		PrimaryGroup: usermodel.Group{
-			Id: 1000,
-		},
-	}, serverSession.Auth.ClientKeyAuthorization.Account)
+	pending := <-pendingCh
+	require.NoError(t, <-serverErrCh)
+	require.Equal(t, "server.example.test", pending.VerifiedClient().HostIdentity())
+	require.Equal(t, "alice", pending.VerifiedClient().RequestedUsername())
+	require.Equal(t, clientIdentity.PublicKey(), pending.VerifiedClient().ProvenKey())
+
+	select {
+	case err := <-clientErrCh:
+		t.Fatalf("client completed before server decision: %v", err)
+	case <-time.After(30 * time.Millisecond):
+	}
+
+	server, err := pending.Accept()
+	require.NoError(t, err)
+	require.NotNil(t, server.Session)
+	require.NoError(t, <-clientErrCh)
+	client := <-clientCh
+	require.Equal(t, serverHostKey.PublicKey(), client.Auth.ServerHostKey)
+
+	require.ErrorIs(t, pending.Reject(), auth.ErrDecisionMade)
+	require.NoError(t, client.Close())
+	require.NoError(t, pending.Close())
+}
+
+func TestBeginAcceptRejectsGenerically(t *testing.T) {
+	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
+
+	pendingCh := make(chan *PendingServer, 1)
+	go func() {
+		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
+			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+		})
+		require.NoError(t, err)
+		pendingCh <- pending
+	}()
+
+	clientErrCh := make(chan error, 1)
+	go func() {
+		_, err := Connect(context.Background(), clientConn, ClientConfig{
+			ReferenceIdentity:      "server.example.test",
+			Username:               "missing-local-user",
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+		})
+		clientErrCh <- err
+	}()
+
+	pending := <-pendingCh
+	require.NoError(t, pending.Reject())
+	clientErr := <-clientErrCh
+	require.ErrorContains(t, clientErr, "authentication failed")
+	require.NotContains(t, clientErr.Error(), "missing-local-user")
+	require.ErrorIs(t, pending.Reject(), auth.ErrDecisionMade)
+}
+
+func TestPendingCloseWithoutDecisionUnblocksClient(t *testing.T) {
+	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
+
+	pendingCh := make(chan *PendingServer, 1)
+	go func() {
+		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
+			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+		})
+		require.NoError(t, err)
+		pendingCh <- pending
+	}()
+
+	clientErrCh := make(chan error, 1)
+	go func() {
+		_, err := Connect(context.Background(), clientConn, ClientConfig{
+			ReferenceIdentity:      "server.example.test",
+			Username:               "alice",
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+		})
+		clientErrCh <- err
+	}()
+
+	pending := <-pendingCh
+	require.NoError(t, pending.Close())
+	require.Error(t, <-clientErrCh)
+	_, err := pending.Accept()
+	require.ErrorIs(t, err, auth.ErrDecisionMade)
+}
+
+func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
+	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
+
+	pendingCh := make(chan *PendingServer, 1)
+	go func() {
+		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
+			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			AuthTimeout:     75 * time.Millisecond,
+		})
+		require.NoError(t, err)
+		pendingCh <- pending
+	}()
+
+	clientErrCh := make(chan error, 1)
+	go func() {
+		_, err := Connect(context.Background(), clientConn, ClientConfig{
+			ReferenceIdentity:      "server.example.test",
+			Username:               "alice",
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
+		})
+		clientErrCh <- err
+	}()
+
+	pending := <-pendingCh
+	select {
+	case <-pending.Context().Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending auth deadline")
+	}
+	require.ErrorIs(t, context.Cause(pending.Context()), context.DeadlineExceeded)
+	_, err := pending.Accept()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Error(t, <-clientErrCh)
 }
 
 func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
-	serverHostKey, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
+	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
 	untrustedHostKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 
-	clientIdentity, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-
-	errs := make(chan error, 1)
+	serverErrCh := make(chan error, 1)
 	go func() {
-		_, err := Accept(context.Background(), serverConn, ServerConfig{
+		_, err := BeginAccept(context.Background(), serverConn, ServerConfig{
 			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
-			AuthorizeClientKey: auth.ClientKeyAuthorizerFunc(func(_ context.Context, req auth.ClientKeyAuthorizationRequest) (auth.ClientKeyAuthorizationResult, error) {
-				return auth.ClientKeyAuthorizationResult{}, nil
-			}),
 		})
-		errs <- err
+		serverErrCh <- err
 	}()
 
 	_, err = Connect(context.Background(), clientConn, ClientConfig{
@@ -113,48 +183,14 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 		VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", untrustedHostKey.PublicKey()),
 	})
 	require.ErrorContains(t, err, "verify server host key")
-
 	require.NoError(t, clientConn.Close())
-	require.Error(t, <-errs)
+	require.Error(t, <-serverErrCh)
 }
 
-func TestConnectReportsClientAuthRejection(t *testing.T) {
-	serverHostKey, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
+func TestConnectContextCancellation(t *testing.T) {
 	clientIdentity, err := keys.GenerateEd25519()
 	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-
-	errs := make(chan error, 1)
-	go func() {
-		_, err := Accept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
-			AuthorizeClientKey: auth.ClientKeyAuthorizerFunc(func(_ context.Context, req auth.ClientKeyAuthorizationRequest) (auth.ClientKeyAuthorizationResult, error) {
-				return auth.ClientKeyAuthorizationResult{}, eris.New("client not authorized")
-			}),
-		})
-		errs <- err
-	}()
-
-	_, err = Connect(context.Background(), clientConn, ClientConfig{
-		ReferenceIdentity:      "server.example.test",
-		Username:               "alice",
-		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-		VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
-	})
-	require.ErrorContains(t, err, "server rejected client auth")
-	require.ErrorContains(t, err, "client not authorized")
-	require.ErrorContains(t, <-errs, "authorize client")
-}
-
-func TestConnectRespectsContextCancellation(t *testing.T) {
-	clientIdentity, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-	_ = serverConn
+	clientConn, _ := connectionPipe(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -163,20 +199,19 @@ func TestConnectRespectsContextCancellation(t *testing.T) {
 			ReferenceIdentity:      "server.example.test",
 			Username:               "alice",
 			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
-				return auth.HostKeyVerificationResult{}, nil
+			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(context.Context, auth.HostKeyVerificationRequest) error {
+				return nil
 			}),
 		})
 		errCh <- err
 	}()
-
 	cancel()
 
 	select {
 	case err := <-errCh:
-		require.ErrorIs(t, err, context.Canceled)
+		require.True(t, errors.Is(err, context.Canceled))
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for client establishment cancellation")
+		t.Fatal("timed out waiting for client cancellation")
 	}
 }
 
@@ -185,105 +220,25 @@ func TestResolveTimeoutUsesDefault(t *testing.T) {
 	require.Equal(t, defaultAuthTimeout, resolveTimeout(0, defaultAuthTimeout))
 }
 
-func TestConnectHandshakeTimeout(t *testing.T) {
+func establishmentFixture(t *testing.T) (keys.Keypair, keys.Keypair, net.Conn, net.Conn) {
+	t.Helper()
+	serverHostKey, err := keys.GenerateEd25519()
+	require.NoError(t, err)
 	clientIdentity, err := keys.GenerateEd25519()
 	require.NoError(t, err)
-
 	clientConn, serverConn := connectionPipe(t)
-	_ = serverConn
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := Connect(context.Background(), clientConn, ClientConfig{
-			ReferenceIdentity:      "server.example.test",
-			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
-				return auth.HostKeyVerificationResult{}, nil
-			}),
-			HandshakeTimeout: 25 * time.Millisecond,
-		})
-		errCh <- err
-	}()
-
-	select {
-	case err := <-errCh:
-		require.ErrorIs(t, err, context.DeadlineExceeded)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for handshake timeout")
-	}
-}
-
-func TestConnectAuthTimeout(t *testing.T) {
-	clientIdentity, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-
-	serverErrCh := make(chan error, 1)
-	go func() {
-		_, err := transport.HandshakeServer(serverConn)
-		serverErrCh <- err
-	}()
-
-	_, err = Connect(context.Background(), clientConn, ClientConfig{
-		ReferenceIdentity:      "server.example.test",
-		Username:               "alice",
-		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-		VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
-			return auth.HostKeyVerificationResult{}, nil
-		}),
-		AuthTimeout: 25 * time.Millisecond,
-	})
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.NoError(t, <-serverErrCh)
-}
-
-func TestConnectContextCancellationBeatsPhaseTimeout(t *testing.T) {
-	clientIdentity, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	clientConn, serverConn := connectionPipe(t)
-	_ = serverConn
-
-	ctx, cancel := context.WithCancel(context.Background())
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := Connect(ctx, clientConn, ClientConfig{
-			ReferenceIdentity:      "server.example.test",
-			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) (auth.HostKeyVerificationResult, error) {
-				return auth.HostKeyVerificationResult{}, nil
-			}),
-			HandshakeTimeout: 200 * time.Millisecond,
-		})
-		errCh <- err
-	}()
-
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-errCh:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for context cancellation")
-	}
+	return serverHostKey, clientIdentity, clientConn, serverConn
 }
 
 func connectionPipe(t *testing.T) (net.Conn, net.Conn) {
 	t.Helper()
-
 	clientConn, serverConn := net.Pipe()
 	t.Cleanup(func() {
 		_ = clientConn.Close()
 		_ = serverConn.Close()
 	})
-
 	deadline := time.Now().Add(10 * time.Second)
 	require.NoError(t, clientConn.SetDeadline(deadline))
 	require.NoError(t, serverConn.SetDeadline(deadline))
-
 	return clientConn, serverConn
 }

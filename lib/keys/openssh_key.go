@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/pem"
-	"os"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/rotisserie/eris"
@@ -15,15 +14,6 @@ const (
 	opensshEd25519KeyType        = "ssh-ed25519"
 	opensshEd25519PrivateKeySize = ed25519.PrivateKeySize
 )
-
-func ParseOpensshPrivateKeyFile(path string) (Keypair, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Keypair{}, eris.Wrapf(err, "read OpenSSH private key %q", path)
-	}
-
-	return ParseOpensshPrivateKeyRaw(raw)
-}
 
 func ParseOpensshPrivateKeyRaw(raw []byte) (Keypair, error) {
 	raw = bytes.TrimSpace(raw)

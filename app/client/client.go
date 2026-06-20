@@ -9,7 +9,6 @@ import (
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/establish"
-	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
 
@@ -36,6 +35,15 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 		return err
 	}
 
+	clientIdentity, err := loadClientIdentity(defaultClientIdentityPath, logger)
+	if err != nil {
+		return err
+	}
+	knownHosts, knownHostsSource, err := loadKnownHosts(defaultKnownHostsPath, logger)
+	if err != nil {
+		return err
+	}
+
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", target.dialAddress(cfg.Core.Port))
 	if err != nil {
@@ -44,28 +52,25 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 		}
 		return eris.Wrapf(err, "connect to %s", args.Target)
 	}
-	//TODO: implement comprehensive connection lifecycle
-	// and integrate connection closing/termination with
-	// logging and application error handling
-	//nolint:errcheck
-	defer conn.Close()
+	connectionOwned := true
+	defer func() {
+		if connectionOwned {
+			_ = conn.Close()
+		}
+	}()
 	logger.Info("connected", "addr", conn.RemoteAddr())
-
-	clientIdentity, err := trust.LookupClientIdentityWithLogger(trust.DefaultClientIdentityPath, logger)
-	if err != nil {
-		return err
-	}
 
 	established, err := establish.Connect(ctx, conn, establish.ClientConfig{
 		ReferenceIdentity:      target.referenceIdentity(),
 		Username:               target.resolvedUsername(),
 		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
-		VerifyServerHostKey:    trust.KnownHostsHostKeyVerifierWithLogger(trust.DefaultKnownHostsPath, logger),
+		VerifyServerHostKey:    knownHostsVerifier(knownHosts, knownHostsSource, logger),
 		Logger:                 logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
+	connectionOwned = false
 	defer established.Close()
 
 	logger.Info("server identity", "fingerprint", established.Auth.ServerHostKey.FingerprintSHA256())

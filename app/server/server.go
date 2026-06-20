@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 
 	"github.com/Mikadore/mygosh/app/root"
+	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/establish"
-	"github.com/Mikadore/mygosh/lib/trust"
+	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 )
 
@@ -26,6 +28,19 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	logger := appRoot.Logger.With("command", "server")
 	cfg := appRoot.Settings
 	addr := cfg.ListenAddress()
+
+	serverHostKey, err := loadHostKey(defaultHostKeyPath, logger)
+	if err != nil {
+		return err
+	}
+	authorization, err := serverauthz.New(serverauthz.Config{
+		Resolver:            usermodel.OSResolver{},
+		AuthorizedKeysPaths: defaultAuthorizedKeysPaths,
+		Logger:              logger,
+	})
+	if err != nil {
+		return eris.Wrap(err, "configure server authorization")
+	}
 
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -49,42 +64,55 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		}
 		return eris.Wrap(err, "accept connection")
 	}
-	//TODO: implement comprehensive connection lifecycle
-	// and integrate connection closing/termination with
-	// logging and application error handling
-	//nolint:errcheck
-	defer conn.Close()
+	connectionOwned := true
+	defer func() {
+		if connectionOwned {
+			_ = conn.Close()
+		}
+	}()
 	logger.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	serverHostKey, err := trust.LookupHostKeyWithLogger(trust.DefaultHostKeyPath, logger)
-	if err != nil {
-		return err
-	}
-
-	established, err := establish.Accept(ctx, conn, establish.ServerConfig{
-		HostKeyProvider:    auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
-		AuthorizeClientKey: trust.AuthorizedKeysClientKeyAuthorizerWithLogger(defaultAuthorizedKeysPaths, logger),
-		Logger:             logger,
+	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
+		HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+		Logger:          logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
-	defer established.Close()
+	connectionOwned = false
+	defer pending.Close()
 
+	credentials, err := authorization.AuthorizeConnection(pending.Context(), serverauthz.ConnectionRequest{
+		VerifiedClient: pending.VerifiedClient(),
+		PeerAddress:    conn.RemoteAddr().String(),
+	})
+	if err != nil {
+		logger.Error("connection authorization failed", "err", err)
+		rejectErr := pending.Reject()
+		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
+	}
+
+	established, err := pending.Accept()
+	if err != nil {
+		return eris.Wrap(err, "accept authenticated connection")
+	}
+
+	account := credentials.Account()
 	logger.Info(
 		"authenticated client",
-		"requested_username", established.Auth.ClientIdentity.Username,
-		"local_username", established.Auth.ClientKeyAuthorization.Account.Username,
-		"uid", established.Auth.ClientKeyAuthorization.Account.UID(),
-		"gid", established.Auth.ClientKeyAuthorization.Account.GID(),
-		"source", established.Auth.ClientKeyAuthorization.Source,
-		"fingerprint", established.Auth.ClientIdentity.PublicKey.FingerprintSHA256(),
+		"requested_username", credentials.RequestedUsername(),
+		"local_username", account.Username,
+		"uid", account.UID(),
+		"gid", account.GID(),
+		"source", credentials.MatchedSource(),
+		"fingerprint", credentials.KeyFingerprint(),
 	)
 	logger.Info("authenticated session established", "session_protocol", "terminal-demo")
 	return NewShellDemo(
 		established.Session,
 		cfg.Core.Shell,
-		established.Auth.ClientKeyAuthorization.Account,
+		credentials,
+		authorization,
 		logger,
 	).Run(ctx)
 }

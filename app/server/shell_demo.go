@@ -10,6 +10,7 @@ import (
 	"sync"
 	"syscall"
 
+	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/service"
 	"github.com/Mikadore/mygosh/lib/service/servicepb"
@@ -22,18 +23,26 @@ import (
 const remotePath = "/usr/local/bin:/usr/bin:/bin"
 
 type ShellDemo struct {
-	session *sessionmux.Session
-	shell   string
-	account usermodel.Account
-	logger  *slog.Logger
+	session     *sessionmux.Session
+	shell       string
+	credentials serverauthz.ConnectionCredentials
+	authz       *serverauthz.Authz
+	logger      *slog.Logger
 }
 
-func NewShellDemo(sess *sessionmux.Session, shell string, account usermodel.Account, logger *slog.Logger) *ShellDemo {
+func NewShellDemo(
+	sess *sessionmux.Session,
+	shell string,
+	credentials serverauthz.ConnectionCredentials,
+	authorization *serverauthz.Authz,
+	logger *slog.Logger,
+) *ShellDemo {
 	return &ShellDemo{
-		session: sess,
-		shell:   shell,
-		account: account,
-		logger:  logging.Resolve(logger),
+		session:     sess,
+		shell:       shell,
+		credentials: credentials,
+		authz:       authorization,
+		logger:      logging.Resolve(logger),
 	}
 }
 
@@ -45,14 +54,22 @@ func (d *ShellDemo) Run(ctx context.Context) error {
 	if d.shell == "" {
 		return eris.New("server shell is required")
 	}
-	if d.account.Username == "" || d.account.HomeDir == "" {
+	if d.authz == nil {
+		return eris.New("server authorization is required")
+	}
+	account := d.credentials.Account()
+	if account.Username == "" || account.HomeDir == "" {
 		return eris.New("authorized account is incomplete")
+	}
+	shell := account.LoginShell
+	if shell == "" {
+		shell = d.shell
 	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
 
-	handler := newShellSessionHandler(runCtx, d.shell, d.account, d.logger)
+	handler := newShellSessionHandler(runCtx, shell, d.credentials, d.authz, d.logger)
 	runErrCh := make(chan error, 1)
 	go func() {
 		runErrCh <- d.session.Run(runCtx, handler)
@@ -82,10 +99,11 @@ func (d *ShellDemo) Run(ctx context.Context) error {
 }
 
 type shellSessionHandler struct {
-	ctx     context.Context
-	shell   string
-	account usermodel.Account
-	logger  *slog.Logger
+	ctx         context.Context
+	shell       string
+	credentials serverauthz.ConnectionCredentials
+	authz       *serverauthz.Authz
+	logger      *slog.Logger
 
 	mu              sync.Mutex
 	channelAccepted bool
@@ -94,13 +112,20 @@ type shellSessionHandler struct {
 	done            chan error
 }
 
-func newShellSessionHandler(ctx context.Context, shell string, account usermodel.Account, logger *slog.Logger) *shellSessionHandler {
+func newShellSessionHandler(
+	ctx context.Context,
+	shell string,
+	credentials serverauthz.ConnectionCredentials,
+	authorization *serverauthz.Authz,
+	logger *slog.Logger,
+) *shellSessionHandler {
 	return &shellSessionHandler{
-		ctx:     ctx,
-		shell:   shell,
-		account: account,
-		logger:  logging.Resolve(logger),
-		done:    make(chan error, 1),
+		ctx:         ctx,
+		shell:       shell,
+		credentials: credentials,
+		authz:       authorization,
+		logger:      logging.Resolve(logger),
+		done:        make(chan error, 1),
 	}
 }
 
@@ -121,7 +146,26 @@ func (h *shellSessionHandler) OnChannelOpen(_ context.Context, _ *sessionmux.Cha
 		}
 	}
 
-	channelHandler := newShellChannelHandler(h.ctx, h.shell, h.account, h.logger, h.onChannelFinished)
+	lease, err := h.authz.OpenSession(h.ctx, h.credentials, serverauthz.SessionRequest{
+		ChannelType: req.Type,
+		Payload:     req.Payload,
+	})
+	if err != nil {
+		h.logger.Error("session authorization failed", "err", err)
+		return sessionmux.ChannelOpenDecision{
+			Code:    "session-not-authorized",
+			Message: "session is not authorized",
+		}
+	}
+
+	channelHandler := newShellChannelHandler(
+		h.ctx,
+		h.shell,
+		h.credentials.Account(),
+		lease,
+		h.logger,
+		h.onChannelFinished,
+	)
 	h.channelAccepted = true
 	h.channelHandler = channelHandler
 	return sessionmux.ChannelOpenDecision{
@@ -180,13 +224,24 @@ type shellChannelHandler struct {
 	processFinished bool
 	peerClosed      bool
 	finishErr       error
+	lease           serverauthz.SessionLease
+	leaseOnce       sync.Once
+	leaseErr        error
 }
 
-func newShellChannelHandler(ctx context.Context, shell string, account usermodel.Account, logger *slog.Logger, finished func(error)) *shellChannelHandler {
+func newShellChannelHandler(
+	ctx context.Context,
+	shell string,
+	account usermodel.Account,
+	lease serverauthz.SessionLease,
+	logger *slog.Logger,
+	finished func(error),
+) *shellChannelHandler {
 	return &shellChannelHandler{
 		ctx:      ctx,
 		shell:    shell,
 		account:  account,
+		lease:    lease,
 		logger:   logging.Resolve(logger),
 		finished: finished,
 	}
@@ -238,14 +293,19 @@ func (h *shellChannelHandler) OnClose(_ context.Context, _ *sessionmux.Channel) 
 	h.mu.Lock()
 	h.peerClosed = true
 	process := h.process
+	noProcess := process == nil
 	shouldFinish, finishErr := h.shouldFinishLocked()
 	h.mu.Unlock()
 
 	if process != nil {
 		process.stop()
 	}
+	if noProcess {
+		h.finished(h.closeLease())
+		return
+	}
 	if shouldFinish {
-		h.finished(finishErr)
+		h.finished(errors.Join(finishErr, h.closeLease()))
 	}
 }
 
@@ -340,9 +400,11 @@ func (h *shellChannelHandler) stop() {
 	if process != nil {
 		process.stop()
 	}
+	_ = h.closeLease()
 }
 
 func (h *shellChannelHandler) markProcessFinished(err error) {
+	err = errors.Join(err, h.closeLease())
 	h.mu.Lock()
 	h.processFinished = true
 	h.state = shellChannelFinished
@@ -353,6 +415,15 @@ func (h *shellChannelHandler) markProcessFinished(err error) {
 	if shouldFinish {
 		h.finished(finishErr)
 	}
+}
+
+func (h *shellChannelHandler) closeLease() error {
+	h.leaseOnce.Do(func() {
+		if h.lease != nil {
+			h.leaseErr = h.lease.Close()
+		}
+	})
+	return h.leaseErr
 }
 
 func (h *shellChannelHandler) shouldFinishLocked() (bool, error) {

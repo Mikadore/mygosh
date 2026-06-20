@@ -2,20 +2,11 @@ package trust
 
 import (
 	"bytes"
-	"os"
 
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/rotisserie/eris"
 	"golang.org/x/crypto/ssh"
 )
-
-func ReadAuthorizedKeys(path string) ([]keys.PublicKey, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return nil, eris.Wrapf(err, "read authorized_keys %q", path)
-	}
-	return ParseAuthorizedKeys(contents)
-}
 
 func ParseAuthorizedKeys(contents []byte) ([]keys.PublicKey, error) {
 	contents = bytes.TrimSpace(contents)
@@ -44,4 +35,13 @@ func ParseAuthorizedKeys(contents []byte) ([]keys.PublicKey, error) {
 	}
 
 	return out, nil
+}
+
+func MatchAuthorizedKey(authorized []keys.PublicKey, presented keys.PublicKey) bool {
+	for _, candidate := range authorized {
+		if candidate.Compare(presented) == 0 {
+			return true
+		}
+	}
+	return false
 }

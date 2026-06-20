@@ -2,26 +2,34 @@ package server
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net"
 	"os"
 	osuser "os/user"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
+	"github.com/Mikadore/mygosh/lib/auth"
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/service"
 	"github.com/Mikadore/mygosh/lib/service/servicepb"
 	sessionmux "github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/transport"
 	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestShellChannelHandlerEnforcesRequestOrder(t *testing.T) {
-	handler := newShellChannelHandler(context.Background(), "/bin/sh", currentAccount(t), nil, func(error) {})
+	handler := newShellChannelHandler(context.Background(), "/bin/sh", currentAccount(t), nil, nil, func(error) {})
 
 	execPayload := mustServicePayload(t, &servicepb.ExecRequest{Command: "true"})
 	response := handler.OnRequest(context.Background(), nil, sessionmux.ChannelRequest{
@@ -55,7 +63,7 @@ func TestShellChannelHandlerEnforcesRequestOrder(t *testing.T) {
 }
 
 func TestShellChannelHandlerRejectsInvalidPTYAndFailedExec(t *testing.T) {
-	handler := newShellChannelHandler(context.Background(), "/definitely/missing-mygosh-shell", currentAccount(t), nil, func(error) {})
+	handler := newShellChannelHandler(context.Background(), "/definitely/missing-mygosh-shell", currentAccount(t), nil, nil, func(error) {})
 
 	invalidPTY, err := proto.Marshal(&servicepb.PtyRequest{})
 	require.NoError(t, err)
@@ -102,9 +110,11 @@ func TestShellDemoRunsCommandOverSessionChannel(t *testing.T) {
 
 	clientSession, serverSession := sessionPair(t)
 	account := currentAccount(t)
+	lease := &shellTestLease{}
+	authorization, credentials := shellAuthorization(t, account, lease)
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- NewShellDemo(serverSession, "/bin/sh", account, nil).Run(ctx)
+		serverDone <- NewShellDemo(serverSession, "/bin/sh", credentials, authorization, nil).Run(ctx)
 	}()
 
 	clientRunErr := make(chan error, 1)
@@ -152,10 +162,20 @@ func TestShellDemoRunsCommandOverSessionChannel(t *testing.T) {
 	require.NoError(t, channel.Close())
 
 	require.NoError(t, <-serverDone)
+	require.Equal(t, int32(1), lease.closed.Load())
 	clientErr := <-clientRunErr
 	if clientErr != nil {
 		require.ErrorIs(t, clientErr, context.Canceled)
 	}
+}
+
+type shellTestLease struct {
+	closed atomic.Int32
+}
+
+func (l *shellTestLease) Close() error {
+	l.closed.Add(1)
+	return nil
 }
 
 type testExitStatusHandler struct {
@@ -196,6 +216,37 @@ func currentAccount(t *testing.T) usermodel.Account {
 	require.Equal(t, uint32(os.Geteuid()), account.Id)
 	require.Equal(t, uint32(os.Getegid()), account.PrimaryGroup.Id)
 	return account
+}
+
+func shellAuthorization(t *testing.T, account usermodel.Account, lease serverauthz.SessionLease) (*serverauthz.Authz, serverauthz.ConnectionCredentials) {
+	t.Helper()
+	clientKey, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+	serverKey, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(clientKey.Public))
+	require.NoError(t, err)
+	line := sshPublicKey.Type() + " " + base64.StdEncoding.EncodeToString(sshPublicKey.Marshal()) + "\n"
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+
+	authorization, err := serverauthz.New(serverauthz.Config{
+		Resolver: usermodel.ResolverFunc(func(context.Context, string) (usermodel.Account, error) {
+			return account, nil
+		}),
+		AuthorizedKeysPaths: []string{path},
+		SessionPolicy: serverauthz.SessionPolicyFunc(func(context.Context, serverauthz.ConnectionCredentials, serverauthz.SessionRequest) (serverauthz.SessionLease, error) {
+			return lease, nil
+		}),
+	})
+	require.NoError(t, err)
+
+	verified, err := auth.NewVerifiedClient("server.example.test", account.Username, clientKey.PublicKey(), serverKey.PublicKey())
+	require.NoError(t, err)
+	credentials, err := authorization.AuthorizeConnection(context.Background(), serverauthz.ConnectionRequest{VerifiedClient: verified})
+	require.NoError(t, err)
+	return authorization, credentials
 }
 
 func sessionPair(t *testing.T) (*sessionmux.Session, *sessionmux.Session) {

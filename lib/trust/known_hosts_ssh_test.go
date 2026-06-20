@@ -3,8 +3,6 @@ package trust
 import (
 	"crypto/ed25519"
 	"encoding/base64"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,22 +35,6 @@ func TestParseKnownHostsIgnoresCommentsAndRevokedEntries(t *testing.T) {
 		"127.0.0.1":           {expectedKey},
 	}, got)
 	require.NotContains(t, got, "revoked.example.test")
-}
-
-func TestReadKnownHosts(t *testing.T) {
-	serverKey, err := keys.GenerateEd25519()
-	require.NoError(t, err)
-
-	path := writeKnownHostsFile(t, []string{"server.example.test"}, serverKey.PublicKey(), "ignored")
-
-	got, err := ReadKnownHosts(path)
-	require.NoError(t, err)
-
-	expectedKey := serverKey.PublicKey()
-	expectedKey.Comment = ""
-	require.Equal(t, map[string][]keys.PublicKey{
-		"server.example.test": {expectedKey},
-	}, got)
 }
 
 func TestJoinHostPublicKeys(t *testing.T) {
@@ -99,12 +81,4 @@ func knownHostsLine(t *testing.T, hosts []string, publicKey keys.PublicKey, comm
 		line += " " + comment
 	}
 	return line
-}
-
-func writeKnownHostsFile(t *testing.T, hosts []string, publicKey keys.PublicKey, comment string) string {
-	t.Helper()
-
-	path := filepath.Join(t.TempDir(), "known_hosts")
-	require.NoError(t, os.WriteFile(path, []byte(knownHostsLine(t, hosts, publicKey, comment)+"\n"), 0o600))
-	return path
 }

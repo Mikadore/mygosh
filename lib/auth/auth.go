@@ -9,7 +9,6 @@ import (
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/transport"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 )
 
@@ -100,49 +99,17 @@ type HostKeyVerificationRequest struct {
 	HostKey           keys.PublicKey
 }
 
-type HostKeyVerificationResult struct {
-	Source string
-}
-
 // HostKeyVerifier is called by the client during auth because the protocol must
 // stop before client signing if the presented server key is not trusted.
 type HostKeyVerifier interface {
-	VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error)
+	VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) error
 }
 
-type HostKeyVerifierFunc func(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error)
+type HostKeyVerifierFunc func(ctx context.Context, req HostKeyVerificationRequest) error
 
-func (f HostKeyVerifierFunc) VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error) {
+func (f HostKeyVerifierFunc) VerifyHostKey(ctx context.Context, req HostKeyVerificationRequest) error {
 	if f == nil {
-		return HostKeyVerificationResult{}, eris.New("host key verifier is required")
-	}
-	return f(ctx, req)
-}
-
-type ClientKeyAuthorizationRequest struct {
-	ReferenceIdentity string
-	ServerHostKey     keys.PublicKey
-	Identity          ClientIdentity
-}
-
-type ClientKeyAuthorizationResult struct {
-	Source  string
-	Account usermodel.Account
-}
-
-// ClientKeyAuthorizer is still part of the auth exchange because the server
-// must send an auth OK/reject response before any session channel can open.
-// Successful authorization may also return actionable local account metadata
-// for later session, permission, and execution decisions.
-type ClientKeyAuthorizer interface {
-	AuthorizeClientKey(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error)
-}
-
-type ClientKeyAuthorizerFunc func(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error)
-
-func (f ClientKeyAuthorizerFunc) AuthorizeClientKey(ctx context.Context, req ClientKeyAuthorizationRequest) (ClientKeyAuthorizationResult, error) {
-	if f == nil {
-		return ClientKeyAuthorizationResult{}, eris.New("client key authorizer is required")
+		return eris.New("host key verifier is required")
 	}
 	return f(ctx, req)
 }
@@ -172,17 +139,13 @@ func (c ClientConfig) Validate() error {
 }
 
 type ServerConfig struct {
-	HostKeyProvider    HostKeyProvider
-	AuthorizeClientKey ClientKeyAuthorizer
-	Logger             *slog.Logger
+	HostKeyProvider HostKeyProvider
+	Logger          *slog.Logger
 }
 
 func (c ServerConfig) Validate() error {
 	if c.HostKeyProvider == nil {
 		return eris.New("server host key provider is required")
-	}
-	if c.AuthorizeClientKey == nil {
-		return eris.New("client key authorizer is required")
 	}
 	return nil
 }
@@ -193,17 +156,56 @@ type ClientIdentity struct {
 }
 
 type ClientResult struct {
-	ReferenceIdentity   string
-	ServerHostKey       keys.PublicKey
-	ClientIdentity      ClientIdentity
-	HostKeyVerification HostKeyVerificationResult
+	ReferenceIdentity string
+	ServerHostKey     keys.PublicKey
+	ClientIdentity    ClientIdentity
 }
 
-type ServerResult struct {
-	ReferenceIdentity      string
-	ServerHostKey          keys.PublicKey
-	ClientIdentity         ClientIdentity
-	ClientKeyAuthorization ClientKeyAuthorizationResult
+// VerifiedClient is the immutable result of successful client cryptographic
+// proof. Local account and service authorization deliberately happen outside
+// this package before the pending decision is accepted.
+type VerifiedClient struct {
+	hostIdentity      string
+	requestedUsername string
+	provenKey         keys.PublicKey
+	serverKey         keys.PublicKey
+}
+
+func NewVerifiedClient(hostIdentity string, requestedUsername string, provenKey keys.PublicKey, serverKey keys.PublicKey) (VerifiedClient, error) {
+	if hostIdentity == "" {
+		return VerifiedClient{}, eris.New("host identity is required")
+	}
+	if requestedUsername == "" {
+		return VerifiedClient{}, eris.New("requested username is required")
+	}
+	if !(&provenKey).IsSigning() {
+		return VerifiedClient{}, eris.New("proved client key must be an ed25519 signing key")
+	}
+	if !(&serverKey).IsSigning() {
+		return VerifiedClient{}, eris.New("server key must be an ed25519 signing key")
+	}
+	return VerifiedClient{
+		hostIdentity:      hostIdentity,
+		requestedUsername: requestedUsername,
+		provenKey:         clonePublicKey(provenKey),
+		serverKey:         clonePublicKey(serverKey),
+	}, nil
+}
+
+func (v VerifiedClient) HostIdentity() string {
+	return v.hostIdentity
+}
+
+func (v VerifiedClient) RequestedUsername() string {
+	return v.requestedUsername
+}
+
+func (v VerifiedClient) ProvenKey() keys.PublicKey {
+	return clonePublicKey(v.provenKey)
+}
+
+func (v VerifiedClient) ServerKey() keys.PublicKey {
+	return clonePublicKey(v.serverKey)
 }
 
 type authState string
@@ -355,8 +357,8 @@ func sendClientAuthOK(messageTransport transport.Framer) error {
 	})
 }
 
-func sendClientAuthReject(messageTransport transport.Framer, code string, message string) {
-	_ = sendAuthFrame(messageTransport, &authpb.AuthFrame{
+func sendClientAuthReject(messageTransport transport.Framer, code string, message string) error {
+	return sendAuthFrame(messageTransport, &authpb.AuthFrame{
 		Kind: &authpb.AuthFrame_ClientAuthResponse{
 			ClientAuthResponse: &authpb.ClientAuthResponse{
 				Result: &authpb.ClientAuthResponse_Reject{
@@ -372,14 +374,14 @@ func sendClientAuthReject(messageTransport transport.Framer, code string, messag
 
 func ExactHostKeyVerifier(referenceIdentity string, expected keys.PublicKey) HostKeyVerifier {
 	expected = clonePublicKey(expected)
-	return HostKeyVerifierFunc(func(_ context.Context, req HostKeyVerificationRequest) (HostKeyVerificationResult, error) {
+	return HostKeyVerifierFunc(func(_ context.Context, req HostKeyVerificationRequest) error {
 		if req.ReferenceIdentity != referenceIdentity {
-			return HostKeyVerificationResult{}, eris.Errorf("reference identity %q does not match expected %q", req.ReferenceIdentity, referenceIdentity)
+			return eris.Errorf("reference identity %q does not match expected %q", req.ReferenceIdentity, referenceIdentity)
 		}
 		if req.HostKey.Algorithm != expected.Algorithm || !bytes.Equal(req.HostKey.Bytes, expected.Bytes) {
-			return HostKeyVerificationResult{}, eris.Errorf("unexpected host key fingerprint %s", req.HostKey.FingerprintSHA256())
+			return eris.Errorf("unexpected host key fingerprint %s", req.HostKey.FingerprintSHA256())
 		}
-		return HostKeyVerificationResult{}, nil
+		return nil
 	})
 }
 

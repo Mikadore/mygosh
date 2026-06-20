@@ -1,5 +1,7 @@
 # `mygosh` architecture and code review
 
+> **Maintenance note:** This review records the code and evidence that produced the architecture roadmap. The staged authentication, app-owned authorization, immutable credential, resolver/policy seam, and secure-file findings were addressed after this snapshot. Use [`TODO.md`](TODO.md) for current completion status and [`AGENTS.md`](AGENTS.md) for current implementation facts.
+>
 > Review date: 2026-06-20  
 > Reviewed revision: `1763eb1` (`master`)  
 > Scope: all tracked Go, protobuf, build, container, shell, and Python code. Generated protobuf files were checked for provenance and correspondence with their source schemas; findings refer to the schemas and handwritten call sites rather than generated boilerplate.

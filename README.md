@@ -2,7 +2,7 @@
 
 `mygosh` is an experimental, from-scratch SSH-like client/server written in Go. It is not compatible with the SSH wire protocol.
 
-> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. The current implementation has known authentication/authorization boundary, trust-file, resource-limit, connection-lifecycle, and process-cleanup gaps. See [`REVIEW.md`](REVIEW.md) and [`TODO.md`](TODO.md).
+> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. The authentication/authorization and secure-file boundaries are now staged, but trust-format, resource-limit, connection-lifecycle, and process-cleanup gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
 
 ## What Exists Today
 
@@ -15,10 +15,12 @@ This section describes the current implementation as it is.
 - Ed25519 server and client proofs bound to the Noise channel and auth transcript.
 - Client-side host-key verification before the client signs its authentication proof.
 - Server-side client-signature verification before local key/account authorization.
+- A staged server decision: verified proof, app-owned connection authorization, then generic accept/reject.
+- Immutable connection credentials and account/session policy seams in `app/server/authz`.
 - A post-auth channel/global-request multiplexer in `lib/session`.
 - One provisional `session` channel carrying a PTY-backed command.
 - Raw terminal byte forwarding, terminal resize forwarding, and exit status.
-- File-backed OpenSSH Ed25519 private-key, `known_hosts`, and `authorized_keys` compatibility.
+- Bounded, descriptor-checked loading of OpenSSH Ed25519 private keys, `known_hosts`, and `authorized_keys`.
 - Username/group lookup through Go's current `os/user` adapter.
 - Structured `slog` logging with optional console and JSON logfile output.
 
@@ -37,20 +39,20 @@ The default app path currently performs:
 3. Server signature proof.
 4. Client verification of the presented server key against `known_hosts`.
 5. Client public-key signature proof for the requested username.
-6. Server account lookup through `os/user` and an `authorized_keys` match.
-7. Construction of the post-auth mux.
-8. One `session` channel with a PTY request followed by an exec request.
-9. Server execution of `core.shell -c <requested command>` under the authorized account.
+6. `lib/auth` returns an immutable verified client proof and pauses before its final response.
+7. `app/server/authz` resolves the account, securely checks `authorized_keys`, runs account policy, and constructs immutable credentials.
+8. The server sends generic accept/reject; only acceptance constructs and exposes the post-auth mux.
+9. One authorized `session` channel obtains a closeable lease, requests a PTY, and then requests exec.
+10. The server executes the selected login/configured shell under the authorized account.
 
-This ordering is factual, but its current package boundaries are not the intended final architecture. In particular, `lib/auth` still carries authorization/account results, `lib/trust` combines several policy and filesystem concerns, and the mux type does not itself enforce authenticated credentials.
+The mux type can still be constructed directly without credentials, but the production shell path requires both connection credentials and the same app-owned `Authz` object.
 
 ## Known Limitations
 
 The most important current limitations are:
 
-- sensitive key/trust files are still read with ordinary unbounded file reads rather than `lib/strictfiles`;
-- authentication, account authorization, and connection permissions are not cleanly separated;
-- detailed local authorization errors may be exposed to peers;
+- trust-file options, markers, revocation, wildcard/hashed-host, and malformed-entry semantics remain incomplete;
+- connection-level permissions and concrete exec/forward authorization are not yet modeled beyond the current session-policy seam;
 - the post-auth receive loop can be blocked by handlers or writes;
 - channel/request/queue resources are not comprehensively bounded;
 - channel state and cancellation cleanup are incomplete;
@@ -137,7 +139,7 @@ The current hardcoded defaults are:
 
 The `~` for server authorization files is expanded against the requested account's resolved home directory.
 
-Current trust-file support is a strict and incomplete subset. In particular, `authorized_keys` options are skipped, host matching is exact, and marker/revocation behavior is not complete. These files are not yet opened with production-grade ownership/mode/symlink checks.
+Current trust-file support is a strict and incomplete subset. In particular, `authorized_keys` options are skipped, host matching is exact, and marker/revocation behavior is not complete. Files are opened beneath app-selected anchors without following lower-path symlinks, are ownership/mode/type checked, and are bounded to 16 KiB for private keys or 1 MiB for trust files.
 
 ## Run
 
@@ -207,12 +209,14 @@ go vet ./...
 ## Repository Guide
 
 - `app/`: current CLI application composition, networking, and provisional terminal/process flows.
+- `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
+- `app/server/authz/`: account/key authorization, immutable credentials, and account/session policy seams.
 - `lib/transport/`: Noise transport and currently colocated protobuf helpers.
-- `lib/auth/`: auth protocol plus currently coupled authorization interfaces/results.
-- `lib/establish/`: current handshake/auth/mux composition.
+- `lib/auth/`: cryptographic auth protocol and staged accept/reject decision.
+- `lib/establish/`: client composition and pending server establishment lifecycle.
 - `lib/session/`: post-auth mux plus current shared connection runtime.
-- `lib/trust/`: current combined trust-file access, parsing, verification, account lookup, and authorization.
-- `lib/strictfiles/`: secure-open primitives not yet wired into trust reads.
+- `lib/trust/`: path-independent OpenSSH-format parsers and pure matchers.
+- `lib/strictfiles/`: caller-configurable secure-open primitives used by app file policy.
 - `lib/service/`: current PTY/exec payload protocol.
 - `proto/`: protobuf source schemas.
 

@@ -10,7 +10,7 @@ This document deliberately distinguishes:
 - **Design intent**: the architecture and security properties future work should move toward.
 - **Known gaps**: current behavior that must not be mistaken for an approved long-term design.
 
-Do not infer that a stated design intent is already implemented. For a detailed review of the current code, see [`REVIEW.md`](REVIEW.md). For the actionable issue list, see [`TODO.md`](TODO.md).
+Do not infer that a stated design intent is already implemented. [`REVIEW.md`](REVIEW.md) preserves the review evidence that produced the roadmap and may describe pre-refactor code; [`TODO.md`](TODO.md) is the current completion checklist.
 
 ## Project Intent
 
@@ -31,20 +31,22 @@ The following describes the code as it exists now, not the target architecture:
 - `lib/transport.Transport` performs a Noise NN handshake and encrypted length-prefixed frame I/O over a `net.Conn`.
 - Auth traffic uses the protobuf `auth.AuthFrame`; post-auth traffic uses `session.Envelope`.
 - `transport.SendProto` and `transport.ReceiveProto` perform protobuf marshaling and protovalidate validation inside the `lib/transport` package.
-- `lib/establish.Connect` and `lib/establish.Accept` compose connection runtime, Noise, auth, and construction of `lib/session.Session`.
+- `lib/establish.Connect` and `lib/establish.BeginAccept` compose connection runtime, Noise, auth, and construction of `lib/session.Session`.
+- `BeginAccept` returns a pending server establishment after client proof verification. Its context keeps the complete auth timeout active while app policy runs, and its one-shot `Accept`, `Reject`, and `Close` methods do not expose a mux before acceptance.
 - `lib/session.Runtime` currently owns cancellation, target handoff, and handshake/auth timeout enforcement even though those phases precede the post-auth mux.
-- `lib/auth` verifies server and client signatures and runs the auth wire state machine.
-- `lib/auth` also defines and invokes client-key authorization and imports the Unix account model. Authentication and authorization are therefore not cleanly separated yet.
+- `lib/auth` verifies server and client signatures, runs the auth wire state machine, and returns an immutable `VerifiedClient` plus a one-shot accept/reject decision. It does not import Unix accounts or authorize client keys.
+- `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs the account-policy seam, and returns immutable connection credentials before wire auth success.
+- The same `Authz` object authorizes a `"session"` channel through a closeable session lease. Account and session policies currently default to no-ops.
 - `lib/session.Session` is the channel/global-request multiplexer. It does not contain authenticated credentials and can be constructed directly over any `transport.FramedConn`; “authenticated session” is a property of the normal app path, not one enforced by the type.
 - `Session.Run` is the sole post-auth frame receiver in the normal path, but it invokes handlers and performs some writes synchronously.
-- `lib/trust` currently combines path expansion, ordinary file reads, OpenSSH-format parsing, host verification, key authorization, `os/user`-backed account lookup, and policy logging.
-- `lib/strictfiles` contains descriptor-based secure-open primitives, but current private-key, `known_hosts`, and `authorized_keys` reads do not use them.
-- The client loads `~/.mygosh/id_ed25519` and checks `~/.mygosh/known_hosts`.
-- The server loads `~/.mygosh/host_ed25519`, resolves the requested username through `os/user`, and checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
+- `lib/trust` contains path-independent OpenSSH-format parsers and pure key/host matchers.
+- `lib/strictfiles` provides caller-configurable checked directory/file opens. App-owned `app/securefiles` uses anchored `OpenAt` traversal and bounded reads for every private-key and trust file.
+- The client securely loads `~/.mygosh/id_ed25519` and `~/.mygosh/known_hosts` before dialing.
+- The server securely loads `~/.mygosh/host_ed25519` before listening, resolves the requested username through the injected `lib/user.Resolver`, and securely checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
 - The client verifies the server signature and host-key policy before using its client signer.
 - The server verifies the client signature before invoking local account/key authorization.
 - After auth, the default app path opens one `session` channel, requests a PTY, then requests execution of a command.
-- The server executes its configured shell as `shell -c <client command>` under the account returned by authorization.
+- The server executes `shell -c <client command>` under the authorized account, preferring a resolver-provided login shell and otherwise using the configured shell.
 - The client uses its configured `core.shell` string as the default remote command when no command is supplied. This is not a distinct interactive-shell protocol request.
 - Terminal channel data is carried as raw bytes and tested for byte preservation.
 
@@ -52,18 +54,14 @@ The following describes the code as it exists now, not the target architecture:
 
 These are current defects or incomplete boundaries. Do not preserve them merely because existing code uses them:
 
-- `lib/auth` couples cryptographic proof, client-key authorization, and Unix account data.
-- Auth success can be sent before a complete service-ready credential result has been centrally validated.
-- Sensitive trust/key files use unchecked, unbounded `os.ReadFile` paths.
 - Trust-file marker, option, revocation, host matching, and malformed-entry semantics are incomplete.
-- Detailed NSS, path, and authorization errors can be returned to unauthenticated peers.
 - Session callbacks and protocol-error writes can block the sole receive loop.
 - Channels, pending requests, queued frames, and total connection memory are not bounded adequately.
 - Channel state permits invalid ordering and incomplete cancellation cleanup.
 - Connection close ownership is duplicated across app code, transport, runtime, and session.
 - PTY process startup and cleanup have paths that can leak or wait indefinitely.
 - Process cancellation does not deliberately own the full child process group.
-- Key/account/auth result values expose mutable slices.
+- General key and account model values still expose mutable slices, although `VerifiedClient` and `ConnectionCredentials` clone mutable data at their boundaries and accessors return copies.
 - There is no explicit connection-level permission model or concrete request authorization layer.
 - Dial endpoint, host verification identity, client-supplied server name, and audit identity are conflated.
 - The current command protocol is PTY-only and does not distinguish shell from non-PTY exec.
@@ -218,17 +216,19 @@ This section is factual; package placement is expected to change during boundary
 
 - `bin/`: binary entrypoint and Cobra command setup.
 - `app/root/`: settings/logging construction and shutdown hooks.
-- `app/client/`: target parsing, TCP dialing, trust wiring, and terminal demo.
-- `app/server/`: TCP listener, trust/account wiring, and PTY command demo.
+- `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, trust wiring, and terminal demo.
+- `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
+- `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and PTY command demo.
+- `app/server/authz/`: account resolution, `authorized_keys` path/file policy, immutable connection credentials, and account/session policy seams.
 - `lib/transport/`: Noise transport plus currently misplaced protobuf helpers.
-- `lib/auth/`: auth schema, state machine, signed payloads, hooks, and currently coupled authorization result.
-- `lib/establish/`: client/server composition of runtime, Noise, auth, and mux construction.
+- `lib/auth/`: auth schema, state machine, signed payloads, proof result, and pending accept/reject decision.
+- `lib/establish/`: client connection composition and pending server establishment lifecycle.
 - `lib/session/`: post-auth mux plus currently misplaced connection runtime.
 - `lib/service/`: current PTY/exec payload protocol.
-- `lib/strictfiles/`: secure-open primitives not yet integrated into trust paths.
-- `lib/trust/`: current combined trust parsing, file access, verification, authorization, and account lookup.
+- `lib/strictfiles/`: descriptor-based, caller-configurable secure-open primitives used by app file policy.
+- `lib/trust/`: path-independent OpenSSH `authorized_keys`/`known_hosts` parsers and pure matchers.
 - `lib/keys/`, `lib/bincoder/`: key and binary encoding helpers.
-- `lib/user/`: current `os/user`-backed account snapshot.
+- `lib/user/`: account snapshot, resolver seam, and current `os/user` adapter; login shell may be empty.
 - `lib/tty/`: local raw TTY and server PTY mechanics.
 - `lib/settings/`, `lib/logging/`: application configuration and logging infrastructure currently under `lib`.
 - `proto/`: auth, session, and command service protobuf schemas.

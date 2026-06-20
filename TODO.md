@@ -6,11 +6,11 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 
 | Done | ID | Priority | Area | Task |
 |---|---|---:|---|---|
-| [ ] | A1 | P0 | Authentication | Separate cryptographic authentication from account authorization |
-| [ ] | A2 | P1 | Authentication | Make auth success guarantee a complete, usable connection identity |
-| [ ] | T1 | P0 | Trust/files | Use bounded, race-resistant secure opens for every sensitive file |
+| [x] | A1 | P0 | Authentication | Separate cryptographic authentication from account authorization |
+| [x] | A2 | P1 | Authentication | Make auth success guarantee a complete, usable connection identity |
+| [x] | T1 | P0 | Trust/files | Use bounded, race-resistant secure opens for every sensitive file |
 | [ ] | T2 | P1 | Trust/files | Define and enforce supported `authorized_keys` and `known_hosts` semantics |
-| [ ] | T3 | P1 | Authentication | Stop disclosing local authorization and filesystem details to peers |
+| [x] | T3 | P1 | Authentication | Stop disclosing local authorization and filesystem details to peers |
 | [ ] | S1 | P0 | Connection mux | Prevent handlers and writes from blocking the sole receive owner |
 | [ ] | S2 | P1 | Connection mux | Add hard connection-wide resource limits |
 | [ ] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
@@ -19,7 +19,7 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [ ] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
 | [ ] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
 | [ ] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
-| [ ] | C1 | P1 | Credentials | Introduce immutable per-connection credentials tied to the authenticated connection |
+| [x] | C1 | P1 | Credentials | Introduce immutable per-connection credentials tied to the authenticated connection |
 | [ ] | C2 | P1 | Authorization | Add connection-level permissions and concrete request authorization |
 | [ ] | N1 | P2 | Identity | Separate dial endpoint, host verification identity, server name, and audit identity |
 | [ ] | X1 | P2 | Transport | Restrict transport to Noise-backed encrypted framing |
@@ -28,10 +28,10 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [ ] | D2 | P1 | Service protocol | Replace the PTY-only command demo with explicit shell and exec semantics |
 | [ ] | B1 | P2 | Verification | Add adversarial, fuzz, lifecycle, and end-to-end release gates |
 | [ ] | L1 | P3 | APIs | Replace composition-heavy `WithLogger` APIs and misleading package names |
-| [ ] | R1 | P0 | Authentication | Implement staged verified-proof → policy → accept/reject server authentication |
+| [x] | R1 | P0 | Authentication | Implement staged verified-proof → policy → accept/reject server authentication |
 | [ ] | R2 | P1 | Architecture | Enforce one-way app, protocol, security, and Unix-platform dependencies |
-| [ ] | R3 | P1 | Trust/files | Split path policy, secure opening, parsing, matching, and authorization policy |
-| [ ] | R4 | P1 | Accounts | Establish deliberate NSS, PAM, and process-credential seams |
+| [x] | R3 | P1 | Trust/files | Split path policy, secure opening, parsing, matching, and authorization policy |
+| [x] | R4 | P1 | Accounts | Establish deliberate NSS, PAM, and process-credential seams |
 | [ ] | R5 | P1 | Services | Define a credential-aware service registry and authorized launch/forward specifications |
 
 Priority meanings: **P0** blocks a secure functional daemon, **P1** is required for a credible v1, **P2** is important hardening/design work, and **P3** is cleanup after the boundaries are stable.

@@ -3,8 +3,6 @@ package keys
 import (
 	"encoding/hex"
 	"encoding/pem"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -38,13 +36,4 @@ func TestParseOpensshPrivateKeyRawBinary(t *testing.T) {
 	require.Equal(t, AlgorithmEd25519, keypair.Algorithm)
 	require.Len(t, keypair.Public, ed25519PublicKeySize)
 	require.Len(t, keypair.Private, ed25519SeedSize)
-}
-
-func TestParseOpensshPrivateKeyFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "id_ed25519")
-	require.NoError(t, os.WriteFile(path, []byte(testOpenSSHPrivateKeyPEM), 0o600))
-
-	keypair, err := ParseOpensshPrivateKeyFile(path)
-	require.NoError(t, err)
-	require.Equal(t, "mikadore@archlinux", keypair.Comment)
 }

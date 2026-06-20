@@ -48,6 +48,9 @@ func TestLookupAccountReturnsCurrentUser(t *testing.T) {
 	expectedSupplementaryGroups, err := expectedSupplementaryGroups(currentUser)
 	require.NoError(t, err)
 
+	pwd, err := getpwnamR(currentUser.Username)
+	require.NoError(t, err)
+
 	require.Equal(t, Account{
 		Username: currentUser.Username,
 		Name:     currentUser.Name,
@@ -58,6 +61,7 @@ func TestLookupAccountReturnsCurrentUser(t *testing.T) {
 		},
 		SupplementaryGroups: expectedSupplementaryGroups,
 		HomeDir:             currentUser.HomeDir,
+		LoginShell:          pwd.pw_shell,
 	}, account)
 	require.Equal(t, currentUser.Uid, account.UID())
 	require.Equal(t, currentUser.Gid, account.GID())

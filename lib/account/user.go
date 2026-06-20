@@ -1,27 +1,10 @@
+//go:build linux || darwin || freebsd || openbsd || netbsd
+
 package account
-
-/*
-#include <pwd.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
-
-static long get_pw_buf_size() {
-    long n = sysconf(_SC_GETPW_R_SIZE_MAX);
-    if (n < 0) {
-        // POSIX allows -1 when there is no definite limit.
-        // 16 KiB is a common fallback.
-        return 16384;
-    }
-    return n;
-}
-*/
-import "C"
 
 import (
 	"context"
-	"os/user"
+	"strings"
 
 	"github.com/rotisserie/eris"
 )
@@ -79,33 +62,30 @@ func (OSResolver) Resolve(ctx context.Context, username string) (Account, error)
 		return Account{}, err
 	}
 
-	usr, err := user.Lookup(username)
+	pwd, err := getpwnamR(username)
 	if err != nil {
 		return Account{}, eris.Wrapf(err, "lookup user %q", username)
 	}
 
-	uid, err := ParseID(usr.Uid)
+	primaryGroup, err := lookupGroup(pwd.pw_gid)
 	if err != nil {
-		return Account{}, eris.Wrapf(err, "parse uid %q for user %q", usr.Uid, username)
+		return Account{}, eris.Wrapf(err, "lookup primary group %q for user %q", FormatID(pwd.pw_gid), username)
 	}
 
-	primaryGroup, err := lookupGroup(usr.Gid)
-	if err != nil {
-		return Account{}, eris.Wrapf(err, "lookup primary group %q for user %q", usr.Gid, username)
-	}
-
-	supplementaryGroups, err := lookupSupplementaryGroups(usr, primaryGroup.Id)
+	supplementaryGroups, err := lookupSupplementaryGroups(pwd, primaryGroup.Id)
 	if err != nil {
 		return Account{}, eris.Wrapf(err, "lookup supplementary groups for user %q", username)
 	}
 
+	name, _, _ := strings.Cut(pwd.pw_gecos, ",")
 	return Account{
-		Username:            usr.Username,
-		Name:                usr.Name,
-		Id:                  uid,
+		Username:            pwd.pw_name,
+		Name:                name,
+		Id:                  pwd.pw_uid,
 		PrimaryGroup:        primaryGroup,
 		SupplementaryGroups: supplementaryGroups,
-		HomeDir:             usr.HomeDir,
+		HomeDir:             pwd.pw_dir,
+		LoginShell:          pwd.pw_shell,
 	}, nil
 }
 
@@ -118,27 +98,22 @@ func CloneAccount(account Account) Account {
 	return account
 }
 
-func lookupGroup(groupID string) (Group, error) {
-	gid, err := ParseID(groupID)
+func lookupGroup(groupID GUID) (Group, error) {
+	groupName, err := getgrgidR(groupID)
 	if err != nil {
-		return Group{}, eris.Wrapf(err, "parse gid %q", groupID)
-	}
-
-	group, err := user.LookupGroupId(groupID)
-	if err != nil {
-		return Group{}, eris.Wrapf(err, "lookup group %q", groupID)
+		return Group{}, eris.Wrapf(err, "lookup group %q", FormatID(groupID))
 	}
 
 	return Group{
-		Id:   gid,
-		Name: group.Name,
+		Id:   groupID,
+		Name: groupName,
 	}, nil
 }
 
-func lookupSupplementaryGroups(usr *user.User, primaryGroupID GUID) ([]Group, error) {
-	groupIDs, err := usr.GroupIds()
+func lookupSupplementaryGroups(pwd *passwd_t, primaryGroupID GUID) ([]Group, error) {
+	groupIDs, err := getgrouplist(pwd.pw_name, primaryGroupID)
 	if err != nil {
-		return nil, eris.Wrapf(err, "list groups for user %q", usr.Username)
+		return nil, eris.Wrapf(err, "list groups for user %q", pwd.pw_name)
 	}
 
 	supplementaryGroups := make([]Group, 0, len(groupIDs))
@@ -147,24 +122,17 @@ func lookupSupplementaryGroups(usr *user.User, primaryGroupID GUID) ([]Group, er
 	}
 
 	for _, groupID := range groupIDs {
-		gid, err := ParseID(groupID)
-		if err != nil {
-			return nil, eris.Wrapf(err, "parse supplementary gid %q for user %q", groupID, usr.Username)
-		}
-		if _, ok := seen[gid]; ok {
+		if _, ok := seen[groupID]; ok {
 			continue
 		}
 
-		group, err := user.LookupGroupId(groupID)
+		group, err := lookupGroup(groupID)
 		if err != nil {
-			return nil, eris.Wrapf(err, "lookup supplementary group %q for user %q", groupID, usr.Username)
+			return nil, eris.Wrapf(err, "lookup supplementary group %q for user %q", FormatID(groupID), pwd.pw_name)
 		}
 
-		seen[gid] = struct{}{}
-		supplementaryGroups = append(supplementaryGroups, Group{
-			Id:   gid,
-			Name: group.Name,
-		})
+		seen[groupID] = struct{}{}
+		supplementaryGroups = append(supplementaryGroups, group)
 	}
 
 	return supplementaryGroups, nil

@@ -1,265 +1,339 @@
-# `mygosh` architecture and code review
+# `mygosh` post-refactor architecture review
 
-> **Maintenance note:** This review records the code and evidence that produced the architecture roadmap. The staged authentication, app-owned authorization, immutable credential, resolver/policy seam, and secure-file findings were addressed after this snapshot. Use [`TODO.md`](TODO.md) for current completion status and [`AGENTS.md`](AGENTS.md) for current implementation facts.
+> Review date: 2026-06-21
 >
-> Review date: 2026-06-20  
-> Reviewed revision: `1763eb1` (`master`)  
-> Scope: all tracked Go, protobuf, build, container, shell, and Python code. Generated protobuf files were checked for provenance and correspondence with their source schemas; findings refer to the schemas and handwritten call sites rather than generated boilerplate.
+> Reviewed revision: `cb0a7b2c67ce` (`master`)
+>
+> Scope: the current tracked Go, protobuf, build, and support code, with emphasis on the architecture required by [`WORKER_PLAN.md`](WORKER_PLAN.md).
+>
+> Evidence rule: the previous review is accepted as the pre-refactor baseline. Claims in `REFACTOR_REPORT.md`, `AGENTS.md`, `README.md`, `TODO.md`, and other summaries were checked against the implementation and tests before being used here.
 
 ## Executive summary
 
-`mygosh` has a credible protocol core, but it is not yet a secure or operational SSH replacement. The best parts are worth preserving:
+The refactor was substantial and directionally successful. The repository is no longer in the architectural state described by the old review:
 
-- Noise establishes a confidential channel before credentials are sent.
-- The server proof is bound to the Noise transcript, host-auth request, host key, and nonce.
-- The client verifies the server signature and local host-key policy before signing its own proof.
-- The client proof is bound to the same channel and transcript.
-- Authentication and post-authentication protobuf schemas are separate.
-- Post-authentication traffic has one receive loop, channel IDs, request IDs, and flow-control windows.
-- Terminal bytes are preserved exactly.
-- `strictfiles` is a useful start toward safe credential-file access.
+- cryptographic authentication is staged before app-owned account and key authorization;
+- auth success is withheld until immutable connection credentials and the post-auth session configuration exist;
+- sensitive key and trust files are read through bounded descriptor-relative checks;
+- the post-auth mux has a single receive owner, a serialized writer, bounded queues, explicit channel states, duplicate-ID checks, and cancellation cleanup;
+- command handling is a separate directional protocol rather than a generic PTY payload;
+- shell and exec requests are authorized before process creation;
+- process ownership now includes PTY/pipes, process groups, wait, descendant termination, and bounded cleanup;
+- local terminal input can be canceled without consuming input after the client returns.
 
-The main problem is not one bad abstraction. It is that several layers each own half of the same responsibility:
+These changes establish most of the in-process prerequisites identified by the old review. They do **not** implement the security boundary in `WORKER_PLAN.md`.
 
-- `app` chooses some paths and owns TCP, but `lib/trust` chooses other paths, performs NSS lookup, reads files, parses files, evaluates authorization, logs policy decisions, and returns an OS account.
-- `lib/auth` implements the wire proof protocol, but also defines server authorization and imports the Unix account model.
-- `lib/session` implements the post-auth multiplexer, but also owns handshake/authentication timeout and connection-lifetime machinery.
-- `lib/establish` composes the layers, but its result exposes mutable authentication and account data beside a session that can also be constructed directly without authentication.
-- `lib/service` is called a generic service package, but currently describes one specific command/PTY channel protocol.
+The current server still runs the post-auth mux, command parser, PTY handling, and process service in the same process that holds:
 
-The desired security invariant should be:
+- the host private key;
+- account and trust-file authority;
+- the authenticated Noise transport and network socket;
+- the authorization policy object;
+- all post-auth service state.
 
-> A post-authentication connection can be created only after server identity verification, client proof verification, local account resolution, account/authentication policy, and connection-level permission calculation have all succeeded. A concrete service request must then be authorized before it allocates a PTY, starts a process, opens a socket, or otherwise performs the service.
+There is no worker entrypoint, IPC protocol, `SOCK_SEQPACKET` transport, startup snapshot, readiness/activation exchange, relay, worker supervisor, privilege-demoted worker launch, or worker process test. More importantly, the current establishment and authorization APIs still encode assumptions that are incompatible with the planned split:
 
-The current production path mostly follows that order, but the package APIs do not enforce it, the authorization result is not validated before auth success, and service/channel lifecycle bugs can violate the intended behavior.
+1. [`PendingServer.Accept`](lib/establish/server.go#L141) can commit authentication only by binding the secure transport directly to an in-process `session.Session` and then transferring close ownership to that session.
+2. `ConnectionCredentials`, `ConnectionPermissions`, and `AuthorizedChannel` are immutable enough for one address space, but they have no versioned plain-data encoding and use an in-process pointer token to bind channel authorization to credentials.
+3. The worker cannot construct the current command service from a validated snapshot alone because the only implementations able to mint the private authorization values are methods on the monitor-side `*authz.Authz` object.
+
+The right next milestone is therefore not more command functionality. It is to make the monitor/worker boundary real while preserving the current authenticated shell and exec path.
 
 ### Overall assessment
 
-| Area | Assessment |
+| Area | Current assessment |
 |---|---|
-| Cryptographic transcript | Good foundation; retain with focused hardening and tests |
-| Transport framing | Small and understandable; responsibility and limit cleanup needed |
-| Authentication API | Correct sequence, wrong policy boundary |
-| Trust/account lookup | Not safe enough for a privileged daemon; substantial refactor needed |
-| Session multiplexer | Promising, but currently vulnerable to callback deadlocks and resource exhaustion |
-| PTY/exec demo | Useful prototype, not a safe service implementation yet |
-| Server lifecycle | Demo-only: accepts one connection and exits |
-| Tests | Healthy basic suite, but weak around malicious peers, lifecycle edges, and trust integration |
-| v1 direction | Feasible without a rewrite if boundaries are fixed before adding features |
+| Auth transcript and staging | Good foundation; app authorization is now outside the auth protocol |
+| Credentials and authorization | Good in-process snapshot; not yet a transferable worker startup contract |
+| Secure-file handling | Materially improved; all production key/trust reads are bounded and checked |
+| Session mux | Stronger and suitably transport-neutral, with one remaining started-write cancellation problem |
+| Command protocol | Credible and well-separated from Unix policy |
+| Process lifecycle | Strong prerequisite for a worker; currently executes inside the privileged server process |
+| Monitor/worker split | Not implemented |
+| Server lifecycle | Still a one-connection demo rather than a long-lived monitor |
+| Trust semantics | Still incomplete and security-significant |
+| Verification | Healthy unit/race baseline, but no fuzzing, daemon tests, or real subprocess IPC tests |
+
+The concise conclusion is:
+
+> The refactor made the process split feasible without redesigning the external protocol, but the repository has not crossed the process boundary yet.
 
 ---
 
 ## Verification performed
 
-The worktree was clean before this report was added.
+The worktree was clean before this review replaced `REVIEW.md`.
 
-The following passed:
+The following passed with Go 1.26.4:
 
 ```text
 go test ./...
-go test -race ./...
+go test -race -count=1 ./...
 go vet ./...
-go test -shuffle=on -count=10 ./...
-go test -count=20 ./lib/session ./lib/establish ./app/server
+go test -shuffle=on -count=5 \
+  ./lib/session ./lib/establish ./lib/command \
+  ./app/server/process ./app/commandchannel
 go mod verify
+go build ./bin
+gofmt -d on all handwritten Go files
 ```
 
-Coverage from `go test -coverprofile=... ./...` was **43.3% of handwritten and generated statements combined**. Particularly relevant package results:
+`gofmt -d` produced no output.
 
-| Package | Statement coverage |
+Statement coverage from `go test -count=1 -coverprofile=... ./...` was **51.1%**, including generated protobuf code. Relevant package results:
+
+| Package | Coverage |
 |---|---:|
-| `lib/transport` | 83.2% |
-| `lib/establish` | 82.2% |
-| `lib/trust` | 82.8% |
-| `lib/strictfiles` | 87.5% |
-| `lib/session` | 60.9% |
-| `app/server` | 67.2% |
-| `app/client` | 23.5% |
-| `lib/auth` direct package tests | 9.5% |
-| `lib/tty` | 0% |
-| `bin` | 0% |
+| `lib/wire` | 96.3% |
+| `lib/transport` | 86.2% |
+| `lib/establish` | 79.1% |
+| `app/server/process` | 75.5% |
+| `app/server/authz` | 73.5% |
+| `lib/command` | 73.0% |
+| `lib/session` | 72.6% |
+| `app/commandchannel` | 66.7% |
+| `lib/trust` | 46.4% |
+| `app/server/command` | 34.4% |
+| `app/server` | 19.8% |
+| direct `lib/auth` tests | 9.3% |
+| `bin` | 0.0% |
 
-The low direct `lib/auth` number understates integration coverage because `lib/establish` exercises authentication, but it accurately shows that malformed and adversarial auth state transitions are barely tested in the auth package itself.
+The suite contains 157 ordinary tests and no fuzz tests.
 
-`gofmt -d` reports two formatting issues:
+Not performed:
 
-- an extra blank line at the end of [`lib/transport/algos.go`](lib/transport/algos.go)
-- spacing and a missing final newline in [`lib/user/id_convert.go`](lib/user/id_convert.go)
+- manual `run-tmux.sh` smoke testing;
+- vulnerability scanning;
+- a worker/IPC smoke test, because no worker implementation exists;
+- a daemon concurrency test, because the server accepts only one connection.
 
-One existing session test takes exactly ten seconds:
+---
+
+## Current architecture reconstructed from code
+
+### Server sequence
+
+The production server path is currently:
 
 ```text
-TestSessionRunRejectsUnknownChannelData (10.00s)
+load host key securely
+  -> construct account/key/permission authorization
+  -> listen
+  -> accept exactly one TCP connection
+  -> Noise handshake
+  -> verify client cryptographic proof
+  -> resolve account and authorized_keys
+  -> construct immutable credentials and permissions
+  -> construct command service and credential-bound registry
+  -> prepare and bind in-process post-auth session
+  -> send auth success
+  -> activate in-process session workers
+  -> parse commands and start processes in the server process
+  -> wait for that one connection and exit
 ```
 
-That is not merely a slow test. [`protocolErrorf`](lib/session/session.go#L763) synchronously writes a disconnect while the peer is not reading. `net.Pipe` blocks until its ten-second deadline. This demonstrates the broader blocking-write/receive-loop problem described in finding S1.
+The central composition is visible in [`app/server/server.go`](app/server/server.go):
+
+- the host key is loaded before listening;
+- [`establish.BeginAccept`](lib/establish/server.go#L51) returns a verified but undecided auth exchange;
+- [`Authz.AuthorizeConnection`](app/server/authz/authz.go#L82) resolves the account, securely reads `authorized_keys`, applies policy, and creates credentials;
+- the command service and registry are created before wire success;
+- [`session.Prepare`](lib/session/session.go#L130) validates limits and captures the handler graph;
+- [`PendingServer.Accept`](lib/establish/server.go#L141) binds the mux, sends auth success, activates the mux, and transfers transport ownership to it.
+
+This ordering is a real improvement over the pre-refactor code. In the current one-process topology, auth success now means that mandatory connection policy and post-auth construction have succeeded.
+
+### Current ownership
+
+```text
+app/server
+  owns listener and accepted TCP connection initially
+
+lib/establish.runtime
+  owns raw connection during handshake
+  owns Noise transport during auth and policy
+
+lib/session.Session
+  receives the Noise transport on acceptance
+  owns post-auth reads, writes, close, channels, and handlers
+
+app/server/command + app/server/process
+  run inside the same process as all of the above
+```
+
+The target ownership from `WORKER_PLAN.md` is different:
+
+```text
+monitor
+  permanently owns Noise transport, network socket, auth authority,
+  worker creation, relay, supervision, reaping, and final network close
+
+worker
+  owns only its IPC endpoint, session mux, command/PTY service,
+  child processes, and connection-local cleanup
+```
+
+The current ownership transfer to `Session` is correct for the in-process design but must be changed for the worker design.
+
+### Protocol and service boundaries
+
+The implementation now has useful boundaries:
+
+```text
+transport.Transport
+  encrypted byte frames + channel binding
+
+wire.Framer / wire.FramedConn
+  transport-neutral frame contract
+
+auth
+  auth protobuf state and cryptographic proof
+
+session
+  transport-neutral post-auth mux
+
+command
+  transport-neutral directional command protocol
+
+commandchannel
+  session.Channel <-> command.FrameConn adapter
+
+server authz
+  account, authorized_keys, credentials, permissions, launch authorization
+
+server process
+  already-authorized Unix process runtime
+```
+
+This is close to the dependency shape needed by a worker. The remaining issue is that the app authorization values are still designed as private in-process capabilities rather than a monitor-minted snapshot that a worker can validate and enforce.
 
 ---
 
-## Current architecture, reconstructed from code
+## Refactor outcomes verified in code
 
-### Actual client path
+### Authentication and app authorization are separated
 
-```mermaid
-flowchart LR
-    CLI["bin/mygosh.go"] --> CFG["lib/settings"]
-    CLI --> ROOT["app/root"]
-    ROOT --> LOG["lib/logging"]
-    CLI --> CLIENT["app/client.RunClient"]
-    CLIENT --> TCP["net.Dialer"]
-    CLIENT --> TRUST["lib/trust: load client key + known_hosts"]
-    CLIENT --> EST["lib/establish.Connect"]
-    EST --> RT["lib/session.Runtime"]
-    EST --> NOISE["lib/transport: Noise NN"]
-    EST --> AUTH["lib/auth.RunClient"]
-    EST --> MUX["lib/session.Session"]
-    CLIENT --> TERM["app/client.TerminalDemo"]
-    TERM --> SVC["lib/service protocol"]
-    TERM --> TTY["lib/tty"]
-```
+`lib/auth` no longer imports accounts, filesystems, trust paths, or Unix process policy. [`VerifiedClient`](lib/auth/auth.go#L101) clones the proved and server public keys, while [`PendingServerAuth`](lib/auth/server_auth.go#L17) provides a one-shot accept/reject decision after signature verification.
 
-In order:
+`app/server/authz` now owns:
 
-1. The CLI always loads `mygosh.toml` from the current directory.
-2. `app/client` parses `[user@]host[:port]` and dials TCP.
-3. `lib/trust` expands fixed default paths and loads an OpenSSH private key and `known_hosts`.
-4. `lib/establish` creates a `session.Runtime`, performs Noise, runs auth, and constructs a mux.
-5. `TerminalDemo` starts the mux receive loop, opens a `"session"` channel, requires PTY then exec, makes local stdin raw, and forwards bytes and resize events.
+- NSS-aware account resolution;
+- `authorized_keys` path policy;
+- secure file reads;
+- key matching;
+- account policy;
+- connection permission calculation;
+- request-specific command authorization.
 
-### Actual server path
+This resolves the old A1/R1 boundary problem.
 
-```mermaid
-flowchart LR
-    CLI["bin/mygosh.go"] --> SERVER["app/server.RunServer"]
-    SERVER --> LISTEN["net.Listen + one Accept"]
-    SERVER --> KEY["lib/trust: fixed host-key path"]
-    SERVER --> EST["lib/establish.Accept"]
-    EST --> RT["lib/session.Runtime"]
-    EST --> NOISE["lib/transport: Noise NN"]
-    EST --> AUTH["lib/auth.RunServer"]
-    AUTH --> POLICY["lib/trust authorizer"]
-    POLICY --> NSS["lib/user: os/user lookup"]
-    POLICY --> AK["authorized_keys path expansion/read/parse/match"]
-    EST --> MUX["lib/session.Session"]
-    SERVER --> SHELL["app/server.ShellDemo"]
-    SHELL --> PTY["lib/tty + exec.Cmd + syscall.Credential"]
-```
+### Auth success is delayed until current in-process readiness
 
-In order:
+The server authorizes the client, builds the service registry, prepares the mux, and binds it before [`PendingServerAuth.Accept`](lib/auth/server_auth.go#L57) sends success. Session workers exist before acceptance but wait on explicit activation.
 
-1. The server listens and accepts exactly one connection.
-2. It loads the host key after accepting that connection.
-3. `lib/establish` performs Noise and auth.
-4. During `lib/auth.RunServer`, a callback in `lib/trust`:
-   - looks up the client-supplied username through `os/user`;
-   - expands two configured `authorized_keys` paths against that account;
-   - reads and parses the files;
-   - matches the proved key;
-   - returns a local `user.Account`.
-5. Auth sends success.
-6. `ShellDemo` starts the mux, allows one `"session"` channel, requires PTY then exec, and starts `shell -c <client command>` under the returned account.
+This resolves the old A2 issue for the current topology. Worker readiness must become the new readiness condition.
 
-### Current auth exchange
+### Credentials are immutable at their public boundaries
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Server
-    participant CP as Client policy
-    participant SP as Server policy
+[`ConnectionCredentials`](app/server/authz/credentials.go#L13) keeps fields private, clones the public key and account, and returns copies. `ConnectionPermissions` similarly clones its environment allowlist. The service registry stores one credential value for the connection.
 
-    C->>S: Noise NN
-    C->>S: HostAuthInit(version, nonce, reference_identity)
-    S->>SP: Select host signer(reference_identity)
-    S->>C: ServerAuth(host key, nonce, signature over binding + transcript)
-    C->>C: Verify server signature
-    C->>CP: Verify host key(reference_identity, key)
-    C->>CP: Select client signer(username, verified server key)
-    C->>S: ClientAuthRequest(username, public key, signature)
-    S->>S: Verify client signature
-    S->>SP: AuthorizeClientKey(reference identity, host key, username, key)
-    SP-->>S: source + local OS account
-    S->>C: AuthSuccess or AuthReject
-```
+The general `keys.PublicKey`, `keys.Keypair`, and `account.Account` types still expose mutable slices, but the security-sensitive connection boundary no longer leaks those slices directly.
 
-The ordering is basically right. The problem is that the server policy operation and its result type live inside the protocol package.
+### Sensitive file reads are checked and bounded
 
-### Where ownership is currently blurred
+Production host keys, client keys, `known_hosts`, and `authorized_keys` are all loaded through [`app/securefiles.Read`](app/securefiles/read.go#L22). It:
 
-| Responsibility | Current owner(s) | Problem |
-|---|---|---|
-| TCP dial/listen | `app/client`, `app/server` | Correct in principle, but close ownership is duplicated by app, transport, runtime, and session |
-| Noise handshake | `lib/transport` | Reasonable |
-| Handshake/auth timeout | `lib/session.Runtime`, called by `lib/establish` | Post-auth package owns pre-auth lifecycle |
-| Protobuf codec | `lib/transport` | Transport imports protobuf and schema validation despite claiming to be a framed secure transport |
-| Host key selection | `lib/auth` interface, implemented from app | Reasonable seam, overdesigned for one fixed key |
-| Client identity selection | `lib/auth` interface, implemented from app | Reasonable seam |
-| Host trust | `lib/auth` interface, `lib/trust` path/file implementation | Path choice and file access should be app composition; matching/parser primitives can be library code |
-| Client authentication proof | `lib/auth` | Correct |
-| Username-to-account mapping | `lib/trust` through `lib/user` | Deployment policy hidden inside a “trust” library |
-| `authorized_keys` path policy | partly `app/server`, mostly `lib/trust` | App passes strings, library expands account home and decides lookup behavior |
-| Connection permissions | absent | Key match currently implies full PTY/exec login |
-| Post-auth mux | `lib/session` | Correct domain, though “connection” would be a clearer name |
-| Command/PTY wire protocol | `lib/service` | Too generic a package name for a specific protocol |
-| Process policy and launch | `app/server` | Correct layer, but it receives an under-specified mutable account rather than authorized launch data |
+- pins an app-selected anchor;
+- rejects `..`;
+- traverses with descriptor-relative opens;
+- forbids symlinks below the anchor;
+- checks file and directory type, owner, and write mode;
+- applies a size bound before and during reading;
+- uses close-on-exec descriptors.
+
+No production credential or trust path uses `os.ReadFile`.
+
+This resolves the main old T1 finding. The app still deliberately allows a selected anchor itself to be reached through symlinks, then validates the opened target; that is a policy choice worth keeping explicit.
+
+### Peer-visible local authorization failures are generic
+
+Local account, file, parser, and key-match errors are logged on the server. Rejection through [`PendingServerAuth.Reject`](lib/auth/server_auth.go#L74) uses the stable `authentication-failed` response.
+
+Protocol-version and malformed-auth failures may still produce protocol-specific public errors, but the previous user/file enumeration path through app authorization has been removed.
+
+### The mux is substantially hardened
+
+The session implementation now has:
+
+- a receiver loop that does not execute service handlers;
+- a serialized writer loop;
+- a bounded dispatch queue;
+- per-channel event workers;
+- configurable defaults and compiled hard maxima;
+- channel, pending-open, request, frame, byte, type, code, message, and payload limits;
+- explicit opening/open/half-closed/closing/closed/failed states;
+- duplicate peer channel-ID rejection;
+- duplicate request and EOF checks;
+- rejection of empty channel data;
+- data-after-EOF rejection;
+- waiter removal on caller cancellation;
+- bounded local channel-close timeout;
+- fatal handling of started write failure;
+- preservation of already queued data before remote-close EOF.
+
+This materially resolves the old S1–S3 findings. One important cancellation flaw remains and is documented below.
+
+### Command and process architecture is credible
+
+The new command path has a clean protocol/application split:
+
+- `lib/command` knows neither session nor Unix process policy;
+- `app/commandchannel` is the only protocol adapter;
+- channel open and exact launch requests are authorized before process creation;
+- the runner receives a plain authorized process specification;
+- non-PTY stdout/stderr remain separate;
+- PTY output is merged;
+- shell, exec, environment, resize, EOF, status, and signal semantics are explicit.
+
+The process runner:
+
+- applies explicit UID, GID, and supplementary groups;
+- rejects unprivileged identity mismatch;
+- starts a process group or PTY session;
+- has one wait owner;
+- terminates descendants with bounded `SIGTERM` then `SIGKILL`;
+- reaps the leader once;
+- cleans residual descendants after leader exit;
+- does not require peer close acknowledgment.
+
+This resolves the main old P1–P3 and D1–D2 findings and gives the future worker a suitable service runtime.
 
 ---
 
-## What should be retained
+## `WORKER_PLAN.md` readiness matrix
 
-This review is not a recommendation to discard the protocol.
-
-### Auth transcript construction is directionally strong
-
-[`lib/auth/payloads.go`](lib/auth/payloads.go) and [`lib/auth/transcript.go`](lib/auth/transcript.go) use deterministic protobuf encoding only for signed/transcript material. The server signature binds:
-
-- a context string;
-- the Noise channel binding;
-- the hash of the client host-auth initiation;
-- the server host key;
-- a server nonce.
-
-The client signature additionally binds:
-
-- the server-auth hash;
-- the username;
-- the client public key;
-- the signature algorithm.
-
-This prevents a proof from being replayed onto another Noise connection and avoids signing ambiguous ad-hoc concatenations.
-
-### The authentication ordering protects client credentials
-
-[`authenticateClient`](lib/auth/client_auth.go#L26) verifies the server signature and calls host-key verification before selecting or using the client signer. That is the right invariant.
-
-On the server, [`authenticateServer`](lib/auth/server_auth.go#L25) verifies the client signature before NSS lookup and `authorized_keys` evaluation. That avoids treating an unproved key claim as authenticated input.
-
-### Schema separation is good
-
-The auth and post-auth messages have separate top-level oneofs in:
-
-- [`proto/auth/auth.proto`](proto/auth/auth.proto)
-- [`proto/session/session.proto`](proto/session/session.proto)
-
-`protovalidate` is applied on both send and receive. This is a solid base for explicit protocol phases.
-
-### The mux has useful fundamentals
-
-The session code already has:
-
-- one receive loop;
-- independent local and peer channel IDs;
-- per-channel flow-control windows;
-- max packet sizes;
-- request/reply correlation;
-- exact byte preservation;
-- a clean reject-by-default handler.
-
-The implementation needs lifecycle and adversarial hardening, not wholesale replacement.
-
-### Explicit loggers are preferable to globals
-
-The code passes `*slog.Logger` through most seams and does not mutate `slog.Default`. Keep that property even if logging construction moves out of `lib`.
+| Worker-plan requirement | Status in current code |
+|---|---|
+| Monitor retains encrypted network transport for full connection | **Not met.** Ownership transfers to in-process `Session`. |
+| One disposable worker per authenticated connection | **Not implemented.** |
+| Worker receives framed cleartext, not TCP or Noise state | Framer abstraction exists; IPC/relay does not. |
+| Anonymous Unix `SOCK_SEQPACKET` socket pair | **Not implemented.** |
+| Versioned startup/control protocol | **Not implemented.** |
+| Connection ID, launch nonce, and authenticated binding | **Not represented.** |
+| Plain transferable credential and permission snapshot | In-process values exist; no transferable form or decoder exists. |
+| Independent worker validation | **Not implemented.** |
+| Worker launched under final UID/GID/groups | Process children can use explicit credentials; worker launch does not exist. |
+| Worker verifies its effective identity | Per-process runner checks some identity state; no startup check exists. |
+| Narrow worker entrypoint bypassing normal app startup | **Not implemented.** All commands run the normal persistent pre-run. |
+| Worker readiness before client auth success | In-process mux preparation follows this pattern; no worker readiness exchange exists. |
+| Explicit activation after auth success | In-process `Session.Activate` exists; no cross-process activation protocol exists. |
+| Bidirectional bounded relay | **Not implemented.** |
+| Monitor owns worker supervision and reaping | **Not implemented.** |
+| Worker cannot access keys, trust files, listener, or network fd | No isolation boundary exists yet. |
+| Snapshot-only request authorization | Conceptually possible, but current private grant types prevent reconstruction outside `authz`. |
+| Monitor-owned authorization/lease RPC seam | **Not implemented.** |
+| Real subprocess and inherited-fd tests | **Not implemented.** |
+| Long-lived bounded daemon | **Not met.** Server accepts one connection and exits. |
 
 ---
 
@@ -267,1177 +341,631 @@ The code passes `*slog.Logger` through most seams and does not mutate `slog.Defa
 
 Severity meanings:
 
-- **Blocker**: incompatible with a secure, functional v1 daemon.
-- **High**: exploitable security/liveness issue or a boundary that will make upcoming features unsafe.
-- **Medium**: important correctness, maintainability, or defense-in-depth issue.
-- **Low**: localized cleanup or polish.
+- **Blocker**: the target worker architecture cannot be implemented correctly without changing this boundary.
+- **High**: required for a credible initial worker slice or contains a current security/liveness defect.
+- **Medium**: important hardening or later worker-plan work.
+- **Low**: cleanup that should follow the boundary work.
 
 ### Summary
 
 | ID | Severity | Finding |
 |---|---|---|
-| A1 | Blocker | `lib/auth` combines cryptographic authentication with OS authorization and account data |
-| A2 | High | Auth success is sent without validating that the returned account/permissions are usable |
-| T1 | Blocker | Credential and trust files bypass `strictfiles`; reads are unchecked and unbounded |
-| T2 | High | Trust-file semantics are incomplete and sometimes security-significant |
-| T3 | High | Detailed authorization/NSS/file errors are disclosed to unauthenticated clients |
-| S1 | Blocker | Session callbacks and protocol-error writes can block the sole receive owner |
-| S2 | High | The mux has no connection-wide resource limits and permits cheap memory/ID exhaustion |
-| S3 | High | Channel state permits invalid ordering, duplicate peer IDs, data after EOF, and leaked waiters |
-| E1 | Blocker | The server accepts one connection and exits |
-| E2 | High | Connection ownership and lifecycle are split across four layers |
-| P1 | High | Exec can start without a cleanup path when `want_reply=false` |
-| P2 | High | Channel/process completion contains several indefinite-wait paths |
-| P3 | High | Process cancellation does not robustly own the whole child process group |
-| C1 | High | “Authenticated credentials” are mutable snapshots and are not carried by the session type |
-| C2 | Medium | Connection-level permissions and concrete request authorization do not exist |
-| N1 | Medium | Network endpoint, server identity, and client-supplied reference identity are conflated |
-| X1 | Medium | Transport contains protobuf/logging concerns and exposes mutable algorithm globals |
-| K1 | Medium | Key identity includes mutable slices/comments and fingerprints omit the algorithm |
-| D1 | Medium | The terminal client can leave a goroutine blocked reading stdin after return |
-| D2 | Medium | The command service is PTY-only and runs a client-selected command through a global shell |
-| B1 | Medium | Test/build automation misses the highest-risk behavior |
-| L1 | Low | Repeated `WithLogger` APIs and package names reflect missing composition objects |
+| W1 | Blocker | Establishment can commit auth only by handing Noise transport to an in-process session |
+| W2 | Blocker | No worker process, IPC protocol, relay, or supervisor exists |
+| W3 | High | Credentials and permissions are not a versioned, independently validatable startup snapshot |
+| W4 | High | Channel and launch authorization grants are in-process capabilities that cannot cross or be reconstructed behind IPC |
+| W5 | High | Worker readiness, auth commit, and relay activation have no explicit cross-process state machine |
+| W6 | High | Monitor-owned relay failure, close ownership, worker termination, and reaping are undefined in code |
+| W7 | High | Worker privilege, descriptor, environment, and direct-invocation checks are absent |
+| W8 | High | A canceled started session write can spin and wait indefinitely |
+| W9 | High | The server is still a one-connection process, not a long-lived monitor |
+| W10 | Medium | Transport details still need cleanup before becoming the permanent monitor relay endpoint |
+| W11 | Medium | Trust, endpoint identity, key identity, and production policy remain monitor-side security debt |
+| W12 | Medium | Verification does not cover the planned process boundary or hostile IPC |
 
-### A1 — `lib/auth` owns deployment authorization and Unix accounts
+### W1 — Establishment hardwires acceptance to an in-process mux
 
 **References**
 
-- [`ClientKeyAuthorizationResult`](lib/auth/auth.go#L128)
-- [`ClientKeyAuthorizer`](lib/auth/auth.go#L133)
-- `lib/auth` importing [`lib/user`](lib/auth/auth.go#L12)
-- [`AuthorizedKeysClientKeyAuthorizerWithLogger`](lib/trust/user_lookup.go#L42)
+- [`PendingServer.Accept`](lib/establish/server.go#L141)
+- direct bind of `p.secureConn` at [`lib/establish/server.go:159`](lib/establish/server.go#L159)
+- auth success at [`lib/establish/server.go:170`](lib/establish/server.go#L170)
+- transfer/release at [`lib/establish/server.go:179`](lib/establish/server.go#L179)
 
-The wire protocol needs a decision before it sends success, but it does not need to know what a Unix account is. The current interface makes `lib/auth` the owner of:
+`BeginAccept` correctly keeps Noise and auth pending while app policy runs. The problem is the only successful completion path:
 
-- local account mapping;
-- key authorization;
-- authorization source metadata;
-- the object later used to set process credentials.
+1. accept a `*session.Prepared`;
+2. bind it directly to the Noise `Transport`;
+3. make the session the close owner;
+4. send auth success;
+5. activate the session;
+6. release establishment ownership.
 
-That is why names such as `AuthorizedKeysClientKeyAuthorizerWithLogger` have appeared: one constructor is trying to express protocol role, file format, policy source, account lookup, logging, and adapter shape.
+The worker design requires the opposite post-auth ownership:
 
-The protocol should expose a **verified client proof** and a one-shot pending decision. Server composition should resolve that proof to immutable connection credentials, then tell the auth exchange to accept or reject.
+- the monitor keeps `Transport`;
+- the worker binds `Session` to IPC;
+- auth success is committed only after the worker is ready;
+- monitor relays begin only after commit;
+- monitor remains final network owner.
 
-`lib/auth` should not import:
+There is currently no API that lets server orchestration:
 
-- `lib/user`;
-- filesystem packages;
-- account policy;
-- service permissions.
+- retain the authenticated secure framer;
+- commit the pending auth decision without constructing a local mux;
+- bind that commitment to a ready worker;
+- start relay while keeping final close ownership.
 
-### A2 — Auth success does not guarantee readiness
+This is the primary boundary refactor.
 
-**References**
+Recommended shape:
 
-- [`AuthorizeClientKey` result accepted on nil error](lib/auth/server_auth.go#L158)
-- [`sendClientAuthOK`](lib/auth/server_auth.go#L169)
-- account completeness checked only later in [`ShellDemo.Run`](app/server/shell_demo.go#L48)
+```text
+BeginAccept
+  -> pending verified auth + monitor-owned secure connection
+  -> app authorization
+  -> worker supervisor starts and validates readiness
+  -> pending.CommitAccept(readiness binding)
+  -> monitor activates relay
+  -> monitor waits for client, relay, worker, or shutdown failure
+```
 
-Any `ClientKeyAuthorizer` can return a zero or incomplete result with `nil` error. `lib/auth` then sends success. The server may subsequently discover that it cannot create services for that account and close the connection.
+The exact exported API can vary, but `lib/establish` must stop assuming that every accepted server connection becomes a local `session.Session`.
 
-That breaks a valuable protocol contract:
+### W2 — The process boundary itself does not exist
 
-> Auth success should mean that the server has completed all mandatory connection-level authentication, account, and policy work and is ready to process post-auth messages.
+There is no implementation of:
 
-The current demo authorizer returns a real account, but the API permits invalid successful results and there is no central validation.
+- `socketpair(AF_UNIX, SOCK_SEQPACKET, ...)`;
+- IPC packet send/receive;
+- startup/control records;
+- ancillary-data rejection;
+- truncation detection;
+- inherited worker descriptor handling;
+- an internal worker mode;
+- worker process creation;
+- readiness or activation;
+- bidirectional frame relay;
+- worker exit supervision or reaping.
 
-The fix is not to teach `lib/auth` how to validate Unix accounts. The server policy layer should construct and validate a `ConnectionCredentials` object before calling `Accept`.
+The only binary modes registered in [`bin/mygosh.go`](bin/mygosh.go) are `server` and `connect`. A source search finds no worker, relay, seqpacket, socketpair, launch nonce, or readiness implementation.
 
-### T1 — Security-sensitive files are read with ordinary `os.ReadFile`
+The initial worker milestone should remain deliberately narrow:
 
-**References**
+```text
+one authenticated connection
+  -> one worker
+  -> current command service
+  -> current PTY/non-PTY process runner
+```
 
-- [`ReadAuthorizedKeys`](lib/trust/authorized_keys_ssh.go#L12)
-- [`ReadKnownHosts`](lib/trust/known_hosts_ssh.go#L14)
-- [`ParseOpensshPrivateKeyFile`](lib/keys/openssh_key.go#L19)
-- `strictfiles` has no callers outside its own tests
+Port forwarding, PAM RPC, and a generalized plugin system are unnecessary for proving this boundary.
 
-Current reads do not enforce:
-
-- file owner;
-- directory owner;
-- group/other writability;
-- symlink policy;
-- regular-file type;
-- maximum file size;
-- race-resistant path traversal.
-
-This is particularly important for a root server reading user-selected account homes and for the host private key. The repository already contains most of a safe-open primitive, but none of the production trust code uses it.
-
-Unbounded `os.ReadFile` also gives an unauthenticated client a memory/CPU lever: request an existing username whose `authorized_keys` path points to a very large file.
-
-The correct boundary is:
-
-1. `app/server` chooses path templates and strict-mode policy.
-2. A secure-file primitive opens and pins an app-supplied path or directory-relative name with size/owner/mode checks.
-3. A parser consumes an `io.Reader` or bounded bytes.
-4. A pure matcher evaluates parsed entries.
-
-The parser must not choose the path. The app must not reimplement key parsing.
-
-### T2 — Trust-file semantics are incomplete
-
-**References**
-
-- [`ParseAuthorizedKeys`](lib/trust/authorized_keys_ssh.go#L20)
-- [`ParseKnownHosts`](lib/trust/known_hosts_ssh.go#L22)
-- [`KnownHostsHostKeyVerifierWithLogger`](lib/trust/known_hosts_verifier.go#L18)
-
-Specific issues:
-
-1. Any `authorized_keys` entry with options is silently skipped. Common entries using `restrict`, `command=`, `no-pty`, or forwarding restrictions therefore do not work. For a secure service, these options should become constraints, not disappear.
-2. An unrecoverable or trailing malformed entry can abort the whole file after earlier valid entries were parsed. The chosen compatibility/error policy should be explicit and tested.
-3. `known_hosts` matching is exact string lookup. Wildcards, negation, hashed hosts, and `[host]:port` identities are parsed as strings but never interpreted.
-4. `@cert-authority` is not rejected or implemented; it is treated like an ordinary host-key entry.
-5. `@revoked` entries are skipped rather than recorded as an overriding rejection. If the same key is also present in an ordinary entry, it can still be accepted.
-6. Both parsers currently depend on `golang.org/x/crypto/ssh`. That is factual use of a Go SSH library, even though only file-format parsers are used. Either explicitly narrow the project rule to allow format compatibility helpers, or replace this with small streaming parsers.
-
-For an initial v1, it is acceptable to support a strict subset. Unsupported markers/options should fail explicitly or be represented as unsupported constraints, not acquire accidental semantics.
-
-### T3 — Internal authorization errors are sent to the peer
+### W3 — The credential model is immutable but not transferable
 
 **References**
 
-- [`sendClientAuthReject(..., err.Error())`](lib/auth/server_auth.go#L163)
-- detailed errors from [`AuthorizedKeysClientKeyAuthorizerWithLogger`](lib/trust/user_lookup.go#L49)
+- [`ConnectionCredentials`](app/server/authz/credentials.go#L13)
+- [`ConnectionPermissions`](app/server/authz/permissions.go#L52)
+- [`account.Account`](lib/account/user.go#L25)
 
-The client can distinguish:
+The current credential object is good for in-process use. It contains:
 
-- nonexistent local user;
-- no authorized keys;
-- key mismatch;
-- unreadable or malformed files;
-- concrete path and parser failures.
+- authentication method;
+- key fingerprint and proved key;
+- requested username;
+- peer address;
+- resolved account including UID, GID, groups, home, and shell;
+- matched authorization source;
+- command/shell/exec/PTY/environment permissions.
 
-This enables user enumeration and leaks server configuration details. Detailed causes belong in server logs. The peer should receive a stable public code and generic message such as `authentication failed`.
+It does not provide the worker startup contract required by the plan:
 
-The same principle should apply to protocol errors: avoid echoing implementation details that are not necessary for interoperability.
+- no IPC protocol version;
+- no startup message type;
+- no monitor-generated connection identifier;
+- no launch nonce;
+- no binding to the authenticated Noise connection;
+- no selected service configuration;
+- no session limits/timeouts snapshot;
+- no explicit unknown-field or unknown-permission policy;
+- no encoded total/field/count limits;
+- no constructor/decoder for rebuilding validated credentials in another process.
 
-### S1 — The receive owner can deadlock on callbacks and writes
+The authenticated Noise channel binding exists on `transport.Transport`, but it is not carried in `VerifiedClient` or `ConnectionCredentials`. The monitor can include a digest of it in startup data, but this needs an explicit design rather than an accidental dependency on a live Go object.
 
-**References**
+Independent validation also needs to be stronger than current credential validation. The worker should reject:
 
-- synchronous handler calls in [`handleChannelOpen`](lib/session/session.go#L320), [`handleChannelRequest`](lib/session/session.go#L527), and [`handleGlobalRequest`](lib/session/session.go#L628)
-- synchronous protocol-error send in [`protocolErrorf`](lib/session/session.go#L763)
-- write path has no context in [`sendEnvelope`](lib/session/session.go#L739)
+- duplicate or excessive supplementary groups;
+- a primary GID repeated as supplementary;
+- non-normalized home or shell paths;
+- empty or oversized resolved usernames and policy sources;
+- fingerprint/key mismatch;
+- unsupported auth methods or permission bits;
+- limits above worker hard maxima;
+- permission/constraint combinations the worker does not understand.
 
-`Session.Run` is the only receive owner, but it calls application handlers synchronously. If a handler calls `SendRequest(..., wantReply=true)`, it waits for a result that only `Session.Run` can receive. That is a direct self-deadlock.
+Use a versioned plain-data message, probably protobuf because the project already uses it, but keep it separate from external auth and session schemas.
 
-Even a non-waiting handler can block the entire connection on:
-
-- NSS, disk, PAM, or process startup;
-- a channel send whose peer is not reading;
-- a disconnect/protocol-error write;
-- arbitrary handler code.
-
-The ten-second existing test described earlier proves the protocol-error variant.
-
-Recommended model:
-
-- Keep exactly one frame decoder/dispatcher.
-- Never let it synchronously wait for an application operation or network reply.
-- Dispatch accepted events to bounded per-channel workers/queues.
-- Serialize outgoing frames through a writer owner with cancellation and a bounded queue, or apply explicit write deadlines.
-- Define whether handler methods may call channel methods. Make reentrancy safe or reject it by API design.
-- On fatal protocol errors, attempt a bounded best-effort disconnect, then close. Never wait indefinitely to explain an error.
-
-### S2 — Resource use is not bounded at the connection level
-
-**References**
-
-- unlimited channel map in [`Session`](lib/session/session.go#L27)
-- queued channel frames in [`Channel.frames`](lib/session/channel.go#L47)
-- pending request maps in [`Session`](lib/session/session.go#L37) and [`Channel`](lib/session/channel.go#L45)
-
-Per-channel byte windows are useful, but an authenticated peer can still create:
-
-- unlimited channels;
-- unlimited pending channel/global requests;
-- unlimited empty `ChannelData` frames, which consume no window;
-- repeated rejected opens that consume monotonically increasing IDs;
-- many channels each with a full receive window;
-- large control payloads up to the transport frame limit.
-
-For v1, add configurable hard limits:
-
-- max channels per connection;
-- max pending opens;
-- max outstanding requests globally and per channel;
-- max queued frames and bytes per channel and connection;
-- max control payload/string lengths;
-- max auth attempts;
-- optional idle and request deadlines.
-
-Reject empty data frames or count them against a frame budget.
-
-### S3 — Channel state has protocol and cleanup holes
+### W4 — Authorization grants are tied to one address space
 
 **References**
 
-- incoming channels are marked open before acceptance in [`newIncomingChannel`](lib/session/channel.go#L72)
-- handler receives that channel before it is inserted in the session map in [`handleChannelOpen`](lib/session/session.go#L320)
-- peer channel IDs are not tracked for uniqueness
-- data handling does not reject `eofReceived` in [`handleChannelData`](lib/session/session.go#L427)
-- canceled request waiters remain in maps in [`SendRequest`](lib/session/channel.go#L215) and [`SendGlobalRequest`](lib/session/session.go#L224)
+- private credential token in [`app/server/authz/credentials.go:11`](app/server/authz/credentials.go#L11)
+- [`AuthorizedChannel`](app/server/authz/launch.go#L20)
+- pointer-identity check at [`app/server/authz/launch.go:159`](app/server/authz/launch.go#L159)
+- [`app/server/command.NewService`](app/server/command/service.go#L29)
+- [`services.Registry`](app/server/services/registry.go#L25)
+
+`AuthorizedChannel` binds itself to credentials through a private `*credentialIdentity`. That is a sensible in-process anti-mixup check, but pointer identity cannot be serialized.
+
+The worker cannot simply implement equivalent authorization outside the `authz` package:
+
+- `AuthorizedChannel` fields are private;
+- `AuthorizedLaunchSpec` fields are private;
+- `ConnectionCredentials.validate` is private;
+- only methods on `*Authz` can mint the required values;
+- `Authz.New` requires resolver and `authorized_keys` configuration, authority the worker must not receive.
+
+Although current `AuthorizeChannel` and `AuthorizeLaunch` use only the credential snapshot after connection authorization, their type design still couples pure enforcement to the monitor-side policy object.
+
+Before the split, separate:
+
+1. **monitor policy**, which resolves accounts, files, PAM/account status, and broad permissions;
+2. **snapshot validation/enforcement**, which operates only on plain validated startup data;
+3. **optional monitor RPC**, for future PAM leases or privileged request decisions.
+
+For the initial split, the worker can mint connection-local grants after validating the startup snapshot. Use stable connection or credential IDs rather than transferred pointer identity.
+
+### W5 — There is no cross-process readiness and activation state machine
+
+The current in-process sequence is a useful template:
+
+```text
+prepare handler graph
+  -> bind session without activation
+  -> send auth success
+  -> activate session
+```
+
+The worker sequence needs explicit records and one-shot transitions:
+
+```text
+monitor: STARTUP(connection_id, nonce, binding, credentials, limits)
+worker:  READY(connection_id, nonce)
+monitor: commit client auth success
+monitor: ACTIVATE(connection_id, nonce)
+worker:  begin session receive/write workers
+```
+
+Current code has no representation for:
+
+- repeated or out-of-order startup;
+- session frames arriving before startup or activation;
+- readiness for the wrong connection;
+- stale activation after a worker restart;
+- worker crash between readiness and auth commit;
+- client disconnect while the worker is starting;
+- a bounded transition queue.
+
+The auth timeout currently remains active while app policy runs. Worker startup also needs a bounded deadline. It may share a complete pre-auth deadline or use a separately capped worker-start timeout, but client auth success must still wait for readiness.
+
+### W6 — Relay and terminal ownership are not implemented
+
+The monitor must own two concurrent relay directions:
+
+```text
+network ReceiveFrame -> IPC session-frame record
+IPC session-frame record -> network SendFrame
+```
+
+Either direction failing is connection-fatal. The monitor must converge:
+
+- client disconnect;
+- decrypt/encrypt or network I/O failure;
+- malformed/truncated/oversized IPC packet;
+- unexpected ancillary data;
+- worker crash or IPC close;
+- monitor shutdown;
+- startup or activation violation.
+
+Current `establish.runtime` transfers ownership away after acceptance. It does not own:
+
+- a worker process;
+- an IPC endpoint;
+- two relay goroutines;
+- a supervisor wait result;
+- bounded worker termination;
+- worker reaping;
+- final cause selection across all participants.
+
+The new monitor connection owner should have one terminal transition and idempotent cleanup. It should close the network connection itself, close IPC, cancel both relays, terminate the worker when required, reap it, and report one authoritative connection result.
+
+### W7 — Worker startup is not narrow or independently checked
+
+Every current Cobra command executes the root [`PersistentPreRunE`](bin/mygosh.go#L51), which:
+
+- loads `mygosh.toml`;
+- constructs ordinary application logging;
+- may open a configured log file.
+
+A worker must not take that path. It needs an internal entrypoint that consumes only expected inherited descriptors and startup data. Direct invocation without those resources must fail closed.
+
+The monitor also does not currently launch a process with the account's UID, primary GID, and supplementary groups. [`app/server/process`](app/server/process/runner.go) contains valuable identity validation for child processes, but that validation occurs when starting each command, not before a worker acknowledges readiness.
+
+Before `READY`, the worker must verify:
+
+- effective UID and GID;
+- supplementary groups;
+- whether privilege is expected or forbidden;
+- IPC descriptor number and connected `SOCK_SEQPACKET` type;
+- close-on-exec behavior;
+- absence of unexpected inherited listener, network, key, trust, or log descriptors;
+- filtered environment;
+- absence of unsafe loader variables;
+- absolute policy-derived shell and working directory;
+- supported compiled hard limits.
+
+The secure-file code already uses close-on-exec descriptors, and Go-created network descriptors normally do as well. That is helpful defense, not a substitute for explicit worker descriptor validation.
+
+### W8 — Started session writes do not honor caller cancellation
+
+**Reference**
+
+- [`Session.sendEnvelopeAfter`](lib/session/session.go#L924)
+
+The writer queue fixed the old receive-loop blocking defect, but cancellation is incomplete.
+
+When a caller context is canceled, `sendEnvelopeAfter` returns only if it can atomically change the write from `writeQueued` to `writeCanceled`. If the writer has already changed it to `writeStarted`, the compare-and-swap fails and the loop continues waiting for the writer result.
+
+Because `ctx.Done()` remains continuously ready, the function can spin until the underlying write completes. If that write is blocked, the caller's timeout is neither a completion bound nor an interruption mechanism.
 
 Consequences:
 
-- `OnChannelOpen` can use a channel before the acceptance response has been sent.
-- A handler can send data or requests before the peer knows the local channel ID.
-- A malicious peer can reuse its sender channel ID across opens, making outbound addressing ambiguous.
-- Data after EOF is accepted.
-- Context cancellation returns to the caller but leaves the pending waiter until a result or session shutdown.
-- A failed channel-open acceptance send relies on whole-session shutdown for rollback rather than cleaning up the channel locally.
-- Window credit is consumed before a send; a send failure does not restore it or consistently fail the session.
+- a command output or exit send can outlive its advertised timeout;
+- a service goroutine can spin while the writer is blocked;
+- cleanup may still depend on closing the whole session connection;
+- the planned IPC relay cannot rely on caller contexts to bound a started `SOCK_SEQPACKET` send.
 
-Model channel state explicitly:
+This means the old S1/P2 work is materially improved but not completely finished.
 
-```text
-opening -> open -> local-eof / remote-eof -> closing -> closed
-           \-> failed
-```
+Fix the contract before IPC:
 
-Validate every frame against that state and maintain a set of active peer IDs.
+- use nonblocking I/O plus `poll`, or real write deadlines, for relay and framed connections;
+- make started-write cancellation close/fail the owning connection when a frame cannot be abandoned safely;
+- ensure `sendEnvelopeAfter` returns without spinning;
+- test a write that has definitely started and whose peer never reads.
 
-### E1 — The server is a one-connection demo
+For Noise writes, failure after cipher-state advancement must remain connection-fatal.
+
+### W9 — The server is not yet a long-lived monitor
 
 **Reference**
 
-- one [`listener.Accept`](app/server/server.go#L45), followed by return
+- one [`listener.Accept`](app/server/server.go#L83)
 
-A v1 daemon needs:
+The server:
+
+1. listens;
+2. accepts one connection;
+3. waits for that connection;
+4. exits.
+
+The first worker slice could preserve one-connection behavior while proving IPC, but the full worker plan describes a long-lived monitor. It eventually needs:
 
 - an accept loop;
-- one goroutine/task per connection;
-- a concurrency limit;
-- per-IP or global handshake throttling;
-- graceful shutdown that stops accepting and waits for active connections;
-- startup loading/validation of host keys and configuration;
-- panic containment at the connection boundary;
-- connection IDs for logs/audit;
-- temporary accept-error handling/backoff.
+- global and optionally per-source admission limits;
+- connection IDs;
+- one supervised monitor connection owner per client;
+- temporary accept-error backoff;
+- panic containment;
+- graceful shutdown that stops acceptance;
+- active worker termination and reaping;
+- a bounded wait for all connections;
+- tests showing one worker crash does not terminate other connections.
 
-This should remain app-owned. None of it belongs in `lib/transport`.
+Do not put this admission policy in transport or session packages.
 
-### E2 — Connection close ownership is duplicated
+### W10 — Transport needs cleanup before permanent monitor ownership
 
-**References**
+`lib/transport` is smaller than before: protobuf encoding has moved to `lib/wire`. Remaining issues:
 
-- app defers raw connection close in [`RunClient`](app/client/client.go#L47) and [`RunServer`](app/server/server.go#L52)
-- `Transport.Close` closes the same socket
-- `session.Runtime` closes a replaceable target
-- `Session.Close` closes the runtime/transport
+- mutable exported Noise algorithm globals in [`lib/transport/algos.go`](lib/transport/algos.go);
+- logging construction concerns in transport handshake functions;
+- redundant write locking;
+- non-idiomatic exported protocol constants and mutex names;
+- handshake failures return a partially initialized non-nil `*Transport`;
+- `MaxPayloadSize` is a ciphertext/chunk bound, while `SendFrame` accepts plaintext and adds an authentication tag;
+- no explicit internal terminal state prevents reuse after encryption or write failure.
 
-Multiple idempotent closes usually work, but ownership is unclear and error reporting is lossy. More importantly, the object responsible for handshake/auth timeouts lives in `lib/session`.
-
-Use one connection-lifecycle owner in a neutral package or in establishment composition:
+Current establishment/session callers close on failures, so these are not all active exploits. The monitor relay will make `Transport` a long-lived authority, so the contract should be explicit:
 
 ```text
-raw net.Conn -> secure transport -> authenticated connection mux
+immutable suite
+maximum plaintext
+maximum ciphertext
+one concurrent reader
+one serialized writer
+any decrypt/encrypt/write failure makes transport unusable
+deadlines and close unblock both directions
 ```
 
-Ownership transfers at each successful phase. On failure, the current owner closes. On success, only the final established connection is closed by the app.
+The existing channel-binding accessor already returns a copy and is suitable input to a worker-launch binding digest.
 
-### P1 — `want_reply=false` exec starts a process but never starts its runtime
+### W11 — Monitor-side security debt remains
 
-**References**
+These issues do not have to block the first worker demonstration, but the split does not solve them.
 
-- process is started inside [`startRemotePTYProcess`](app/server/shell_demo.go#L375)
-- forwarding is deferred to [`OnRequestReplied`](app/server/shell_demo.go#L214)
-- `OnRequestReplied` is only invoked when the request wanted a reply in [`handleChannelRequest`](lib/session/session.go#L548)
+#### Trust semantics
 
-`pty.StartWithSize` starts the child immediately. For an exec request with `want_reply=false`:
+[`ParseAuthorizedKeys`](lib/trust/authorized_keys_ssh.go#L11) silently skips every entry with options. Therefore `restrict`, forced command, no-PTY, environment, source, and forwarding constraints never become permissions.
 
-1. the child starts;
-2. `OnRequest` returns success;
-3. no reply is sent;
-4. `OnRequestReplied` is never called;
-5. forwarding and wait/cleanup goroutines never start.
+[`ParseKnownHosts`](lib/trust/known_hosts_ssh.go#L13):
 
-The service must either require replies for state-changing start requests or decouple “reply successfully written” from process creation without losing cleanup ownership. A good rule is:
+- skips revoked entries instead of preserving an overriding denial;
+- does not implement certificate-authority semantics;
+- stores wildcard, negated, hashed, and host-plus-port forms as exact strings;
+- performs only exact identity lookup;
+- has implicit malformed-entry behavior.
 
-> Validate and authorize the request, reserve resources, send acceptance, then start the service under an owner that is guaranteed to wait and clean up.
+The process split must not freeze the current demo permissions as the long-term policy format. Parse key-entry constraints in the monitor and include only validated normalized constraints in the worker snapshot.
 
-If process creation itself must occur before acceptance, cleanup must already be active before the process starts.
+#### Endpoint and identity
 
-### P2 — Channel/process completion can wait forever
+The dial endpoint, host verification identity, client-supplied `reference_identity`, and audit identity remain conflated. Host identity omits port and normalization. The client supplies the value later exposed as a verified host identity.
 
-**References**
+Define distinct values before they become startup/audit fields:
 
-- channel close before exec does not finish the handler in [`OnClose`](app/server/shell_demo.go#L237)
-- completion requires both process finish and peer close in [`shouldFinishLocked`](app/server/shell_demo.go#L358)
-- server sends close but waits for the peer to close in [`forwardOutputAndWait`](app/server/shell_demo.go#L472)
+- network endpoint;
+- normalized known-host identity;
+- optional configured server name;
+- trusted monitor-generated connection/audit identity.
 
-Examples:
+#### Key representation
 
-- A peer opens the one allowed channel, closes it before exec, and leaves the connection open. `channelAccepted` remains true and `done` is never completed.
-- A process exits and the server sends EOF/close, but a malicious peer never returns close. The server waits indefinitely.
-- EOF from the client kills the process rather than representing a half-close of stdin.
-- Post-auth writes have no deadline, so exit-status or close can block cleanup.
+General key values remain mutable. Fingerprints hash raw key bytes without an algorithm tag. Signing APIs panic for invalid key values. Auth username and reference-identity protobuf fields have minimum lengths but no conservative maxima.
 
-Channel closure must have a locally enforceable terminal state. A peer acknowledgment can improve graceful shutdown but cannot be required forever.
+The startup validator should not inherit these loose general APIs.
 
-### P3 — Process-tree ownership is incomplete
+#### Production policy and PAM
 
-**References**
+The production permission policy is hardcoded to allow command, shell, exec, PTY, and a small environment list for every matched key. There is no account-status or PAM check and no PAM session lifecycle.
 
-- [`exec.CommandContext`](app/server/shell_demo.go#L386)
-- [`remotePTYProcess.stop`](app/server/shell_demo.go#L443)
+The initial worker may use a complete snapshot. Later PAM session state or privileged leases should remain monitor-owned and use explicit worker-monitor RPC.
 
-`CommandContext` kills the direct process when canceled. The PTY helper creates a new session, and closing the PTY often causes hangup behavior, but the code does not explicitly own or terminate the whole process group. Descendants may survive or cleanup may depend on shell behavior.
+### W12 — Tests do not exercise the target security boundary
 
-For the service runner:
+The new command, process, session, secure-file, and terminal tests are valuable. The required worker tests are absent because the implementation is absent.
 
-- record the child process group/session;
-- define graceful signal then forced-kill behavior;
-- always call `Wait`;
-- close all PTY ends exactly once;
-- bound shutdown time;
-- treat connection loss as cancellation;
-- test a command that forks descendants.
+Before calling the split complete, add real subprocess tests for:
 
-This runner is also the likely future process-separation boundary.
+- successful startup, readiness, auth commit, activation, and PTY shell;
+- non-PTY exec and separate stderr;
+- exact raw-byte preservation through network, monitor, IPC, session, and command layers;
+- malformed, zero-length, oversized, truncated, repeated, and out-of-order IPC records;
+- unexpected or truncated ancillary data;
+- connection ID, nonce, or binding mismatch;
+- unsupported startup version and unknown security flags;
+- wrong UID, GID, supplementary groups, or root privilege;
+- direct worker invocation without inherited resources;
+- unexpected inherited descriptors and environment variables;
+- worker startup timeout and crash before readiness;
+- worker crash after activation;
+- client disconnect during startup and active relay;
+- blocked IPC send in either direction;
+- monitor shutdown;
+- child process and descendant cleanup;
+- idempotent connection and future lease cleanup;
+- a second connection surviving another worker's failure.
 
-### C1 — Per-connection credentials are mutable and not attached to the connection
-
-**References**
-
-- exported byte slices in [`keys.PublicKey`](lib/keys/keys.go#L31) and [`keys.Keypair`](lib/keys/keys.go#L37)
-- mutable group slice in [`user.Account`](lib/user/user.go#L21)
-- auth results stored beside the embedded session in [`establish.Server`](lib/establish/server.go#L25)
-- public [`session.New`](lib/session/session.go#L48) accepts any framed connection
-
-Callers can mutate key bytes or supplementary groups after “authentication.” `NewKeypairSigner` also shallow-copies the keypair and therefore shares its slices with the caller.
-
-The mux itself has no authenticated credential. It can be constructed directly after anonymous Noise, as the tests do.
-
-Recommended invariant:
-
-- Only establishment can create the post-auth connection exposed to services.
-- Server establishment returns an object containing an immutable `ConnectionCredentials`.
-- Fields with slices/bytes are private or copied on access.
-- Services receive the same credentials pointer/snapshot for the connection lifetime.
-- The generic mux remains unaware of Unix accounts, but app code cannot accidentally pair a mux with different credentials.
-
-### C2 — There is no permissions model
-
-Today, a matching key grants the ability to run any client-supplied command with a PTY as the mapped account. There is no representation for:
-
-- shell allowed/denied;
-- exec allowed/denied;
-- PTY allowed/denied;
-- forced command;
-- permitted environment variables;
-- channel count;
-- port-forwarding rules;
-- source-address constraints;
-- authorized-key options.
-
-Not every concrete decision can happen during connection auth because the command or forwarding target is not known yet. The clean split is:
-
-1. **Before auth success:** resolve account and immutable broad permissions/constraints.
-2. **Before a service starts:** authorize the concrete request against those constraints.
-3. **Service runtime:** consume an already-authorized launch/forward specification; do not redo identity authentication.
-
-### N1 — Endpoint and identity are conflated
-
-**References**
-
-- [`connectTarget.referenceIdentity`](app/client/target.go#L104)
-- `ReferenceIdentity` sent by the client and returned as a server auth fact
-
-The dial host, host-key lookup identity, optional virtual-host selector, and audit identity are distinct concepts.
-
-Current behavior:
-
-- excludes the port from host identity;
-- performs exact case-sensitive matching;
-- does not normalize trailing dots, IPv6 forms, or IDNA;
-- lets the client tell the server its own “reference identity”;
-- includes that client-supplied value in the server auth result.
-
-For a minimal one-host-key server, the server does not need the client to send this value at all. For virtual hosting, call it `server_name`, validate it against listener configuration, and treat it as an input selector rather than an authenticated server fact.
-
-### X1 — Transport owns too much and exposes mutable protocol choices
-
-**References**
-
-- generic protobuf helpers in [`lib/transport/proto.go`](lib/transport/proto.go)
-- logging dependency in [`lib/transport/transport.go`](lib/transport/transport.go)
-- exported mutable globals in [`lib/transport/algos.go`](lib/transport/algos.go)
-
-Recommended split:
-
-- `transport`: Noise handshake, encrypted frame send/receive, close/deadline/exporter.
-- `wireproto` or each protocol package: protobuf marshal, validation, and message limits.
-- app/composition: logger decoration and phase logging.
-
-The Noise suite should be immutable internal configuration. Mutable exported package globals permit accidental runtime mutation and data races.
-
-`MaxPayloadSize` is also ambiguous: it limits encrypted chunks, while `SendFrame` accepts plaintext and adds an authentication tag before applying that limit. A plaintext exactly `MaxPayloadSize` therefore cannot be sent. Define separate maximum plaintext and maximum ciphertext sizes and test the public boundary.
-
-Handshake functions should reject a nil connection and return `nil, err`, not a partially initialized `*Transport` on failure.
-
-### K1 — Key identity and key material need a tighter model
-
-**References**
-
-- [`PublicKey.MarshalBinary`](lib/keys/keys.go#L222)
-- [`FingerprintSHA256`](lib/keys/keys.go#L291)
-- panic-based signing in [`lib/keys/signing.go`](lib/keys/signing.go)
-
-Issues:
-
-- Comments are serialized into protocol key blobs. Comments are presentation metadata, not key identity.
-- Fingerprints hash only key bytes, not an algorithm-tagged canonical key encoding.
-- Mutable slices are exposed.
-- Signing and verification panic for unsupported key types rather than returning errors.
-- private-key file reads are unbounded before the parser's 16 KiB cursor limit applies.
-- encrypted OpenSSH private keys are unsupported, which is acceptable for a first server key but weak for client usability.
-
-Use a canonical algorithm-tagged public-key encoding without comments. Hash that for fingerprints. Keep comments only in parsed file entries.
-
-### D1 — Terminal input can outlive `TerminalDemo.Run`
-
-**Reference**
-
-- blocking [`input.Read`](app/client/terminal_demo.go#L222)
-
-Canceling `runCtx` does not interrupt a blocking read from `os.Stdin`. If the remote process exits while the user has not typed anything, `TerminalDemo.Run` can return and restore the terminal while the input goroutine remains blocked. It may later consume input intended for the caller's restored shell/process.
-
-Use an interruptible input strategy:
-
-- poll/select on a duplicated file descriptor plus cancellation;
-- close a dedicated duplicate rather than global stdin;
-- or centralize terminal I/O in one lifecycle owner.
-
-### D2 — The command service is not yet a shell/exec design
-
-Current behavior always:
-
-1. requires a PTY;
-2. receives an `ExecRequest`;
-3. runs configured `shell -c command`.
-
-When no command is supplied, the **client's** `core.shell` string becomes the remote command. That is not an interactive-shell request.
-
-A v1 session channel should support:
-
-- optional PTY request;
-- exactly one of `shell` or `exec`;
-- non-PTY exec for automation;
-- account/config-selected shell for `shell`;
-- stdout and stderr distinction for non-PTY exec;
-- exit status and exit signal;
-- filtered environment requests;
-- window changes only after PTY acceptance.
-
-The package should be named for this protocol, for example `sessionexec`, not generic `service`.
-
-### B1 — Automation does not target the risky paths
-
-Observations:
-
-- `Taskfile.yml`'s `dev` task builds and runs an unpinned `golangci-lint`, but does not run `go test ./...`.
-- No CI workflow is checked in.
-- No fuzz tests cover binary key parsing, protobuf ingress, `known_hosts`, or `authorized_keys`.
-- Auth's malformed-state behavior is barely tested directly.
-- `lib/tty` has no package tests.
-- The shell integration test creates an anonymous Noise session directly; it does not integrate trust, auth, account resolution, and process launch.
-- Session tests do not cover duplicate IDs, data-after-EOF, canceled pending requests, callback reentrancy, empty-frame floods, or resource limits.
-
-Add fuzzers and adversarial `net.Pipe` tests before expanding the wire protocol.
-
-### L1 — API naming is exposing composition leakage
-
-Examples:
-
-- `KnownHostsHostKeyVerifierWithLogger`
-- `AuthorizedKeysClientKeyAuthorizerWithLogger`
-- `LookupClientIdentityWithLogger`
-- `HandshakeClientWithLogger`
-
-The logger suffix is not the primary problem. These functions combine too many decisions.
-
-Prefer:
-
-```go
-entries, err := authorizedkeys.Parse(reader)
-decision := authorizedkeys.Match(entries, provedKey)
-```
-
-and let the app log around those operations. For constructors that genuinely need dependencies, use a small config:
-
-```go
-type VerifierConfig struct {
-    Store  HostKeyStore
-    Logger *slog.Logger
-}
-```
-
-Do not multiply paired `Foo`/`FooWithLogger` APIs across every package.
+Also add fuzzers for auth/session/command protobuf ingress, private/public key decoding, `authorized_keys`, `known_hosts`, and the IPC control protocol.
 
 ---
 
-## Additional package-level observations
+## Recommended architecture for the next milestone
 
-### `bin`, settings, and app root
+The existing external client protocol does not need to change.
 
-- [`settings.Load`](lib/settings/settings.go#L33) requires `mygosh.toml` in the current working directory. Client and server configuration should be separate app concerns with explicit path selection and usable defaults.
-- `CoreSettings.Shell` serves unrelated client and server meanings.
-- `lib/settings` and `lib/logging` are application infrastructure, not reusable protocol libraries.
-- `lib/logging` imports `lib/settings`, which reverses the more reusable dependency direction.
-- [`openLogFile`](lib/logging/logger.go#L44) follows symlinks and then `chmod`s the target. With privileged execution and a bad configured path, that can alter an unintended file.
-- [`main`](bin/mygosh.go#L20) uses an unbounded `context.Background()` for shutdown. Future shutdown hooks can hang process exit.
-- `Root.Shutdown` can execute registered callbacks more than once; the current logging callback is idempotent, future callbacks may not be.
-
-### Client target parsing
-
-- The parser is readable and covers bracketed IPv6.
-- Port strings are not validated as numeric; service names are implicitly accepted by `net.Dial`.
-- The default username comes from the mutable `USER` environment variable rather than a local account lookup/config.
-- Username and hostname canonicalization are absent.
-- Host identity omits non-default ports.
-
-These are mostly app semantics, but they must be settled before `known_hosts` becomes a security boundary.
-
-### Auth protocol details
-
-- `sendAuthError` and `sendClientAuthReject` ignore send failures. Make rejection best-effort and preserve the primary local error, but record whether the response was delivered.
-- Provider callbacks can return a nil `Signer` with nil error, causing a panic on method use. Validate callback results.
-- Username and reference identity only have minimum-length validation. Add conservative maxima.
-- There is one client-key attempt per connection. A practical v1 client with several agent/file identities needs bounded retry or method negotiation.
-- Public auth errors should carry stable codes; local wrapped errors should remain local.
-- The state machine is useful documentation but has little adversarial state-transition test coverage.
-
-### Transport and framing
-
-- `tx_mux` plus `writeMu` is redundant locking for normal frame sends.
-- Field and constant naming is not idiomatic Go (`tx_mux`, `MYGOSH_NOISE_MAGIC`, mutable `ORDER`).
-- [`bincoder.ORDER`](lib/bincoder/rw.go#L11) is an exported mutable variable. Make byte order internal and immutable.
-- `Encoder.Result` and `Decoder.Rest` expose internal/backing slices. Current callers mostly clone, but safer APIs should make ownership explicit.
-- Length-prefix allocation is bounded for transport frames, which is good.
-- There is no idle timeout after auth. Add app-configurable connection and request policies rather than hiding them in transport.
-
-### Session mux
-
-- `Run` treats raw EOF as a clean successful end. An abrupt transport loss and a graceful protocol shutdown should be distinguishable for auditing and service cleanup.
-- `OnDisconnect` is an arbitrary synchronous callback in a defer. A panic or block there can destabilize connection teardown.
-- Received `ChannelClose` is not automatically acknowledged; handlers/app code must cause local close.
-- Request IDs and channel IDs do not handle wraparound/collision. Limits make practical wraparound impossible and simplify the rule.
-- `sendEnvelope` does not automatically fail the connection on a write error, leaving individual callers to decide inconsistently.
-
-### Trust, account, and strict files
-
-- `lib/trust` currently means four things: file formats, filesystem access, policy adapters, and account lookup. Split it.
-- `GatherAuthorizedKeys` and `matchAuthorizedKey` duplicate traversal logic.
-- Errors in an earlier configured file are ignored if a later file matches. Whether this is fail-open or intended fallback should be explicit policy.
-- `user.GUID` is presumably a typo for `GID`.
-- `user.Account` omits the login shell and account status needed for a real login service.
-- `os/user` can use NSS with cgo, but its `User` type does not expose the passwd shell. A proper Unix account adapter will likely need `getpwnam_r`/`getgrouplist` or another deliberate NSS binding.
-- `strictfiles.OpenDir` hardcodes effective UID as the expected owner, so a root daemon cannot use it as-is to anchor a user-owned home directory.
-- The `openat2` fallback occurs only for `ENOSYS`; older kernels can reject resolve flags with other compatibility errors.
-- Intermediate directory ownership/mode policy is not checked in the fallback.
-- `CheckedFile` is copyable despite owning an fd and is not concurrency-safe. Prefer a pointer-only constructor and unexported fields, with `runtime.SetFinalizer` avoided as an ownership substitute.
-
-### Keys
-
-- The custom X25519 keypair format is currently unrelated to the Noise NN transport, which generates ephemeral keys internally.
-- `MustParseKeypairBase64` is fine for constants/tests but should not enter config-driven paths.
-- OpenSSH PEM parsing ignores trailing PEM/data after the first block.
-- `dump.py` prints complete private key material and the Ed25519 seed. Keep it clearly quarantined as a development forensic tool or remove it before users can mistake it for a normal command.
-
-### PTY and process code
-
-- `VTTY` itself is small and appropriately Unix-specific.
-- The large comment in [`lib/tty/vtty.go`](lib/tty/vtty.go#L19) describes future policy that belongs in process-runner design docs, not the low-level PTY wrapper.
-- Process startup happens while the mux receive loop is inside a handler.
-- `TERM` has no maximum and can be empty.
-- The environment is intentionally sparse, which is a good default, but login environment construction needs a policy seam.
-- Remote nonzero exit is converted to a generic client error, so the CLI exits with status 1 rather than the remote status.
-
-### Build and repository support
-
-- The generated protobuf files are normal `protoc-gen-go v1.36.11` output and correspond to the checked-in schemas.
-- The Docker build regenerates protobufs, which is good for consistency.
-- The repository uses Go SSH code through `golang.org/x/crypto/ssh` file parsers despite the stated intent to avoid Go SSH libraries.
-- `github.com/samber/lo` is used for operations that are clearer with short ordinary loops; removing it would reduce dependency and indirection.
-
----
-
-## Recommended architecture
-
-### Design rules
-
-1. **Protocol packages know protocol facts, not deployment policy.**
-2. **The app chooses paths, listeners, accounts, policy sources, and services.**
-3. **Filesystem primitives open what the caller specifies; parsers parse supplied streams.**
-4. **Auth success is emitted only after connection credentials are complete and valid.**
-5. **The post-auth mux is not exposed before auth success.**
-6. **Services see immutable per-connection credentials.**
-7. **Concrete requests are authorized before resource allocation or process/socket creation.**
-8. **One goroutine owns reads; one bounded mechanism owns writes.**
-9. **Every peer-controlled collection and payload has a limit.**
-10. **Process cleanup never depends indefinitely on peer cooperation.**
-
-### Suggested package map
-
-The exact directory names are flexible. The dependency direction is the important part.
-
-```text
-cmd/mygosh/
-
-internal/app/
-  root/                 config, logging, shutdown
-  client/               CLI semantics, dial, path selection, terminal UI
-  server/               listen/accept loop, per-connection orchestration
-  server/security/      NSS/PAM composition, key policy, credentials, permissions
-  server/services/      channel registry and request authorization
-  server/process/       PTY/non-PTY process runner and cleanup
-
-protocol/
-  transport/            Noise + encrypted frames only
-  auth/                 auth wire state and cryptographic proofs
-  conn/                 post-auth channel/request multiplexer
-  sessionexec/          shell/exec/PTY request message types and codecs
-
-security/
-  keys/                 immutable key/signing primitives
-  securefile/           fd-relative safe opens and metadata checks
-  authorizedkeys/       streaming parser + constraints, no paths
-  knownhosts/           streaming parser + matcher, no paths
-
-platform/unix/
-  account/              NSS account/group snapshot
-  pty/                  low-level PTY operations
-```
-
-If the project is not intended to provide a stable public Go API yet, putting most of these under `internal/` is preferable. A folder named `lib` does not enforce a boundary in Go.
-
-### Dependency direction
-
-```mermaid
-flowchart TD
-    APP["internal/app client/server"] --> SEC["security + platform adapters"]
-    APP --> AUTH["protocol/auth"]
-    APP --> TRANSPORT["protocol/transport"]
-    APP --> CONN["protocol/conn"]
-    APP --> SERVICES["protocol/sessionexec"]
-    AUTH --> KEYS["security/keys"]
-    AUTH --> WIRE["protobuf codec helper"]
-    AUTH --> TRANSPORT
-    CONN --> WIRE
-    CONN --> TRANSPORT
-    SEC --> KEYS
-
-    AUTH -. must not import .-> ACCOUNT["platform account"]
-    CONN -. must not import .-> AUTH
-    TRANSPORT -. must not import .-> WIRE
-```
-
-### Responsibility matrix
-
-| Concern | Library primitive | App decision |
-|---|---|---|
-| TCP options and dialing | `net.Conn` compatibility | address, proxy, keepalive, bind, listener |
-| Secure channel | Noise handshake and frame API | timeout, logging, accepted suite/version |
-| Host key | signer interface | which key for this listener/server name, where loaded |
-| Host verification | parsed-entry matcher | which files/stores, TOFU policy, prompt/UI |
-| Client signing | signer interface | file, agent, hardware, identity order |
-| Client proof | verify signature/transcript | map username/key to account |
-| Account lookup | Unix/NSS adapter | whether account is permitted |
-| Auth files | secure open + parser | path templates, strict mode, precedence |
-| Permissions | plain constraint types | config/key/PAM policy intersection |
-| Mux | channels, windows, requests | limits and registered channel types |
-| Exec protocol | message codec/state helper | whether request is allowed |
-| Process launch | Unix runner | authorized command, account, env, cwd, limits |
-| Forwarding | socket/channel primitive | destination/listen policy |
-
----
-
-## Authentication and credential API shape
-
-### Keep protocol authentication staged
-
-The server needs to verify a proof, pause for local policy, then send accept/reject. Model that explicitly:
-
-```go
-// protocol/auth
-type VerifiedClient struct {
-    Username       string
-    PublicKey      keys.PublicKey
-    KeyFingerprint string
-    ChannelBinding [32]byte
-    ServerName     string // only if virtual hosting is actually supported
-}
-
-type PendingServerAuth struct {
-    // unexported wire/state fields
-}
-
-func ReceiveAndVerifyClient(
-    ctx context.Context,
-    conn BoundFramer,
-    host Signer,
-) (*PendingServerAuth, VerifiedClient, error)
-
-func (p *PendingServerAuth) Accept(ctx context.Context) error
-func (p *PendingServerAuth) Reject(ctx context.Context, failure PublicFailure) error
-```
-
-Properties:
-
-- `PendingServerAuth` is one-shot.
-- Closing it before a decision rejects or closes; orchestration should `defer` that close until acceptance succeeds.
-- It owns no NSS/account/filesystem concepts.
-- It exposes no post-auth mux.
-- Public rejection is separate from the local detailed error.
-
-Client auth can keep two narrow hooks because their timing is protocol-significant:
-
-```go
-type ClientHooks struct {
-    VerifyHost   func(context.Context, ServerProof) (VerifiedHost, error)
-    SelectSigner func(context.Context, VerifiedHost, string) (Signer, error)
-}
-```
-
-The app builds these hooks from already-opened stores or narrowly scoped adapters.
-
-### Server policy belongs in app composition
-
-```go
-// internal/app/server/security
-type Authenticator interface {
-    Authenticate(
-        ctx context.Context,
-        peer PeerInfo,
-        proof auth.VerifiedClient,
-    ) (*ConnectionCredentials, error)
-}
-```
-
-That operation should:
-
-1. validate/canonicalize the requested username;
-2. resolve the account via NSS;
-3. reject disallowed/locked accounts from config/account policy;
-4. resolve app-configured key sources;
-5. securely open and parse them;
-6. match the proved key;
-7. combine key constraints and server configuration;
-8. run later PAM account/auth policy where applicable;
-9. construct and validate immutable credentials.
-
-Only then:
-
-```go
-pending.Accept(ctx)
-mux := conn.New(secureTransport, limits)
-handler := services.NewConnectionHandler(credentials, policy, runner)
-return mux.Run(ctx, handler)
-```
-
-### Immutable per-connection credentials
+### Monitor composition
 
 Conceptually:
 
-```go
-type ConnectionCredentials struct {
-    authentication Authentication
-    account        AccountSnapshot
-    permissions    ConnectionPermissions
-}
-
-type Authentication struct {
-    Method         string
-    RequestedUser  string
-    KeyAlgorithm   string
-    KeyFingerprint string
-    Source         string
-}
-
-type AccountSnapshot struct {
-    Username string
-    UID      uint32
-    GID      uint32
-    Groups   immutableGroups
-    HomeDir  string
-    Shell    string
-}
-
-type ConnectionPermissions struct {
-    AllowShell      bool
-    AllowExec       bool
-    AllowPTY        bool
-    AllowForwarding bool
-    ForceCommand    string
-    MaxChannels     uint32
-    // Future forwarding and environment constraints.
-}
+```text
+server accept loop
+  -> monitor connection owner
+      -> Noise handshake
+      -> staged auth proof
+      -> account/key/policy authorization
+      -> immutable startup snapshot
+      -> worker supervisor
+      -> auth commit
+      -> bidirectional frame relay
+      -> final network close + worker reap
 ```
 
-The concrete implementation should not expose mutable slices. Return copies or iterator/value views.
+The monitor should be the only component with:
 
-The credentials are a **snapshot**. They do not change if files or NSS change mid-connection. New channels use the same snapshot. If policy requires revocation of existing sessions, that is a separate active-session control feature.
+- accepted network descriptors;
+- Noise state;
+- host private key;
+- account resolver;
+- key/trust-file access;
+- connection authorization policy;
+- worker identity selection;
+- authoritative connection audit.
 
----
-
-## Where authorization should occur
-
-The user's preference to decide permissions before services run is correct, with one necessary distinction.
-
-### Connection-level decision: before auth success
-
-Decide everything knowable from:
-
-- network peer metadata;
-- requested username;
-- proved client key/certificate;
-- resolved account;
-- server config;
-- key-entry constraints;
-- PAM account policy.
-
-Examples:
-
-- account may log in;
-- key is valid for this account;
-- shell/exec/PTY/forwarding categories;
-- forced command;
-- max channels;
-- source restrictions;
-- environment allowlist;
-- broad forwarding restrictions.
-
-### Request-level decision: before resource creation
-
-Some facts do not exist until a channel/request arrives:
-
-- the exact command;
-- whether a PTY was requested;
-- requested environment variables;
-- forwarding destination/listen address;
-- subsystem name.
-
-Authorize these before starting the implementation:
-
-```mermaid
-flowchart LR
-    REQ["decoded request"] --> CHECK["policy(credentials, request)"]
-    CHECK -->|deny| REJECT["send rejection"]
-    CHECK -->|allow| SPEC["create AuthorizedLaunch/ForwardSpec"]
-    SPEC --> START["start process/socket/service"]
-```
-
-The service runner should receive an `AuthorizedLaunchSpec`, not raw peer input plus a request to “figure out” authorization itself.
-
----
-
-## Recommended v1 server flow
-
-```mermaid
-sequenceDiagram
-    participant App as Server app
-    participant Tr as Transport
-    participant Au as Auth protocol
-    participant Pol as Account/auth policy
-    participant Mux as Connection mux
-    participant Svc as Service registry
-    participant Run as Process/socket runner
-
-    App->>App: Load config and host signer securely
-    App->>App: Listen and enforce connection limit
-    App->>Tr: Noise handshake with deadline
-    App->>Au: Send server proof / receive verified client proof
-    Au-->>App: Pending decision + VerifiedClient
-    App->>Pol: Resolve NSS account, key policy, permissions
-    Pol-->>App: Immutable ConnectionCredentials
-    App->>Au: Accept
-    App->>Mux: Construct post-auth mux with limits
-    Mux->>Svc: Channel/request event + same credentials
-    Svc->>Pol: Authorize concrete request
-    Pol-->>Svc: Authorized spec
-    Svc->>Run: Start only from authorized spec
-```
-
-Failure before `Auth.Accept` never creates a mux. Failure after it produces a bounded disconnect and deterministic service cleanup.
-
----
-
-## NSS, PAM, and Unix credentials
-
-### NSS
-
-The current `os/user` adapter obtains username, UID, primary group, supplementary groups, and home directory. With cgo it generally follows NSS, but it does not expose the passwd shell or all account-status information needed for login semantics.
-
-For a real v1:
-
-- create a Unix-specific account resolver;
-- use NSS-aware calls such as `getpwnam_r` and `getgrouplist`/equivalent;
-- snapshot UID, GID, supplementary groups, home, and shell;
-- validate numeric conversions and group count limits;
-- apply server config for allowed shells/accounts;
-- do not parse `/etc/passwd` directly if NSS behavior is required.
-
-### PAM later
-
-Leave a seam between verified public-key proof and auth success:
+### Worker composition
 
 ```text
-verified key proof
-  -> NSS account resolution
-  -> configured key authorization
-  -> PAM/account policy (later)
-  -> immutable credentials
-  -> auth success
+internal worker entrypoint
+  -> verify inherited IPC descriptor and process identity
+  -> receive and validate exactly one startup snapshot
+  -> construct snapshot-only authorization enforcement
+  -> construct command service and process runner
+  -> prepare and bind session to IPC
+  -> send READY
+  -> wait for ACTIVATE
+  -> run post-auth session until local or monitor termination
 ```
 
-PAM session open/close and environment setup may belong around process/session launch rather than the cryptographic auth exchange. Keep those lifecycle hooks in the privileged process/account layer, not `protocol/auth`.
+The existing packages that should largely survive in the worker are:
 
-### Process credentials
+- `lib/session`;
+- `lib/command`;
+- `app/commandchannel`;
+- `app/server/command`;
+- `app/server/process`;
+- credential-aware service routing, after its authorization input becomes reconstructible from plain data.
 
-The current `syscall.Credential` use is directionally correct. The process runner should additionally:
+### IPC protocol
 
-- always set or deliberately preserve supplementary groups;
-- reject impossible credential switches before auth success if the daemon mode cannot perform them;
-- use the account's authorized shell/config policy;
-- own process group cleanup;
-- avoid passing mutable account data.
-
----
-
-## Safe trust-file API
-
-A useful primitive boundary would look like:
-
-```go
-// App chooses the anchor and relative name.
-dir, err := securefile.OpenDir(home, securefile.DirPolicy{
-    AllowedOwners: []uint32{0, account.UID()},
-    RejectGroupOrOtherWrite: true,
-})
-
-file, err := dir.Open(".mygosh/authorized_keys", securefile.FilePolicy{
-    AllowedOwners: []uint32{0, account.UID()},
-    MaxSize:       1 << 20,
-    NoSymlinks:    true,
-})
-
-entries, err := authorizedkeys.Parse(file)
-```
-
-The exact API is only illustrative; the separation is the point:
-
-- `app`: selects home and relative path, precedence, missing-file behavior.
-- `securefile`: pins and checks.
-- `authorizedkeys`: parses entries/options.
-- `security policy`: interprets constraints and matches the proved key.
-
-For `known_hosts`, the app similarly chooses and opens the store; the matcher receives a normalized host identity and parsed entries.
-
----
-
-## Session/connection protocol changes
-
-### Rename the global post-auth object
-
-`Session` currently means both:
-
-- the global authenticated multiplexed connection; and
-- the `"session"` channel type for shell/exec.
-
-Rename the global type/package toward `conn`, `connection`, or `mux`. Keep `"session"` as the service channel name if desired.
-
-### Use a reader and writer owner
-
-Recommended concurrency model:
+Use a distinct internal envelope with explicit record types, for example:
 
 ```text
-socket -> reader loop -> bounded dispatcher -> per-channel state/worker
-                         |
-all sends -> bounded writer queue -> writer loop -> socket
+STARTUP
+READY
+ACTIVATE
+SESSION_FRAME
+SHUTDOWN
+WORKER_EVENT
 ```
 
-Benefits:
+Every record should have a small fixed header or protobuf envelope containing:
 
-- callbacks cannot steal the receive owner;
-- writes are ordered in one place;
-- backpressure and queue limits are explicit;
-- cancellation can close the writer;
-- protocol errors can enqueue best-effort disconnect then close;
-- handler reentrancy rules are tractable.
+- IPC version;
+- message type;
+- connection ID;
+- launch nonce where applicable.
 
-Do not spawn an unbounded goroutine per incoming frame.
+Only `SESSION_FRAME` carries the opaque external session protobuf bytes. The monitor normally does not decode those bytes.
 
-### Make limits part of connection construction
+Use `sendmsg`/`recvmsg` semantics that allow:
 
-```go
-type Limits struct {
-    MaxChannels             uint32
-    MaxPendingChannelOpens  uint32
-    MaxPendingRequests      uint32
-    MaxQueuedBytesPerChannel uint32
-    MaxQueuedBytesTotal     uint32
-    MaxControlPayload       uint32
-    MaxTypeLength           uint32
-}
-```
+- `MSG_TRUNC` and control truncation detection;
+- rejection of unexpected ancillary data;
+- exact one-record reads;
+- hard packet maxima;
+- nonblocking or deadline-bound sends.
 
-The wire schema should also add sensible field maxima through protovalidate.
+Do not use ordinary stream framing for this boundary unless there is a compelling portability reason; the project is Unix-only and the plan's seqpacket choice is sound.
 
-### Define closure semantics
+### Snapshot and authorization split
 
-- EOF means no more data in that direction; data after EOF is a protocol error.
-- Close is terminal.
-- Receiving close should trigger a bounded local close acknowledgment automatically.
-- A channel is removed without waiting forever for the peer.
-- Pending callers receive a stable close cause.
-- Context cancellation removes pending request registrations.
-
----
-
-## Service model for shell, exec, and forwarding
-
-### Session channel
-
-Per channel:
+Introduce a plain startup snapshot with no interfaces or pointer capabilities. Keep monitor policy separate from worker enforcement:
 
 ```text
-opened
-  -> optional PTY request
-  -> optional filtered env requests
-  -> exactly one of:
-       shell
-       exec(command)
-  -> running
-  -> exit status/signal
-  -> EOF/close
+monitor:
+  verified proof + peer + account + files + config
+    -> validated ConnectionSnapshot
+
+worker:
+  decode + independent validation
+    -> WorkerCredentials
+    -> snapshot-only ChannelPolicy
+    -> snapshot-only LaunchPolicy
 ```
 
-Authorization occurs before the transition to `running`.
+For future privileged authorization:
 
-For non-PTY exec, preserve separate stdout and stderr. This may require an extended-data frame or separate logical stream.
+```text
+worker -> monitor: authorize/open request
+monitor -> worker: decision + lease ID
+worker -> monitor: close lease
+```
 
-### Port forwarding later
+The initial command service does not need that RPC if all launch decisions are pure and nonblocking.
 
-Do not grant “forwarding” as one boolean forever. Connection credentials can carry broad permission, but concrete policy must check:
+### Establishment API change
 
-- direct destination host/port;
-- requested listen address/port;
-- local vs remote forwarding;
-- origin metadata;
-- channel count and bandwidth limits.
+Keep client establishment mostly as-is. Split server establishment into:
 
-The forwarding service should receive an authorized network spec and should not perform account authentication.
+1. pre-auth secure transport and verified proof;
+2. one-shot public auth decision;
+3. monitor-owned accepted secure transport/relay lifecycle.
 
----
+Do not make `lib/establish` import worker service implementations. It may provide lifecycle primitives, but app/server should compose worker startup and policy.
 
-## Phased implementation plan
+### First complete slice
 
-### Phase 0 — Fix current correctness and security hazards
+The smallest convincing delivery is:
 
-No major wire redesign is required for this phase.
+1. retain the current single accepted connection;
+2. authenticate and authorize in the monitor;
+3. start one demoted worker over seqpacket;
+4. validate startup and send readiness;
+5. commit auth success;
+6. relay session frames;
+7. run the current interactive PTY shell in the worker;
+8. prove client disconnect, worker crash, and monitor shutdown clean up the worker and process group.
 
-1. Integrate bounded secure file opening for host key, client key, `known_hosts`, and `authorized_keys`.
-2. Move default paths and path expansion fully into app config/composition.
-3. Replace detailed peer auth errors with generic public failures.
-4. Validate authorization/account results before auth success.
-5. Require `want_reply=true` for exec start or fix process ownership so false cannot leak a child.
-6. Finish a channel closed before exec.
-7. Add a bounded close-ack timeout and process-group cleanup.
-8. Reject data after EOF and duplicate peer channel IDs.
-9. Remove pending waiters on context cancellation.
-10. Add connection/channel/request/frame limits.
-11. Bound protocol-error sends; do not block teardown.
-12. Make terminal input cancellation safe.
-
-### Phase 1 — Establish clean boundaries
-
-1. Move `Runtime` out of `lib/session`.
-2. Split transport framing from protobuf codec.
-3. Remove `lib/user` from `lib/auth`.
-4. Introduce staged pending server auth.
-5. Create immutable `ConnectionCredentials` in server app/security.
-6. Split `lib/trust` into secure-file, parser, matcher, and app policy composition.
-7. Rename global session mux to connection/mux.
-8. Rename `lib/service` to the concrete session/exec protocol.
-9. Make the authenticated connection the only production constructor path to services.
-
-### Phase 2 — Become a real daemon
-
-1. Add accept loop, concurrency limits, graceful shutdown, and per-connection logs.
-2. Load and validate host keys at startup.
-3. Add proper server/client-specific configuration.
-4. Add bounded auth attempts and multiple client identities.
-5. Add panic containment and service cancellation.
-6. Add integration tests across TCP, Noise, auth, NSS adapter, policy, mux, and process runner.
-
-### Phase 3 — Complete shell/exec v1
-
-1. Add real `shell` request.
-2. Add non-PTY `exec`.
-3. Add stderr/exit-signal handling.
-4. Add filtered env and PTY modes.
-5. Use NSS shell plus config policy.
-6. Preserve remote exit status in the client CLI.
-7. Parse and enforce selected `authorized_keys` constraints.
-
-### Phase 4 — PAM and process separation seams
-
-1. Add PAM account/auth policy after key proof and before auth success.
-2. Add PAM session lifecycle around launched sessions where appropriate.
-3. Define serializable credential and authorized-launch data.
-4. Move privileged process launch behind an IPC boundary only when the in-process interfaces are stable.
-
-### Phase 5 — Port forwarding
-
-Add channel types and concrete destination/listen authorization without changing the authentication core.
+Once that path is stable, add the daemon accept loop and non-PTY/exec coverage through the worker path. The command protocol already supports those semantics, so they should not require a protocol redesign.
 
 ---
 
-## Proposed v1 acceptance criteria
+## Feature work remaining after the first worker slice
 
-A hobby-project v1 can make deliberate tradeoffs, but it should satisfy all of these:
+These are part of the broader credible service described by the worker plan or the existing architecture roadmap.
 
-- Multiple concurrent clients are supported and bounded.
-- Host verification occurs before client signing.
-- Client signature proof occurs before account/key policy lookup is accepted.
-- NSS account resolution and connection-level policy complete before auth success.
-- Auth success cannot be followed by “account incomplete.”
-- Services always receive one immutable credential snapshot.
-- Every concrete shell/exec/forward request is authorized before resource creation.
-- Host/client private keys and trust files are opened with explicit owner/mode/symlink/size policy.
-- Unsupported `authorized_keys` and `known_hosts` semantics are explicit and fail safely.
-- Authentication failures do not disclose local user/file details.
-- One receive owner and one bounded write owner exist per connection.
-- Channels, requests, queued bytes, auth attempts, and control payloads are bounded.
-- No handler can deadlock the receive loop by waiting for a reply.
-- Process trees are reaped on channel close, connection close, timeout, and server shutdown.
-- Interactive shell and non-PTY exec are distinct.
-- The test suite includes malicious-peer, fuzz, cancellation, and end-to-end account/process cases.
+### Required for the full worker plan
+
+- bounded multi-connection monitor and admission control;
+- authoritative worker supervision and reaping;
+- worker operational event forwarding without log-file authority;
+- resource limits supplied by trusted monitor policy and capped by worker hard maxima;
+- monitor-owned lease RPC when PAM session state or privileged resources require it;
+- robust startup, relay, crash, and shutdown audit events;
+- complete subprocess/descriptor/IPC verification.
+
+### Required for a credible secure remote-access service
+
+- supported `authorized_keys` options and constraints;
+- explicit revoked and unsupported trust semantics;
+- correct normalized `known_hosts` identities, including port handling;
+- configurable account and command permission policy;
+- account-status checks;
+- PAM account/session integration where required;
+- canonical algorithm-tagged key identity and non-panicking key APIs;
+- idle, request, and connection timeout policy;
+- optional rlimits, cgroups, namespaces, or sandboxing;
+- deterministic CI gates, fuzzing, and vulnerability scanning.
+
+### Later features
+
+- forwarding with broad connection permission plus exact target/listen authorization;
+- additional authentication methods or bounded identity retry;
+- stronger sandboxing;
+- optional auth-parser process separation.
+
+SSH wire compatibility, reconnect/resume, and a generic plugin framework remain outside the current goal.
 
 ---
 
-## Changes I would avoid for now
+## Recommended priority order
 
-- Do not add reconnect/resume.
-- Do not add SSH wire compatibility.
-- Do not add algorithm negotiation until there is a real second supported suite.
-- Do not build a generic plugin/service framework.
-- Do not force process separation before credential and launch interfaces are stable.
-- Do not add port forwarding on top of the current unbounded synchronous handler model.
-- Do not keep expanding `lib/trust` or `lib/establish` as catch-all composition packages.
+1. **Fix the started-write cancellation defect.** The worker relay and shutdown model need a dependable bounded-write primitive.
+2. **Define the versioned startup/control schema and independent validator.**
+3. **Split pure snapshot enforcement from monitor-side `Authz` and remove pointer-only transferable grants.**
+4. **Implement and test the seqpacket framed connection.**
+5. **Add a narrow internal worker entrypoint and credential-demoted supervisor.**
+6. **Refactor server establishment so the monitor retains Noise transport and can commit auth after `READY`.**
+7. **Implement relay, one terminal connection owner, worker termination, and reaping.**
+8. **Move the current command/PTY path behind the worker boundary and prove it end to end.**
+9. **Turn the server into a bounded multi-connection monitor.**
+10. **Continue trust, identity, PAM, resource-limit, and verification hardening.**
 
 ---
 
-## Immediate recommended next change
+## Final assessment
 
-The highest-leverage first slice is:
+The current revision is a much stronger codebase than the pre-refactor snapshot. The authentication, authorization, mux, command, and process layers now have credible responsibilities, and the current test suite gives reasonable confidence in those in-process components.
 
-> Refactor server auth into a staged verified-proof → app policy → accept/reject flow, introduce an immutable `ConnectionCredentials`, and make `app/server` construct it from securely opened, bounded `authorized_keys` data before auth success.
+The remaining work is not a wholesale rewrite. It is a concentrated ownership refactor:
 
-That single slice addresses the central boundary issue without requiring a new channel protocol. It also creates the correct insertion points for NSS hardening, key constraints, PAM, process separation, and service permissions.
+- preserve the monitor's Noise and authorization authority;
+- serialize only bounded plain connection state;
+- independently validate that state in a demoted worker;
+- bind readiness to auth success;
+- relay opaque post-auth frames;
+- supervise and reap one disposable worker per connection.
 
-In parallel or immediately afterward, fix the mux's synchronous callback/write behavior before adding more channel types. Otherwise every new service will inherit a connection-wide deadlock and denial-of-service surface.
+The repository is ready to begin that work, but it should not yet be described as process-separated or as a long-lived secure remote-access daemon.

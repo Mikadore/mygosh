@@ -131,20 +131,19 @@ func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (Verif
 		return VerifiedClient{}, eris.Wrap(err, "hash host auth init")
 	}
 
-	hostSigner, err := cfg.HostKeyProvider.HostSigner(ctx, HostKeyRequest{
+	hostKey, err := cfg.HostKeyProvider.HostKey(ctx, HostKeyRequest{
 		ReferenceIdentity: hostAuthInit.GetReferenceIdentity(),
 	})
 	if err != nil {
 		sendAuthError(m.conn, "host-key-unavailable", "server host key unavailable")
 		return VerifiedClient{}, eris.Wrap(err, "select server host key")
 	}
-
-	hostPublicKey := hostSigner.PublicKey()
-	if !(&hostPublicKey).IsSigning() {
-		err := eris.New("server host signer must expose an ed25519 signing key")
+	if err := hostKey.Validate(); err != nil {
 		sendAuthError(m.conn, "invalid-host-key", "server host key unavailable")
-		return VerifiedClient{}, err
+		return VerifiedClient{}, eris.Wrap(err, "validate server host key")
 	}
+
+	hostPublicKey := hostKey.PublicKey()
 	hostPublicKeyBlob, err := hostPublicKey.MarshalBinary()
 	if err != nil {
 		return VerifiedClient{}, eris.Wrap(err, "encode server host key")
@@ -165,10 +164,7 @@ func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (Verif
 		return VerifiedClient{}, eris.Wrap(err, "encode server auth payload")
 	}
 
-	signature, err := hostSigner.Sign(ctx, serverAuthPayload)
-	if err != nil {
-		return VerifiedClient{}, eris.Wrap(err, "sign server auth payload")
-	}
+	signature := (&hostKey).Sign(serverAuthPayload)
 
 	serverAuthMsg := &authpb.ServerAuth{
 		ServerHostKey: hostPublicKeyBlob,
@@ -205,10 +201,9 @@ func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (Verif
 		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-key")
 		return VerifiedClient{}, eris.Wrap(err, "parse client public key")
 	}
-	if !(&clientPublicKey).IsSigning() {
-		err := eris.New("client public key must be an ed25519 signing key")
+	if err := clientPublicKey.Validate(); err != nil {
 		m.rejectInvalidClient(clientAuthRequest.GetUsername(), "invalid-client-key")
-		return VerifiedClient{}, err
+		return VerifiedClient{}, eris.Wrap(err, "validate client public key")
 	}
 	if clientAuthRequest.GetClientSigAlg() != string(clientPublicKey.Algorithm) {
 		err := eris.Errorf("client signature algorithm %q does not match key algorithm %q", clientAuthRequest.GetClientSigAlg(), clientPublicKey.Algorithm)

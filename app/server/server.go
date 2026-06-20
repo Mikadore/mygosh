@@ -73,7 +73,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	logger.Info("accepted connection", "remote", conn.RemoteAddr())
 
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
-		HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+		HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 		Logger:          logger,
 	})
 	if err != nil {

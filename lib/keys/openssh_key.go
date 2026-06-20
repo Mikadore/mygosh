@@ -136,10 +136,9 @@ func parseOpensshEd25519PrivateBlob(blob []byte) (Keypair, error) {
 	}
 
 	keypair := Keypair{
-		Algorithm: AlgorithmEd25519,
-		Public:    cloneBytes(public),
-		Private:   cloneBytes(private[:ed25519SeedSize]),
-		Comment:   comment,
+		Public:  cloneBytes(public),
+		Private: cloneBytes(private[:ed25519SeedSize]),
+		Comment: comment,
 	}
 	if err := keypair.Validate(); err != nil {
 		return Keypair{}, eris.Wrap(err, "decode ed25519 private key")

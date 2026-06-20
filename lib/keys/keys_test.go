@@ -4,40 +4,19 @@ import (
 	"encoding/base64"
 	"testing"
 
-	"github.com/Mikadore/mygosh/lib/bincoder"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGenerateX25519EncodeDecodeRoundTrip(t *testing.T) {
-	keypair, err := GenerateX25519()
+func TestParseKeypairUsesOpenSSHFormat(t *testing.T) {
+	keypair, err := ParseKeypair([]byte(testOpenSSHPrivateKeyPEM))
 	require.NoError(t, err)
-	keypair.Comment = "test key"
-
-	encoded, err := keypair.MarshalBinary()
-	require.NoError(t, err)
-
-	decoded, err := ParseKeypair(encoded)
-	require.NoError(t, err)
-	require.Equal(t, keypair, decoded)
-}
-
-func TestGenerateEd25519EncodeDecodeRoundTrip(t *testing.T) {
-	keypair, err := GenerateEd25519()
-	require.NoError(t, err)
-	keypair.Comment = "test signing key"
-
-	encoded, err := keypair.MarshalBinary()
-	require.NoError(t, err)
-
-	decoded, err := ParseKeypair(encoded)
-	require.NoError(t, err)
-	require.Equal(t, keypair, decoded)
+	require.NoError(t, keypair.Validate())
+	require.Equal(t, "mikadore@archlinux", keypair.Comment)
 }
 
 func TestPublicKeyEncodeDecodeRoundTrip(t *testing.T) {
 	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
-	keypair.Comment = "test public key"
 
 	encoded, err := keypair.PublicKey().MarshalBinary()
 	require.NoError(t, err)
@@ -47,92 +26,13 @@ func TestPublicKeyEncodeDecodeRoundTrip(t *testing.T) {
 	require.Equal(t, keypair.PublicKey(), decoded)
 }
 
-func TestParsePublicKeyAcceptsLegacyEncodingWithoutComment(t *testing.T) {
-	keypair, err := GenerateEd25519()
-	require.NoError(t, err)
-
-	enc := bincoder.NewEncoder()
-	enc.Write([]byte(publicKeyMagic))
-	enc.UTF8String(string(keypair.Algorithm))
-	enc.Bytes(keypair.Public)
-	require.NoError(t, enc.Err())
-
-	decoded, err := ParsePublicKey(enc.Result())
-	require.NoError(t, err)
-	require.Equal(t, keypair.Algorithm, decoded.Algorithm)
-	require.Equal(t, keypair.Public, decoded.Bytes)
-	require.Empty(t, decoded.Comment)
-}
-
-func TestParseKeypairBase64RoundTrip(t *testing.T) {
-	keypair, err := GenerateX25519()
-	require.NoError(t, err)
-	keypair.Comment = "base64 key"
-
-	encoded, err := keypair.MarshalBase64()
-	require.NoError(t, err)
-
-	decoded, err := ParseKeypairBase64(encoded)
-	require.NoError(t, err)
-	require.Equal(t, keypair, decoded)
-}
-
-func TestParseKeypairRejectsMismatchedX25519Public(t *testing.T) {
-	keypair, err := GenerateX25519()
-	require.NoError(t, err)
-
-	enc := bincoder.NewEncoder()
-	enc.Write([]byte(privateKeyMagic))
-	enc.UTF8String(string(AlgorithmX25519))
-
-	badPublic := append([]byte(nil), keypair.Public...)
-	badPublic[0] ^= 0xff
-	enc.Bytes(badPublic)
-	enc.Bytes(keypair.Private)
-	enc.UTF8String("")
-	require.NoError(t, enc.Err())
-
-	_, err = ParseKeypair(enc.Result())
-	require.ErrorContains(t, err, "public key does not match private key")
-}
-
-func TestParseKeypairRejectsMismatchedEd25519Public(t *testing.T) {
-	keypair, err := GenerateEd25519()
-	require.NoError(t, err)
-
-	enc := bincoder.NewEncoder()
-	enc.Write([]byte(privateKeyMagic))
-	enc.UTF8String(string(AlgorithmEd25519))
-
-	badPublic := append([]byte(nil), keypair.Public...)
-	badPublic[0] ^= 0xff
-	enc.Bytes(badPublic)
-	enc.Bytes(keypair.Private)
-	enc.UTF8String("")
-	require.NoError(t, enc.Err())
-
-	_, err = ParseKeypair(enc.Result())
-	require.ErrorContains(t, err, "public key does not match private key")
-}
-
-func TestParseKeypairRejectsWrongX25519KeyLength(t *testing.T) {
-	keypair, err := GenerateX25519()
-	require.NoError(t, err)
-
-	enc := bincoder.NewEncoder()
-	enc.Write([]byte(privateKeyMagic))
-	enc.UTF8String(string(AlgorithmX25519))
-	enc.Bytes(keypair.Public[:31])
-	enc.Bytes(keypair.Private)
-	enc.UTF8String("")
-	require.NoError(t, enc.Err())
-
-	_, err = ParseKeypair(enc.Result())
-	require.ErrorContains(t, err, "public key length 31 does not match expected length 32")
+func TestParsePublicKeyRejectsInvalidBlob(t *testing.T) {
+	_, err := ParsePublicKey([]byte("not a public key"))
+	require.ErrorContains(t, err, "decode public key")
 }
 
 func TestPublicKeyFingerprintSHA256(t *testing.T) {
-	keypair, err := GenerateX25519()
+	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
 
 	sum := keypair.PublicKey().FingerprintSHA256()
@@ -146,9 +46,14 @@ func TestPublicKeyFingerprintSHA256(t *testing.T) {
 func TestGenerateSupportsEd25519(t *testing.T) {
 	keypair, err := Generate(AlgorithmEd25519)
 	require.NoError(t, err)
-	require.Equal(t, AlgorithmEd25519, keypair.Algorithm)
+	require.NoError(t, keypair.Validate())
 	require.Len(t, keypair.Public, ed25519PublicKeySize)
 	require.Len(t, keypair.Private, ed25519SeedSize)
+}
+
+func TestGenerateRejectsUnsupportedAlgorithm(t *testing.T) {
+	_, err := Generate(Algorithm("x25519"))
+	require.ErrorContains(t, err, "unsupported algorithm")
 }
 
 func TestGenerateEd25519FromSeedIsDeterministic(t *testing.T) {

@@ -12,55 +12,31 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-type Signer interface {
-	PublicKey() keys.PublicKey
-	Sign(ctx context.Context, payload []byte) (keys.Signature, error)
-}
-
-type KeypairSigner struct {
-	keypair keys.Keypair
-}
-
-func NewKeypairSigner(keypair keys.Keypair) Signer {
-	return KeypairSigner{keypair: keypair}
-}
-
-func (s KeypairSigner) PublicKey() keys.PublicKey {
-	return s.keypair.PublicKey()
-}
-
-func (s KeypairSigner) Sign(_ context.Context, payload []byte) (keys.Signature, error) {
-	if !(&s.keypair).IsSigning() {
-		return nil, eris.New("signer must be an ed25519 signing key")
-	}
-	return (&s.keypair).Sign(payload), nil
-}
-
 type HostKeyRequest struct {
 	ReferenceIdentity string
 }
 
 // HostKeyProvider is deliberately separate from auth policy: it supplies the
-// server signing capability selected for the client's reference identity.
+// server key selected for the client's reference identity.
 type HostKeyProvider interface {
-	HostSigner(ctx context.Context, req HostKeyRequest) (Signer, error)
+	HostKey(ctx context.Context, req HostKeyRequest) (keys.Keypair, error)
 }
 
-type HostKeyProviderFunc func(ctx context.Context, req HostKeyRequest) (Signer, error)
+type HostKeyProviderFunc func(ctx context.Context, req HostKeyRequest) (keys.Keypair, error)
 
-func (f HostKeyProviderFunc) HostSigner(ctx context.Context, req HostKeyRequest) (Signer, error) {
+func (f HostKeyProviderFunc) HostKey(ctx context.Context, req HostKeyRequest) (keys.Keypair, error) {
 	if f == nil {
-		return nil, eris.New("host key provider is required")
+		return keys.Keypair{}, eris.New("host key provider is required")
 	}
 	return f(ctx, req)
 }
 
-func StaticHostKeyProvider(signer Signer) HostKeyProvider {
-	return HostKeyProviderFunc(func(_ context.Context, _ HostKeyRequest) (Signer, error) {
-		if signer == nil {
-			return nil, eris.New("server host signer is required")
+func StaticHostKeyProvider(keypair keys.Keypair) HostKeyProvider {
+	return HostKeyProviderFunc(func(_ context.Context, _ HostKeyRequest) (keys.Keypair, error) {
+		if err := keypair.Validate(); err != nil {
+			return keys.Keypair{}, eris.Wrap(err, "server host key")
 		}
-		return signer, nil
+		return cloneKeypair(keypair), nil
 	})
 }
 
@@ -70,27 +46,27 @@ type ClientIdentityRequest struct {
 	ServerHostKey     keys.PublicKey
 }
 
-// ClientIdentityProvider selects the client signing capability after the peer
-// host key is known. Future implementations can delegate signing over IPC.
+// ClientIdentityProvider selects the client identity after the peer host key is
+// known.
 type ClientIdentityProvider interface {
-	ClientSigner(ctx context.Context, req ClientIdentityRequest) (Signer, error)
+	ClientIdentity(ctx context.Context, req ClientIdentityRequest) (keys.Keypair, error)
 }
 
-type ClientIdentityProviderFunc func(ctx context.Context, req ClientIdentityRequest) (Signer, error)
+type ClientIdentityProviderFunc func(ctx context.Context, req ClientIdentityRequest) (keys.Keypair, error)
 
-func (f ClientIdentityProviderFunc) ClientSigner(ctx context.Context, req ClientIdentityRequest) (Signer, error) {
+func (f ClientIdentityProviderFunc) ClientIdentity(ctx context.Context, req ClientIdentityRequest) (keys.Keypair, error) {
 	if f == nil {
-		return nil, eris.New("client identity provider is required")
+		return keys.Keypair{}, eris.New("client identity provider is required")
 	}
 	return f(ctx, req)
 }
 
-func StaticClientIdentityProvider(signer Signer) ClientIdentityProvider {
-	return ClientIdentityProviderFunc(func(_ context.Context, _ ClientIdentityRequest) (Signer, error) {
-		if signer == nil {
-			return nil, eris.New("client signer is required")
+func StaticClientIdentityProvider(keypair keys.Keypair) ClientIdentityProvider {
+	return ClientIdentityProviderFunc(func(_ context.Context, _ ClientIdentityRequest) (keys.Keypair, error) {
+		if err := keypair.Validate(); err != nil {
+			return keys.Keypair{}, eris.Wrap(err, "client identity key")
 		}
-		return signer, nil
+		return cloneKeypair(keypair), nil
 	})
 }
 
@@ -178,11 +154,11 @@ func NewVerifiedClient(hostIdentity string, requestedUsername string, provenKey 
 	if requestedUsername == "" {
 		return VerifiedClient{}, eris.New("requested username is required")
 	}
-	if !(&provenKey).IsSigning() {
-		return VerifiedClient{}, eris.New("proved client key must be an ed25519 signing key")
+	if err := provenKey.Validate(); err != nil {
+		return VerifiedClient{}, eris.Wrap(err, "proved client key")
 	}
-	if !(&serverKey).IsSigning() {
-		return VerifiedClient{}, eris.New("server key must be an ed25519 signing key")
+	if err := serverKey.Validate(); err != nil {
+		return VerifiedClient{}, eris.Wrap(err, "server key")
 	}
 	return VerifiedClient{
 		hostIdentity:      hostIdentity,
@@ -390,5 +366,13 @@ func clonePublicKey(key keys.PublicKey) keys.PublicKey {
 		Algorithm: key.Algorithm,
 		Bytes:     cloneBytes(key.Bytes),
 		Comment:   key.Comment,
+	}
+}
+
+func cloneKeypair(keypair keys.Keypair) keys.Keypair {
+	return keys.Keypair{
+		Public:  cloneBytes(keypair.Public),
+		Private: cloneBytes(keypair.Private),
+		Comment: keypair.Comment,
 	}
 }

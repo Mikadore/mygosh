@@ -63,7 +63,7 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	established, err := establish.Connect(ctx, conn, establish.ClientConfig{
 		ReferenceIdentity:      target.referenceIdentity(),
 		Username:               target.resolvedUsername(),
-		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+		ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 		VerifyServerHostKey:    knownHostsVerifier(knownHosts, knownHostsSource, logger),
 		Logger:                 logger,
 	})

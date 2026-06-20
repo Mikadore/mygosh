@@ -1,8 +1,6 @@
 package trust
 
 import (
-	"crypto/ed25519"
-
 	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/rotisserie/eris"
 	"github.com/samber/lo"
@@ -36,23 +34,9 @@ func clonePublicKey(publicKey keys.PublicKey) keys.PublicKey {
 }
 
 func sshEd25519PublicKey(publicKey ssh.PublicKey, comment string) (keys.PublicKey, bool, error) {
-	if publicKey.Type() != ssh.KeyAlgoED25519 {
-		return keys.PublicKey{}, false, nil
+	parsed, ok, err := keys.ParseSSHPublicKey(publicKey, comment)
+	if err != nil {
+		return keys.PublicKey{}, false, eris.Wrap(err, "parse ssh public key")
 	}
-
-	cryptoKey, ok := publicKey.(ssh.CryptoPublicKey)
-	if !ok {
-		return keys.PublicKey{}, false, eris.Errorf("ssh public key %q does not expose a crypto public key", publicKey.Type())
-	}
-
-	ed25519Key, ok := cryptoKey.CryptoPublicKey().(ed25519.PublicKey)
-	if !ok {
-		return keys.PublicKey{}, false, eris.Errorf("ssh public key %q is not an ed25519 public key", publicKey.Type())
-	}
-
-	return keys.PublicKey{
-		Algorithm: keys.AlgorithmEd25519,
-		Bytes:     append([]byte(nil), ed25519Key...),
-		Comment:   comment,
-	}, true, nil
+	return parsed, ok, nil
 }

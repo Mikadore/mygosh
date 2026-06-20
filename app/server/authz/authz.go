@@ -117,7 +117,7 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 	verified := request.VerifiedClient
 	username := verified.RequestedUsername()
 	provenKey := verified.ProvenKey()
-	if username == "" || !(&provenKey).IsSigning() {
+	if username == "" || provenKey.Validate() != nil {
 		return ConnectionCredentials{}, eris.New("verified client proof is incomplete")
 	}
 

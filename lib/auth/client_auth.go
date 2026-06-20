@@ -64,8 +64,8 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	if err != nil {
 		return ClientResult{}, eris.Wrap(err, "parse server host key")
 	}
-	if !(&serverHostKey).IsSigning() {
-		return ClientResult{}, eris.New("server host key must be an ed25519 signing key")
+	if err := serverHostKey.Validate(); err != nil {
+		return ClientResult{}, eris.Wrap(err, "validate server host key")
 	}
 
 	serverAuthPayload, err := (ServerAuthToSign{
@@ -94,7 +94,7 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 		return ClientResult{}, eris.Wrap(err, "hash server auth")
 	}
 
-	clientSigner, err := cfg.ClientIdentityProvider.ClientSigner(ctx, ClientIdentityRequest{
+	clientKey, err := cfg.ClientIdentityProvider.ClientIdentity(ctx, ClientIdentityRequest{
 		ReferenceIdentity: cfg.ReferenceIdentity,
 		Username:          cfg.Username,
 		ServerHostKey:     clonePublicKey(serverHostKey),
@@ -102,11 +102,11 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	if err != nil {
 		return ClientResult{}, eris.Wrap(err, "select client identity")
 	}
-
-	clientPublicKey := clientSigner.PublicKey()
-	if !(&clientPublicKey).IsSigning() {
-		return ClientResult{}, eris.New("client signer must expose an ed25519 signing key")
+	if err := clientKey.Validate(); err != nil {
+		return ClientResult{}, eris.Wrap(err, "validate client identity")
 	}
+
+	clientPublicKey := clientKey.PublicKey()
 	clientPublicKeyBlob, err := clientPublicKey.MarshalBinary()
 	if err != nil {
 		return ClientResult{}, eris.Wrap(err, "encode client public key")
@@ -124,10 +124,7 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 		return ClientResult{}, eris.Wrap(err, "encode client auth payload")
 	}
 
-	signature, err := clientSigner.Sign(ctx, clientAuthPayload)
-	if err != nil {
-		return ClientResult{}, eris.Wrap(err, "sign client auth payload")
-	}
+	signature := (&clientKey).Sign(clientAuthPayload)
 
 	clientAuthRequest := &authpb.ClientAuthRequest{
 		Username:              cfg.Username,

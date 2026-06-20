@@ -77,11 +77,11 @@ func (c ConnectionCredentials) validate() error {
 	if c.requestedUsername == "" {
 		return eris.New("requested username is required")
 	}
-	if !(&c.provedKey).IsSigning() {
-		return eris.New("proved client key is invalid")
+	if err := c.provedKey.Validate(); err != nil {
+		return eris.Wrap(err, "proved client key")
 	}
-	if !(&c.serverKey).IsSigning() {
-		return eris.New("server key is invalid")
+	if err := c.serverKey.Validate(); err != nil {
+		return eris.Wrap(err, "server key")
 	}
 	if c.keyFingerprint == "" {
 		return eris.New("client key fingerprint is required")

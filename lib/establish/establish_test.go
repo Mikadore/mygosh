@@ -19,7 +19,7 @@ func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 	serverErrCh := make(chan error, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 		})
 		if err == nil {
 			pendingCh <- pending
@@ -33,7 +33,7 @@ func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 		client, err := Connect(context.Background(), clientConn, ClientConfig{
 			ReferenceIdentity:      "server.example.test",
 			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 		})
 		if err == nil {
@@ -72,7 +72,7 @@ func TestBeginAcceptRejectsGenerically(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 		})
 		require.NoError(t, err)
 		pendingCh <- pending
@@ -83,7 +83,7 @@ func TestBeginAcceptRejectsGenerically(t *testing.T) {
 		_, err := Connect(context.Background(), clientConn, ClientConfig{
 			ReferenceIdentity:      "server.example.test",
 			Username:               "missing-local-user",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 		})
 		clientErrCh <- err
@@ -103,7 +103,7 @@ func TestPendingCloseWithoutDecisionUnblocksClient(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 		})
 		require.NoError(t, err)
 		pendingCh <- pending
@@ -114,7 +114,7 @@ func TestPendingCloseWithoutDecisionUnblocksClient(t *testing.T) {
 		_, err := Connect(context.Background(), clientConn, ClientConfig{
 			ReferenceIdentity:      "server.example.test",
 			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 		})
 		clientErrCh <- err
@@ -133,7 +133,7 @@ func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 			AuthTimeout:     75 * time.Millisecond,
 		})
 		require.NoError(t, err)
@@ -145,7 +145,7 @@ func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
 		_, err := Connect(context.Background(), clientConn, ClientConfig{
 			ReferenceIdentity:      "server.example.test",
 			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 			VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", serverHostKey.PublicKey()),
 		})
 		clientErrCh <- err
@@ -171,7 +171,7 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	serverErrCh := make(chan error, 1)
 	go func() {
 		_, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(auth.NewKeypairSigner(serverHostKey)),
+			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
 		})
 		serverErrCh <- err
 	}()
@@ -179,7 +179,7 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	_, err = Connect(context.Background(), clientConn, ClientConfig{
 		ReferenceIdentity:      "server.example.test",
 		Username:               "alice",
-		ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+		ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 		VerifyServerHostKey:    auth.ExactHostKeyVerifier("server.example.test", untrustedHostKey.PublicKey()),
 	})
 	require.ErrorContains(t, err, "verify server host key")
@@ -198,7 +198,7 @@ func TestConnectContextCancellation(t *testing.T) {
 		_, err := Connect(ctx, clientConn, ClientConfig{
 			ReferenceIdentity:      "server.example.test",
 			Username:               "alice",
-			ClientIdentityProvider: auth.StaticClientIdentityProvider(auth.NewKeypairSigner(clientIdentity)),
+			ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 			VerifyServerHostKey: auth.HostKeyVerifierFunc(func(context.Context, auth.HostKeyVerificationRequest) error {
 				return nil
 			}),

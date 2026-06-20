@@ -28,7 +28,7 @@ func TestLoadClientIdentityRequiresPrivateMode(t *testing.T) {
 
 	keypair, err := loadClientIdentity(path, nil)
 	require.NoError(t, err)
-	require.Equal(t, keys.AlgorithmEd25519, keypair.Algorithm)
+	require.NoError(t, keypair.Validate())
 
 	require.NoError(t, os.Chmod(path, 0o644))
 	_, err = loadClientIdentity(path, nil)

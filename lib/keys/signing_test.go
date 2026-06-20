@@ -7,7 +7,6 @@ import "github.com/stretchr/testify/require"
 func TestEd25519SignAndVerify(t *testing.T) {
 	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
-	require.True(t, (&keypair).IsSigning())
 
 	msg := []byte("sign me")
 	sig := (&keypair).Sign(msg)
@@ -23,10 +22,10 @@ func TestEd25519SignAndVerify(t *testing.T) {
 	require.False(t, (&public).Verify(msg, badSig))
 }
 
-func TestNonSigningKeysPanicOnSignAndVerify(t *testing.T) {
-	keypair, err := GenerateX25519()
+func TestInvalidKeysPanicOnSignAndVerify(t *testing.T) {
+	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
-	require.False(t, (&keypair).IsSigning())
+	keypair.Private = keypair.Private[:len(keypair.Private)-1]
 
 	require.Panics(t, func() {
 		_ = (&keypair).Sign([]byte("sign me"))
@@ -36,6 +35,7 @@ func TestNonSigningKeysPanicOnSignAndVerify(t *testing.T) {
 	})
 
 	public := keypair.PublicKey()
+	public.Bytes = public.Bytes[:len(public.Bytes)-1]
 	require.Panics(t, func() {
 		_ = (&public).Verify([]byte("sign me"), Signature([]byte("sig")))
 	})

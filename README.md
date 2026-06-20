@@ -2,7 +2,7 @@
 
 `mygosh` is an experimental, from-scratch SSH-like client/server written in Go. It is not compatible with the SSH wire protocol.
 
-> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. The authentication/authorization and secure-file boundaries are now staged, but trust-format, resource-limit, connection-lifecycle, and process-cleanup gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
+> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. Authentication, authorization, connection lifecycle, mux limits, and secure-file boundaries are staged, but trust-format, daemon, service-runtime, and process-cleanup gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
 
 ## What Exists Today
 
@@ -16,9 +16,10 @@ This section describes the current implementation as it is.
 - Client-side host-key verification before the client signs its authentication proof.
 - Server-side client-signature verification before local key/account authorization.
 - A staged server decision: verified proof, app-owned connection authorization, then generic accept/reject.
-- Immutable connection credentials and an app-owned account policy seam in `app/server/authz`.
+- Immutable connection credentials, deny-by-default permissions, and app-owned account/permission policy seams in `app/server/authz`.
+- Channel-admission and launch-authorization boundaries plus an empty credential-aware production service registry.
 - A prepared/bound/activated post-auth channel/global-request multiplexer in `lib/session`.
-- Bounded post-auth receive, dispatch, per-channel callback, and write queues.
+- Explicit channel states, duplicate-ID/order validation, cancellation cleanup, bounded close, and mandatory connection/per-channel resource limits.
 - A reject-by-default post-auth connection that stays active until cancellation or disconnect.
 - Bounded, descriptor-checked loading of OpenSSH Ed25519 private keys, `known_hosts`, and `authorized_keys`.
 - Username/group lookup through Go's current `os/user` adapter.
@@ -52,9 +53,7 @@ The mux type can still be constructed directly without credentials, but the defa
 The most important current limitations are:
 
 - trust-file options, markers, revocation, wildcard/hashed-host, and malformed-entry semantics remain incomplete;
-- connection-level permissions and concrete request authorization are not yet modeled;
-- channel/request/queue resources are not comprehensively bounded;
-- channel state and cancellation cleanup are incomplete;
+- connection permissions and launch specifications are modeled, but no production service consumes them yet;
 - the current app path exposes no shell, exec, PTY, or terminal service yet;
 - there is no PAM integration, port forwarding, reconnect/resume, or SSH compatibility.
 
@@ -196,12 +195,13 @@ go vet ./...
 
 - `app/`: current CLI application composition and networking.
 - `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
-- `app/server/authz/`: account/key authorization, immutable credentials, and account policy seams.
+- `app/server/authz/`: account/key authorization, immutable credentials and permissions, and channel/launch authorization.
+- `app/server/services/`: credential-aware service registry; empty in the current production path.
 - `lib/transport/`: Noise handshake, channel binding, and encrypted frame transport.
 - `lib/wire/`: transport-neutral framed connections and protobuf encoding/validation.
 - `lib/auth/`: cryptographic auth protocol and staged accept/reject decision.
 - `lib/establish/`: client composition and pending server establishment lifecycle.
-- `lib/session/`: prepared/bound post-auth mux and bounded callback/write workers.
+- `lib/session/`: prepared/bound post-auth mux, explicit channel states, resource limits, and bounded callback/write workers.
 - `lib/trust/`: path-independent OpenSSH-format parsers and pure matchers.
 - `lib/strictfiles/`: caller-configurable secure-open primitives used by app file policy.
 - `lib/service/`: current PTY/exec payload protocol.

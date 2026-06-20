@@ -35,8 +35,9 @@ The following describes the code as it exists now, not the target architecture:
 - `BeginAccept` returns a pending server establishment after client proof verification. Its context keeps the complete auth timeout active while app policy runs, and its one-shot `Accept`, `Reject`, and `Close` methods do not expose a mux before acceptance.
 - Establishment-owned lifecycle management tracks pre-auth phases and transfers close ownership to `Session` only after the post-auth mux is bound.
 - `lib/auth` verifies server and client signatures, runs the auth wire state machine, and returns an immutable `VerifiedClient` plus a one-shot accept/reject decision. It does not import Unix accounts or authorize client keys.
-- `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs the account-policy seam, and returns immutable connection credentials before wire auth success.
-- `lib/session.Session` is the channel/global-request multiplexer. It is prepared separately, bound to an authenticated `wire.FramedConn`, activates its own workers automatically, and still does not itself enforce authenticated credentials.
+- `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs account and permission policy seams, and returns immutable connection credentials with deny-by-default connection permissions before wire auth success.
+- `app/server/services.Registry` binds one credential snapshot to registered channel services. The production registry is currently empty and therefore rejects every channel.
+- `lib/session.Session` is the channel/global-request multiplexer. It is prepared separately, bound to an authenticated `wire.FramedConn`, activates its own workers automatically, enforces explicit channel states and hard connection/per-channel limits, and still does not itself interpret authenticated credentials.
 - `lib/trust` contains path-independent OpenSSH-format parsers and pure key/host matchers.
 - `lib/strictfiles` provides caller-configurable checked directory/file opens. App-owned `app/securefiles` uses anchored `OpenAt` traversal and bounded reads for every private-key and trust file.
 - The client securely loads `~/.mygosh/id_ed25519` and `~/.mygosh/known_hosts` before dialing.
@@ -52,10 +53,8 @@ The following describes the code as it exists now, not the target architecture:
 These are current defects or incomplete boundaries. Do not preserve them merely because existing code uses them:
 
 - Trust-file marker, option, revocation, host matching, and malformed-entry semantics are incomplete.
-- Channels, pending requests, queued frames, and total connection memory are not bounded adequately.
-- Channel state permits invalid ordering and incomplete cancellation cleanup.
 - General key and account model values still expose mutable slices, although `VerifiedClient` and `ConnectionCredentials` clone mutable data at their boundaries and accessors return copies.
-- There is no explicit connection-level permission model or concrete request authorization layer.
+- The permission and authorized-launch boundaries exist, but no production shell/exec service consumes them yet.
 - Dial endpoint, host verification identity, client-supplied server name, and audit identity are conflated.
 - The current app path exposes no shell, exec, PTY, or terminal service yet.
 
@@ -211,12 +210,13 @@ This section is factual; package placement is expected to change during boundary
 - `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, trust wiring, and reject-all post-auth activation.
 - `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
 - `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and reject-all post-auth activation.
-- `app/server/authz/`: account resolution, `authorized_keys` path/file policy, immutable connection credentials, and account policy seam.
+- `app/server/authz/`: account resolution, `authorized_keys` path/file policy, immutable connection credentials and permissions, account/permission policy seams, and channel/launch authorization.
+- `app/server/services/`: credential-aware channel service registry; currently empty in production.
 - `lib/transport/`: Noise handshake, channel binding, encrypted frame I/O, deadlines, and close.
 - `lib/wire/`: transport-neutral framed-connection contracts and protobuf encoding/validation.
 - `lib/auth/`: auth schema, state machine, signed payloads, proof result, and pending accept/reject decision.
 - `lib/establish/`: client connection composition and pending server establishment lifecycle.
-- `lib/session/`: prepared/bound post-auth mux, bounded callback queues, and serialized post-auth writing.
+- `lib/session/`: prepared/bound post-auth mux, explicit channel states, mandatory resource limits, bounded callback queues, serialized post-auth writing, and bounded close behavior.
 - `lib/service/`: current PTY/exec payload protocol.
 - `lib/strictfiles/`: descriptor-based, caller-configurable secure-open primitives used by app file policy.
 - `lib/trust/`: path-independent OpenSSH `authorized_keys`/`known_hosts` parsers and pure matchers.

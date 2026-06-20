@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
+	"google.golang.org/protobuf/proto"
 )
 
 type Options struct {
@@ -30,21 +32,40 @@ type globalWaitResult struct {
 	err      error
 }
 
+const (
+	writeQueued uint32 = iota
+	writeStarted
+	writeCanceled
+	writeDone
+)
+
 type outboundWrite struct {
 	envelope *sessionpb.Envelope
 	result   chan error
+	after    func(error)
+	size     uint64
+	state    atomic.Uint32
 }
 
 type dispatchTask interface {
 	dispatch(*Session) error
+	size() uint64
 }
 
 type dispatchChannelOpen struct {
 	message *sessionpb.ChannelOpen
 }
 
+func (d dispatchChannelOpen) size() uint64 {
+	return uint64(proto.Size(d.message))
+}
+
 type dispatchGlobalRequest struct {
 	message *sessionpb.GlobalRequest
+}
+
+func (d dispatchGlobalRequest) size() uint64 {
+	return uint64(proto.Size(d.message))
 }
 
 type protocolError struct {
@@ -55,6 +76,14 @@ func (e *protocolError) Error() string {
 	return e.message
 }
 
+type channelSlot uint8
+
+const (
+	channelSlotNone channelSlot = iota
+	channelSlotPending
+	channelSlotActive
+)
+
 type Session struct {
 	conn   wire.FramedConn
 	logger *slog.Logger
@@ -63,21 +92,28 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelCauseFunc
 
-	mu                  sync.Mutex
-	nextLocalChannelID  uint64
-	channels            map[uint64]*Channel
-	peerChannelIDs      map[uint64]uint64
-	nextGlobalRequestID uint64
-	pendingGlobal       map[uint64]chan globalWaitResult
-	waitErr             error
-	closeErr            error
-	closing             bool
+	mu                     sync.Mutex
+	nextLocalChannelID     uint64
+	channels               map[uint64]*Channel
+	peerChannelIDs         map[uint64]uint64
+	activeChannels         uint32
+	pendingOpens           uint32
+	nextGlobalRequestID    uint64
+	pendingGlobal          map[uint64]chan globalWaitResult
+	incomingGlobalRequests map[uint64]struct{}
+	pendingChannelRequests uint32
+	waitErr                error
+	closeErr               error
+	closing                bool
 
+	budgetMu      sync.Mutex
+	queuedFrames  uint32
+	queuedBytes   uint64
 	queueMu       sync.Mutex
 	queuesClosed  bool
 	dispatchQueue chan dispatchTask
-	controlQueue  chan outboundWrite
-	outboundQueue chan outboundWrite
+	controlQueue  chan *outboundWrite
+	outboundQueue chan *outboundWrite
 
 	activated  chan struct{}
 	done       chan struct{}
@@ -87,6 +123,7 @@ type Session struct {
 	activateOnce sync.Once
 	shutdownOnce sync.Once
 	closeConn    sync.Once
+	stopParent   func() bool
 	handler      Handler
 }
 
@@ -111,28 +148,33 @@ func (p *Prepared) Bind(parent context.Context, conn wire.FramedConn) (*Session,
 	}
 
 	parent = normalizeContext(parent)
-	if err := parent.Err(); err != nil {
+	if err := context.Cause(parent); err != nil {
 		return nil, err
 	}
 
 	ctx, cancel := context.WithCancelCause(parent)
+	queueCapacity := int(p.config.Limits.MaxQueuedFramesTotal)
 	s := &Session{
-		conn:          conn,
-		logger:        logging.Resolve(p.logger),
-		config:        p.config,
-		ctx:           ctx,
-		cancel:        cancel,
-		channels:      make(map[uint64]*Channel),
-		peerChannelIDs: make(map[uint64]uint64),
-		pendingGlobal: make(map[uint64]chan globalWaitResult),
-		dispatchQueue: make(chan dispatchTask, p.config.HandlerQueueDepth),
-		controlQueue:  make(chan outboundWrite, 1),
-		outboundQueue: make(chan outboundWrite, p.config.OutboundQueueDepth),
-		activated:     make(chan struct{}),
-		done:          make(chan struct{}),
-		writerDone:    make(chan struct{}),
-		handler:       p.handler,
+		conn:                   conn,
+		logger:                 logging.Resolve(p.logger),
+		config:                 p.config,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		channels:               make(map[uint64]*Channel),
+		peerChannelIDs:         make(map[uint64]uint64),
+		pendingGlobal:          make(map[uint64]chan globalWaitResult),
+		incomingGlobalRequests: make(map[uint64]struct{}),
+		dispatchQueue:          make(chan dispatchTask, queueCapacity),
+		controlQueue:           make(chan *outboundWrite, queueCapacity),
+		outboundQueue:          make(chan *outboundWrite, queueCapacity),
+		activated:              make(chan struct{}),
+		done:                   make(chan struct{}),
+		writerDone:             make(chan struct{}),
+		handler:                p.handler,
 	}
+	s.stopParent = context.AfterFunc(parent, func() {
+		s.shutdown(context.Cause(parent))
+	})
 
 	s.wg.Add(3)
 	go s.receiverLoop()
@@ -192,34 +234,31 @@ func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (
 
 func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payload []byte, handler ChannelHandler) (*Channel, error) {
 	ctx = normalizeContext(ctx)
-	if typ == "" {
-		return nil, eris.New("channel type is required")
+	if err := s.validateTypeAndPayload(typ, payload); err != nil {
+		return nil, err
 	}
 	if err := s.ensureActive(); err != nil {
 		return nil, err
 	}
 
-	payload = cloneBytes(payload)
-
-	s.mu.Lock()
-	localID := s.nextLocalChannelID
-	s.nextLocalChannelID++
-
+	localID, err := s.reserveLocalChannelID()
+	if err != nil {
+		return nil, err
+	}
 	ch := newPendingChannel(s, localID, typ, handler)
-	s.channels[localID] = ch
+	if err := s.addPendingChannel(ch, nil); err != nil {
+		return nil, err
+	}
 	waitCh := ch.openWait
-	s.mu.Unlock()
 
-	s.startChannelWorker(ch)
-
-	err := s.sendEnvelope(ctx, &sessionpb.Envelope{
+	err = s.sendEnvelope(ctx, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelOpen{
 			ChannelOpen: &sessionpb.ChannelOpen{
 				ChannelType:     typ,
 				SenderChannelId: localID,
 				InitialWindow:   s.config.InitialWindow,
 				MaxPacketSize:   s.config.MaxPacketSize,
-				Payload:         payload,
+				Payload:         cloneBytes(payload),
 			},
 		},
 	})
@@ -236,33 +275,37 @@ func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payloa
 		}
 		return ch, nil
 	case <-ctx.Done():
-		ch.mu.Lock()
-		ch.openCanceled = true
-		ch.signalLocked()
-		ch.mu.Unlock()
+		s.abandonOpen(ch, ctx.Err())
 		return nil, ctx.Err()
 	case <-s.Context().Done():
+		s.abandonOpen(ch, s.closeCause())
 		return nil, s.closeCause()
 	}
 }
 
 func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []byte, wantReply bool) (*GlobalResponse, error) {
 	ctx = normalizeContext(ctx)
-	if typ == "" {
-		return nil, eris.New("global request type is required")
+	if err := s.validateTypeAndPayload(typ, payload); err != nil {
+		return nil, err
 	}
 	if err := s.ensureActive(); err != nil {
 		return nil, err
 	}
 
-	payload = cloneBytes(payload)
-
 	s.mu.Lock()
+	if s.nextGlobalRequestID == math.MaxUint64 {
+		s.mu.Unlock()
+		return nil, eris.New("global request id space exhausted")
+	}
 	requestID := s.nextGlobalRequestID
 	s.nextGlobalRequestID++
 
 	var waitCh chan globalWaitResult
 	if wantReply {
+		if uint32(len(s.pendingGlobal)) >= s.config.Limits.MaxPendingGlobalRequests {
+			s.mu.Unlock()
+			return nil, eris.New("pending global request limit reached")
+		}
 		waitCh = make(chan globalWaitResult, 1)
 		s.pendingGlobal[requestID] = waitCh
 	}
@@ -274,15 +317,13 @@ func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []b
 				RequestId:   requestID,
 				RequestType: typ,
 				WantReply:   wantReply,
-				Payload:     payload,
+				Payload:     cloneBytes(payload),
 			},
 		},
 	})
 	if err != nil {
 		if wantReply {
-			s.mu.Lock()
-			delete(s.pendingGlobal, requestID)
-			s.mu.Unlock()
+			s.removeGlobalWaiter(requestID, waitCh)
 		}
 		return nil, err
 	}
@@ -294,8 +335,10 @@ func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []b
 	case result := <-waitCh:
 		return result.response, result.err
 	case <-ctx.Done():
+		s.removeGlobalWaiter(requestID, waitCh)
 		return nil, ctx.Err()
 	case <-s.Context().Done():
+		s.removeGlobalWaiter(requestID, waitCh)
 		return nil, s.closeCause()
 	}
 }
@@ -337,7 +380,11 @@ func (s *Session) dispatchLoop() {
 
 	for {
 		select {
-		case task := <-s.dispatchQueue:
+		case task, ok := <-s.dispatchQueue:
+			if !ok {
+				return
+			}
+			s.releaseQueueBudget(1, task.size())
 			if err := task.dispatch(s); err != nil {
 				s.shutdown(err)
 				return
@@ -361,7 +408,7 @@ func (s *Session) writerLoop() {
 
 	for controlQueue != nil || outboundQueue != nil {
 		var (
-			msg outboundWrite
+			msg *outboundWrite
 			ok  bool
 		)
 
@@ -386,10 +433,28 @@ func (s *Session) writerLoop() {
 			}
 		}
 
+		s.releaseQueueBudget(1, msg.size)
+		if !msg.state.CompareAndSwap(writeQueued, writeStarted) {
+			if msg.after != nil {
+				msg.after(context.Canceled)
+			}
+			if msg.result != nil {
+				select {
+				case msg.result <- context.Canceled:
+				default:
+				}
+			}
+			continue
+		}
+
 		err := wire.SendProto(s.conn, msg.envelope)
 		if err != nil {
 			err = eris.Wrap(err, "send session envelope")
 		}
+		if msg.after != nil {
+			msg.after(err)
+		}
+		msg.state.Store(writeDone)
 		if msg.result != nil {
 			select {
 			case msg.result <- err:
@@ -406,7 +471,7 @@ func (s *Session) writerLoop() {
 func (s *Session) routeEnvelope(frame *sessionpb.Envelope) error {
 	switch kind := frame.GetKind().(type) {
 	case *sessionpb.Envelope_ChannelOpen:
-		return s.enqueueDispatch(dispatchChannelOpen{message: kind.ChannelOpen})
+		return s.enqueueIncomingOpen(kind.ChannelOpen)
 	case *sessionpb.Envelope_ChannelOpenResult:
 		return s.handleChannelOpenResult(kind.ChannelOpenResult)
 	case *sessionpb.Envelope_ChannelData:
@@ -414,18 +479,15 @@ func (s *Session) routeEnvelope(frame *sessionpb.Envelope) error {
 	case *sessionpb.Envelope_ChannelWindowAdjust:
 		return s.handleChannelWindowAdjust(kind.ChannelWindowAdjust)
 	case *sessionpb.Envelope_ChannelEof:
-		return s.enqueueChannelEvent(kind.ChannelEof.GetRecipientChannelId(), channelEvent{kind: channelEventEOF})
+		return s.enqueueChannelEOF(kind.ChannelEof.GetRecipientChannelId())
 	case *sessionpb.Envelope_ChannelClose:
-		return s.enqueueChannelEvent(kind.ChannelClose.GetRecipientChannelId(), channelEvent{kind: channelEventClose})
+		return s.enqueueChannelClose(kind.ChannelClose.GetRecipientChannelId())
 	case *sessionpb.Envelope_ChannelRequest:
-		return s.enqueueChannelEvent(kind.ChannelRequest.GetRecipientChannelId(), channelEvent{
-			kind:    channelEventRequest,
-			request: kind.ChannelRequest,
-		})
+		return s.enqueueChannelRequest(kind.ChannelRequest)
 	case *sessionpb.Envelope_ChannelResult:
 		return s.handleChannelResult(kind.ChannelResult)
 	case *sessionpb.Envelope_GlobalRequest:
-		return s.enqueueDispatch(dispatchGlobalRequest{message: kind.GlobalRequest})
+		return s.enqueueGlobalRequest(kind.GlobalRequest)
 	case *sessionpb.Envelope_GlobalResult:
 		return s.handleGlobalResult(kind.GlobalResult)
 	case *sessionpb.Envelope_Disconnect:
@@ -435,61 +497,85 @@ func (s *Session) routeEnvelope(frame *sessionpb.Envelope) error {
 	}
 }
 
-func (s *Session) handleChannelOpen(msg *sessionpb.ChannelOpen) error {
+func (s *Session) enqueueIncomingOpen(msg *sessionpb.ChannelOpen) error {
 	if msg == nil {
 		return s.protocolErrorf("received nil channel open")
 	}
-
-	s.mu.Lock()
-	if _, exists := s.peerChannelIDs[msg.GetSenderChannelId()]; exists {
-		s.mu.Unlock()
-		return s.protocolErrorf("received duplicate peer channel id %d", msg.GetSenderChannelId())
+	if err := s.validateTypeAndPayload(msg.GetChannelType(), msg.GetPayload()); err != nil {
+		return s.protocolErrorf("invalid channel open: %v", err)
 	}
-	s.mu.Unlock()
-
-	localID := s.reserveLocalChannelID()
+	localID, err := s.reserveLocalChannelID()
+	if err != nil {
+		return err
+	}
 	ch := newIncomingChannel(s, localID, msg.GetSenderChannelId(), msg.GetChannelType(), msg.GetInitialWindow(), msg.GetMaxPacketSize(), nil)
+	if err := s.addPendingChannel(ch, &msg.SenderChannelId); err != nil {
+		if eris.Is(err, errResourceLimit) {
+			return s.sendChannelOpenRejectAsync(msg.GetSenderChannelId(), "resource-limit", "channel limit reached")
+		}
+		return err
+	}
 
-	decision := s.handler.OnChannelOpen(s.Context(), ch, ChannelOpenRequest{
+	task := dispatchChannelOpen{message: msg}
+	if err := s.enqueueDispatch(task); err != nil {
+		s.removeChannel(localID)
+		ch.shutdown(err)
+		if eris.Is(err, errResourceLimit) {
+			return s.sendChannelOpenRejectAsync(msg.GetSenderChannelId(), "resource-limit", "channel queue limit reached")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Session) handleChannelOpen(msg *sessionpb.ChannelOpen) error {
+	ch := s.lookupChannelByPeer(msg.GetSenderChannelId())
+	if ch == nil {
+		return s.protocolErrorf("pending channel %d disappeared during admission", msg.GetSenderChannelId())
+	}
+
+	decision := s.handler.OnChannelOpen(s.Context(), ChannelOpenRequest{
 		Type:          msg.GetChannelType(),
 		Payload:       cloneBytes(msg.GetPayload()),
 		InitialWindow: msg.GetInitialWindow(),
 		MaxPacketSize: msg.GetMaxPacketSize(),
 	})
+	if err := s.validateDecision(decision); err != nil {
+		s.removeChannel(ch.id)
+		ch.shutdown(err)
+		return err
+	}
 	if !decision.OK {
+		s.removeChannel(ch.id)
 		ch.shutdown(errChannelClosed)
-		return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
-			Kind: &sessionpb.Envelope_ChannelOpenResult{
-				ChannelOpenResult: &sessionpb.ChannelOpenResult{
-					RecipientChannelId: msg.GetSenderChannelId(),
-					Result: &sessionpb.ChannelOpenResult_Reject{
-						Reject: &sessionpb.ChannelOpenReject{
-							Code:    normalizeRejectCode(decision.Code, "channel-open-rejected"),
-							Message: normalizeRejectMessage(decision.Message, "channel open rejected"),
-							Payload: cloneBytes(decision.Payload),
-						},
-					},
-				},
-			},
-		})
+		return s.sendChannelOpenReject(
+			msg.GetSenderChannelId(),
+			normalizeRejectCode(decision.Code, "channel-open-rejected"),
+			normalizeRejectMessage(decision.Message, "channel open rejected"),
+			decision.Payload,
+		)
 	}
 
+	ch.mu.Lock()
 	ch.handler = normalizeChannelHandler(decision.Handler)
+	if ch.state != channelOpening {
+		ch.mu.Unlock()
+		return s.protocolErrorf("channel %d changed state during admission", ch.id)
+	}
+	ch.state = channelOpen
+	ch.signalLocked()
+	ch.mu.Unlock()
+	if err := s.activateChannel(ch); err != nil {
+		return err
+	}
 
-	s.mu.Lock()
-	s.channels[localID] = ch
-	s.peerChannelIDs[msg.GetSenderChannelId()] = localID
-	s.mu.Unlock()
-
-	s.startChannelWorker(ch)
-
-	return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
+	err := s.sendEnvelopeAfter(s.Context(), &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelOpenResult{
 			ChannelOpenResult: &sessionpb.ChannelOpenResult{
 				RecipientChannelId: msg.GetSenderChannelId(),
 				Result: &sessionpb.ChannelOpenResult_Success{
 					Success: &sessionpb.ChannelOpenAccept{
-						SenderChannelId: localID,
+						SenderChannelId: ch.id,
 						InitialWindow:   s.config.InitialWindow,
 						MaxPacketSize:   s.config.MaxPacketSize,
 						Payload:         cloneBytes(decision.Payload),
@@ -497,57 +583,73 @@ func (s *Session) handleChannelOpen(msg *sessionpb.ChannelOpen) error {
 				},
 			},
 		},
+	}, func(sendErr error) {
+		if sendErr != nil {
+			return
+		}
+		s.startChannelWorker(ch)
 	})
+	if err != nil {
+		s.removeChannel(ch.id)
+		ch.shutdown(err)
+	}
+	return err
 }
 
 func (s *Session) handleChannelOpenResult(msg *sessionpb.ChannelOpenResult) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil channel open result")
+	}
 	ch := s.lookupChannel(msg.GetRecipientChannelId())
 	if ch == nil {
 		return s.protocolErrorf("received channel open result for unknown channel %d", msg.GetRecipientChannelId())
 	}
 
-	var openWait chan error
-	var autoClose bool
-	var openErr error
-
 	ch.mu.Lock()
-	if ch.openConfirmed || ch.openWait == nil {
+	if ch.state != channelOpening || ch.openWait == nil {
 		ch.mu.Unlock()
 		return s.protocolErrorf("received duplicate channel open result for channel %d", msg.GetRecipientChannelId())
 	}
-	openWait = ch.openWait
+	openWait := ch.openWait
 	ch.openWait = nil
 
 	switch result := msg.GetResult().(type) {
 	case *sessionpb.ChannelOpenResult_Success:
-		s.mu.Lock()
-		if _, exists := s.peerChannelIDs[result.Success.GetSenderChannelId()]; exists {
-			s.mu.Unlock()
+		if uint32(len(result.Success.GetPayload())) > s.config.Limits.MaxControlPayload {
 			ch.mu.Unlock()
-			return s.protocolErrorf("received duplicate peer channel id %d", result.Success.GetSenderChannelId())
+			return s.protocolErrorf("channel open result payload exceeds configured limit")
 		}
-		s.peerChannelIDs[result.Success.GetSenderChannelId()] = ch.id
-		s.mu.Unlock()
-
-		ch.openConfirmed = true
+		if err := s.reservePeerChannelID(result.Success.GetSenderChannelId(), ch.id); err != nil {
+			ch.mu.Unlock()
+			return err
+		}
 		ch.peerID = result.Success.GetSenderChannelId()
 		ch.localWindow = s.config.InitialWindow
 		ch.remoteWindow = result.Success.GetInitialWindow()
 		ch.maxLocalPacket = s.config.MaxPacketSize
 		ch.maxRemotePacket = result.Success.GetMaxPacketSize()
+		ch.state = channelOpen
 		ch.signalLocked()
-		autoClose = ch.openCanceled
-	case *sessionpb.ChannelOpenResult_Reject:
-		openErr = eris.Errorf("channel open rejected: %s", result.Reject.GetMessage())
-		ch.signalLocked()
-		ch.cancel(openErr)
-	default:
 		ch.mu.Unlock()
-		return s.protocolErrorf("received invalid channel open result for channel %d", msg.GetRecipientChannelId())
-	}
-	ch.mu.Unlock()
 
-	if openErr != nil {
+		if err := s.activateChannel(ch); err != nil {
+			return err
+		}
+		s.startChannelWorker(ch)
+		select {
+		case openWait <- nil:
+		default:
+		}
+		return nil
+	case *sessionpb.ChannelOpenResult_Reject:
+		if err := s.validateResponse(result.Reject.GetCode(), result.Reject.GetMessage(), result.Reject.GetPayload()); err != nil {
+			ch.mu.Unlock()
+			return s.protocolErrorf("invalid channel open rejection: %v", err)
+		}
+		openErr := eris.Errorf("channel open rejected: %s", result.Reject.GetMessage())
+		ch.state = channelFailed
+		ch.signalLocked()
+		ch.mu.Unlock()
 		s.removeChannel(ch.id)
 		ch.shutdown(openErr)
 		select {
@@ -555,42 +657,40 @@ func (s *Session) handleChannelOpenResult(msg *sessionpb.ChannelOpenResult) erro
 		default:
 		}
 		return nil
-	}
-
-	select {
-	case openWait <- nil:
 	default:
+		ch.mu.Unlock()
+		return s.protocolErrorf("received invalid channel open result for channel %d", msg.GetRecipientChannelId())
 	}
-
-	if autoClose {
-		return ch.Close()
-	}
-	return nil
 }
 
 func (s *Session) handleChannelData(msg *sessionpb.ChannelData) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil channel data")
+	}
 	ch := s.lookupChannel(msg.GetRecipientChannelId())
 	if ch == nil {
 		return s.protocolErrorf("received channel data for unknown channel %d", msg.GetRecipientChannelId())
 	}
 
 	frame := cloneBytes(msg.GetData())
+	if len(frame) == 0 {
+		return s.protocolErrorf("received empty channel data for channel %d", ch.id)
+	}
 	size := uint32(len(frame))
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
-
-	if !ch.openConfirmed {
-		return s.protocolErrorf("received channel data before channel %d was opened", ch.id)
-	}
-	if ch.closeSent || ch.closeReceived {
-		return s.protocolErrorf("received channel data after channel %d was closed", ch.id)
+	if !ch.state.canReceiveData() {
+		return s.protocolErrorf("received channel data while channel %d is %s", ch.id, ch.state)
 	}
 	if size > ch.maxLocalPacket {
 		return s.protocolErrorf("peer exceeded channel %d max packet size: %d > %d", ch.id, size, ch.maxLocalPacket)
 	}
 	if size > ch.localWindow {
 		return s.protocolErrorf("peer exceeded channel %d window: %d > %d", ch.id, size, ch.localWindow)
+	}
+	if err := ch.reserveQueuedLocked(1, uint64(size)); err != nil {
+		return err
 	}
 
 	ch.localWindow -= size
@@ -600,6 +700,9 @@ func (s *Session) handleChannelData(msg *sessionpb.ChannelData) error {
 }
 
 func (s *Session) handleChannelWindowAdjust(msg *sessionpb.ChannelWindowAdjust) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil channel window adjustment")
+	}
 	ch := s.lookupChannel(msg.GetRecipientChannelId())
 	if ch == nil {
 		return s.protocolErrorf("received channel window adjust for unknown channel %d", msg.GetRecipientChannelId())
@@ -607,9 +710,8 @@ func (s *Session) handleChannelWindowAdjust(msg *sessionpb.ChannelWindowAdjust) 
 
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
-
-	if !ch.openConfirmed {
-		return s.protocolErrorf("received channel window adjust before channel %d was opened", ch.id)
+	if !ch.state.allowsRequests() {
+		return s.protocolErrorf("received channel window adjust while channel %d is %s", ch.id, ch.state)
 	}
 	if math.MaxUint32-ch.remoteWindow < msg.GetBytesToAdd() {
 		return s.protocolErrorf("channel %d remote window overflow", ch.id)
@@ -621,6 +723,9 @@ func (s *Session) handleChannelWindowAdjust(msg *sessionpb.ChannelWindowAdjust) 
 }
 
 func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil channel result")
+	}
 	ch := s.lookupChannel(msg.GetRecipientChannelId())
 	if ch == nil {
 		return s.protocolErrorf("received channel result for unknown channel %d", msg.GetRecipientChannelId())
@@ -628,15 +733,20 @@ func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
 
 	ch.mu.Lock()
 	waitCh, ok := ch.pendingRequests[msg.GetRequestId()]
+	if ok {
+		delete(ch.pendingRequests, msg.GetRequestId())
+	}
+	ch.mu.Unlock()
 	if !ok {
-		ch.mu.Unlock()
 		return s.protocolErrorf("received channel result for unknown request %d on channel %d", msg.GetRequestId(), ch.id)
 	}
-	delete(ch.pendingRequests, msg.GetRequestId())
-	ch.mu.Unlock()
+	s.releasePendingChannelRequest()
 
 	switch result := msg.GetResult().(type) {
 	case *sessionpb.ChannelResult_Success:
+		if uint32(len(result.Success.GetPayload())) > s.config.Limits.MaxControlPayload {
+			return s.protocolErrorf("channel result payload exceeds configured limit")
+		}
 		select {
 		case waitCh <- channelWaitResult{
 			response: &ChannelResponse{
@@ -648,6 +758,9 @@ func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
 		}
 		return nil
 	case *sessionpb.ChannelResult_Reject:
+		if err := s.validateResponse(result.Reject.GetCode(), result.Reject.GetMessage(), result.Reject.GetPayload()); err != nil {
+			return s.protocolErrorf("invalid channel rejection: %v", err)
+		}
 		select {
 		case waitCh <- channelWaitResult{
 			response: &ChannelResponse{
@@ -665,7 +778,49 @@ func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
 	}
 }
 
+func (s *Session) enqueueGlobalRequest(msg *sessionpb.GlobalRequest) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil global request")
+	}
+	if err := s.validateTypeAndPayload(msg.GetRequestType(), msg.GetPayload()); err != nil {
+		return s.protocolErrorf("invalid global request: %v", err)
+	}
+
+	if msg.GetWantReply() {
+		s.mu.Lock()
+		if _, exists := s.incomingGlobalRequests[msg.GetRequestId()]; exists {
+			s.mu.Unlock()
+			return s.protocolErrorf("received duplicate global request id %d", msg.GetRequestId())
+		}
+		s.incomingGlobalRequests[msg.GetRequestId()] = struct{}{}
+		s.mu.Unlock()
+	}
+
+	task := dispatchGlobalRequest{message: msg}
+	if err := s.enqueueDispatch(task); err != nil {
+		if eris.Is(err, errResourceLimit) && msg.GetWantReply() {
+			sendErr := s.sendGlobalRejectAsync(
+				msg.GetRequestId(),
+				"resource-limit",
+				"global request queue limit reached",
+				func(error) {
+					s.finishIncomingGlobal(msg.GetRequestId(), true)
+				},
+			)
+			if sendErr != nil {
+				s.finishIncomingGlobal(msg.GetRequestId(), true)
+			}
+			return sendErr
+		}
+		s.finishIncomingGlobal(msg.GetRequestId(), msg.GetWantReply())
+		return err
+	}
+	return nil
+}
+
 func (s *Session) handleGlobalRequest(msg *sessionpb.GlobalRequest) error {
+	defer s.finishIncomingGlobal(msg.GetRequestId(), msg.GetWantReply())
+
 	response := s.handler.OnGlobalRequest(s.Context(), GlobalRequest{
 		Type:      msg.GetRequestType(),
 		WantReply: msg.GetWantReply(),
@@ -673,6 +828,9 @@ func (s *Session) handleGlobalRequest(msg *sessionpb.GlobalRequest) error {
 	})
 	if !msg.GetWantReply() {
 		return nil
+	}
+	if err := s.validateResponse(response.Code, response.Message, response.Payload); err != nil {
+		return err
 	}
 
 	result := &sessionpb.GlobalResult{RequestId: msg.GetRequestId()}
@@ -696,6 +854,9 @@ func (s *Session) handleGlobalRequest(msg *sessionpb.GlobalRequest) error {
 }
 
 func (s *Session) handleGlobalResult(msg *sessionpb.GlobalResult) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil global result")
+	}
 	s.mu.Lock()
 	waitCh, ok := s.pendingGlobal[msg.GetRequestId()]
 	if ok {
@@ -709,6 +870,9 @@ func (s *Session) handleGlobalResult(msg *sessionpb.GlobalResult) error {
 
 	switch result := msg.GetResult().(type) {
 	case *sessionpb.GlobalResult_Success:
+		if uint32(len(result.Success.GetPayload())) > s.config.Limits.MaxControlPayload {
+			return s.protocolErrorf("global result payload exceeds configured limit")
+		}
 		select {
 		case waitCh <- globalWaitResult{
 			response: &GlobalResponse{
@@ -720,6 +884,9 @@ func (s *Session) handleGlobalResult(msg *sessionpb.GlobalResult) error {
 		}
 		return nil
 	case *sessionpb.GlobalResult_Reject:
+		if err := s.validateResponse(result.Reject.GetCode(), result.Reject.GetMessage(), result.Reject.GetPayload()); err != nil {
+			return s.protocolErrorf("invalid global rejection: %v", err)
+		}
 		select {
 		case waitCh <- globalWaitResult{
 			response: &GlobalResponse{
@@ -741,6 +908,9 @@ func (s *Session) handleDisconnect(msg *sessionpb.Disconnect) error {
 	if msg == nil {
 		return eris.New("remote disconnected")
 	}
+	if err := s.validateResponse(msg.GetCode(), msg.GetMessage(), nil); err != nil {
+		return s.protocolErrorf("invalid disconnect: %v", err)
+	}
 	if code := msg.GetCode(); code != "" {
 		return eris.Errorf("remote disconnect (%s): %s", code, msg.GetMessage())
 	}
@@ -748,6 +918,10 @@ func (s *Session) handleDisconnect(msg *sessionpb.Disconnect) error {
 }
 
 func (s *Session) sendEnvelope(ctx context.Context, frame *sessionpb.Envelope) error {
+	return s.sendEnvelopeAfter(ctx, frame, nil)
+}
+
+func (s *Session) sendEnvelopeAfter(ctx context.Context, frame *sessionpb.Envelope, after func(error)) error {
 	ctx = normalizeContext(ctx)
 	if frame == nil {
 		return eris.New("session envelope is required")
@@ -757,35 +931,60 @@ func (s *Session) sendEnvelope(ctx context.Context, frame *sessionpb.Envelope) e
 	}
 
 	result := make(chan error, 1)
-	if err := s.enqueueWrite(outboundWrite{
+	msg := &outboundWrite{
 		envelope: frame,
 		result:   result,
-	}, false); err != nil {
+		after:    after,
+		size:     uint64(proto.Size(frame)),
+	}
+	if err := s.enqueueWrite(msg, false); err != nil {
 		return err
 	}
 
-	select {
-	case err := <-result:
-		if err != nil {
+	for {
+		select {
+		case err := <-result:
 			return err
+		case <-ctx.Done():
+			if msg.state.CompareAndSwap(writeQueued, writeCanceled) {
+				return ctx.Err()
+			}
+		case <-s.Context().Done():
+			if msg.state.CompareAndSwap(writeQueued, writeCanceled) {
+				return s.closeCause()
+			}
 		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.Context().Done():
-		return s.closeCause()
 	}
 }
 
-func (s *Session) enqueueWrite(msg outboundWrite, control bool) error {
-	if msg.envelope == nil {
+func (s *Session) sendEnvelopeAsync(frame *sessionpb.Envelope, control bool) error {
+	return s.sendEnvelopeAsyncAfter(frame, control, nil)
+}
+
+func (s *Session) sendEnvelopeAsyncAfter(frame *sessionpb.Envelope, control bool, after func(error)) error {
+	if frame == nil {
 		return eris.New("session envelope is required")
+	}
+	msg := &outboundWrite{
+		envelope: frame,
+		size:     uint64(proto.Size(frame)),
+		after:    after,
+	}
+	return s.enqueueWrite(msg, control)
+}
+
+func (s *Session) enqueueWrite(msg *outboundWrite, control bool) error {
+	if msg == nil || msg.envelope == nil {
+		return eris.New("session envelope is required")
+	}
+	if err := s.reserveQueueBudget(1, msg.size); err != nil {
+		return err
 	}
 
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
-
 	if s.queuesClosed {
+		s.releaseQueueBudget(1, msg.size)
 		return s.closeCause()
 	}
 
@@ -793,11 +992,11 @@ func (s *Session) enqueueWrite(msg outboundWrite, control bool) error {
 	if control {
 		queue = s.controlQueue
 	}
-
 	select {
 	case queue <- msg:
 		return nil
 	default:
+		s.releaseQueueBudget(1, msg.size)
 	}
 
 	err := eris.New("session outbound queue exhausted")
@@ -806,39 +1005,56 @@ func (s *Session) enqueueWrite(msg outboundWrite, control bool) error {
 }
 
 func (s *Session) enqueueDispatch(task dispatchTask) error {
+	if err := s.reserveQueueBudget(1, task.size()); err != nil {
+		return err
+	}
 	select {
 	case s.dispatchQueue <- task:
 		return nil
 	default:
-		return s.queueExhausted("connection dispatch queue exhausted")
+		s.releaseQueueBudget(1, task.size())
+		return errResourceLimit
 	}
 }
 
-func (s *Session) enqueueChannelEvent(localID uint64, event channelEvent) error {
-	ch := s.lookupChannel(localID)
-	if ch == nil {
-		return s.protocolErrorf("received channel frame for unknown channel %d", localID)
+func (s *Session) reserveQueueBudget(frames uint32, bytes uint64) error {
+	s.budgetMu.Lock()
+	defer s.budgetMu.Unlock()
+	if frames > s.config.Limits.MaxQueuedFramesTotal-s.queuedFrames {
+		return errResourceLimit
 	}
-	return ch.enqueueEvent(event)
+	if bytes > s.config.Limits.MaxQueuedBytesTotal-s.queuedBytes {
+		return errResourceLimit
+	}
+	s.queuedFrames += frames
+	s.queuedBytes += bytes
+	return nil
 }
 
-func (s *Session) queueExhausted(message string) error {
-	err := eris.New(message)
-	go s.shutdown(err)
-	return err
+func (s *Session) releaseQueueBudget(frames uint32, bytes uint64) {
+	s.budgetMu.Lock()
+	defer s.budgetMu.Unlock()
+	if frames > s.queuedFrames {
+		s.queuedFrames = 0
+	} else {
+		s.queuedFrames -= frames
+	}
+	if bytes > s.queuedBytes {
+		s.queuedBytes = 0
+	} else {
+		s.queuedBytes -= bytes
+	}
 }
 
 func (s *Session) ensureActive() error {
 	if s == nil {
 		return eris.New("session is required")
 	}
-
 	select {
 	case <-s.activated:
 	default:
 		return errSessionNotActive
 	}
-
 	select {
 	case <-s.Context().Done():
 		return s.closeCause()
@@ -861,12 +1077,59 @@ func (s *Session) startChannelWorker(ch *Channel) {
 	go ch.loop()
 }
 
-func (s *Session) reserveLocalChannelID() uint64 {
+func (s *Session) reserveLocalChannelID() (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.nextLocalChannelID == math.MaxUint64 {
+		return 0, eris.New("local channel id space exhausted")
+	}
 	localID := s.nextLocalChannelID
 	s.nextLocalChannelID++
-	return localID
+	return localID, nil
+}
+
+func (s *Session) addPendingChannel(ch *Channel, peerID *uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingOpens >= s.config.Limits.MaxPendingOpens ||
+		s.activeChannels+s.pendingOpens >= s.config.Limits.MaxChannels {
+		return errResourceLimit
+	}
+	if peerID != nil {
+		if _, exists := s.peerChannelIDs[*peerID]; exists {
+			return s.protocolErrorf("received duplicate peer channel id %d", *peerID)
+		}
+		s.peerChannelIDs[*peerID] = ch.id
+	}
+	ch.slot = channelSlotPending
+	s.channels[ch.id] = ch
+	s.pendingOpens++
+	return nil
+}
+
+func (s *Session) reservePeerChannelID(peerID uint64, localID uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.peerChannelIDs[peerID]; exists {
+		return s.protocolErrorf("received duplicate peer channel id %d", peerID)
+	}
+	s.peerChannelIDs[peerID] = localID
+	return nil
+}
+
+func (s *Session) activateChannel(ch *Channel) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ch.slot != channelSlotPending {
+		return eris.Errorf("channel %d is not pending activation", ch.id)
+	}
+	if s.pendingOpens == 0 {
+		return eris.New("pending channel accounting underflow")
+	}
+	s.pendingOpens--
+	s.activeChannels++
+	ch.slot = channelSlotActive
+	return nil
 }
 
 func (s *Session) lookupChannel(id uint64) *Channel {
@@ -875,21 +1138,166 @@ func (s *Session) lookupChannel(id uint64) *Channel {
 	return s.channels[id]
 }
 
+func (s *Session) lookupChannelByPeer(peerID uint64) *Channel {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	localID, ok := s.peerChannelIDs[peerID]
+	if !ok {
+		return nil
+	}
+	return s.channels[localID]
+}
+
 func (s *Session) removeChannel(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.removeChannelLocked(id)
-}
-
-func (s *Session) removeChannelLocked(id uint64) {
 	ch, ok := s.channels[id]
 	if !ok {
 		return
 	}
 	delete(s.channels, id)
-	if ch.openConfirmed {
-		delete(s.peerChannelIDs, ch.peerID)
+	for peerID, localID := range s.peerChannelIDs {
+		if localID == id {
+			delete(s.peerChannelIDs, peerID)
+		}
 	}
+	switch ch.slot {
+	case channelSlotPending:
+		if s.pendingOpens > 0 {
+			s.pendingOpens--
+		}
+	case channelSlotActive:
+		if s.activeChannels > 0 {
+			s.activeChannels--
+		}
+	}
+	ch.slot = channelSlotNone
+}
+
+func (s *Session) abandonOpen(ch *Channel, cause error) {
+	ch.mu.Lock()
+	if ch.state == channelOpening {
+		ch.state = channelFailed
+		ch.openWait = nil
+		ch.signalLocked()
+		ch.mu.Unlock()
+		s.removeChannel(ch.id)
+		ch.shutdown(cause)
+		return
+	}
+	ch.mu.Unlock()
+	_ = ch.Close()
+}
+
+func (s *Session) removeGlobalWaiter(requestID uint64, waitCh chan globalWaitResult) {
+	s.mu.Lock()
+	if current, ok := s.pendingGlobal[requestID]; ok && current == waitCh {
+		delete(s.pendingGlobal, requestID)
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) reservePendingChannelRequest() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingChannelRequests >= s.config.Limits.MaxPendingChannelRequests {
+		return eris.New("pending channel request limit reached")
+	}
+	s.pendingChannelRequests++
+	return nil
+}
+
+func (s *Session) releasePendingChannelRequest() {
+	s.mu.Lock()
+	if s.pendingChannelRequests > 0 {
+		s.pendingChannelRequests--
+	}
+	s.mu.Unlock()
+}
+
+func (s *Session) finishIncomingGlobal(requestID uint64, wantReply bool) {
+	if !wantReply {
+		return
+	}
+	s.mu.Lock()
+	delete(s.incomingGlobalRequests, requestID)
+	s.mu.Unlock()
+}
+
+func (s *Session) sendChannelOpenReject(peerID uint64, code string, message string, payload []byte) error {
+	return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_ChannelOpenResult{
+			ChannelOpenResult: &sessionpb.ChannelOpenResult{
+				RecipientChannelId: peerID,
+				Result: &sessionpb.ChannelOpenResult_Reject{
+					Reject: &sessionpb.ChannelOpenReject{
+						Code:    code,
+						Message: message,
+						Payload: cloneBytes(payload),
+					},
+				},
+			},
+		},
+	})
+}
+
+func (s *Session) sendChannelOpenRejectAsync(peerID uint64, code string, message string) error {
+	return s.sendEnvelopeAsync(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_ChannelOpenResult{
+			ChannelOpenResult: &sessionpb.ChannelOpenResult{
+				RecipientChannelId: peerID,
+				Result: &sessionpb.ChannelOpenResult_Reject{
+					Reject: &sessionpb.ChannelOpenReject{
+						Code:    code,
+						Message: message,
+					},
+				},
+			},
+		},
+	}, true)
+}
+
+func (s *Session) sendGlobalRejectAsync(requestID uint64, code string, message string, after func(error)) error {
+	return s.sendEnvelopeAsyncAfter(&sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_GlobalResult{
+			GlobalResult: &sessionpb.GlobalResult{
+				RequestId: requestID,
+				Result: &sessionpb.GlobalResult_Reject{
+					Reject: &sessionpb.OperationReject{Code: code, Message: message},
+				},
+			},
+		},
+	}, true, after)
+}
+
+func (s *Session) validateTypeAndPayload(typ string, payload []byte) error {
+	if typ == "" {
+		return eris.New("request type is required")
+	}
+	if uint32(len(typ)) > s.config.Limits.MaxTypeLength {
+		return eris.Errorf("request type exceeds limit: %d > %d", len(typ), s.config.Limits.MaxTypeLength)
+	}
+	if uint32(len(payload)) > s.config.Limits.MaxControlPayload {
+		return eris.Errorf("control payload exceeds limit: %d > %d", len(payload), s.config.Limits.MaxControlPayload)
+	}
+	return nil
+}
+
+func (s *Session) validateResponse(code string, message string, payload []byte) error {
+	if uint32(len(code)) > s.config.Limits.MaxCodeLength {
+		return eris.Errorf("response code exceeds limit: %d > %d", len(code), s.config.Limits.MaxCodeLength)
+	}
+	if uint32(len(message)) > s.config.Limits.MaxMessageLength {
+		return eris.Errorf("response message exceeds limit: %d > %d", len(message), s.config.Limits.MaxMessageLength)
+	}
+	if uint32(len(payload)) > s.config.Limits.MaxControlPayload {
+		return eris.Errorf("response payload exceeds limit: %d > %d", len(payload), s.config.Limits.MaxControlPayload)
+	}
+	return nil
+}
+
+func (s *Session) validateDecision(decision ChannelOpenDecision) error {
+	return s.validateResponse(decision.Code, decision.Message, decision.Payload)
 }
 
 func (s *Session) protocolErrorf(format string, args ...any) error {
@@ -900,7 +1308,6 @@ func (s *Session) closeCause() error {
 	if s == nil {
 		return context.Canceled
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closeErr != nil {
@@ -932,31 +1339,31 @@ func (s *Session) shutdown(err error) {
 		for _, ch := range s.channels {
 			channels = append(channels, ch)
 		}
-
 		pendingGlobal := make([]chan globalWaitResult, 0, len(s.pendingGlobal))
 		for _, waitCh := range s.pendingGlobal {
 			pendingGlobal = append(pendingGlobal, waitCh)
 		}
 		s.pendingGlobal = make(map[uint64]chan globalWaitResult)
+		s.incomingGlobalRequests = make(map[uint64]struct{})
 		s.channels = make(map[uint64]*Channel)
 		s.peerChannelIDs = make(map[uint64]uint64)
+		s.activeChannels = 0
+		s.pendingOpens = 0
+		s.pendingChannelRequests = 0
 		s.mu.Unlock()
 
-		if protocolErr, ok := err.(*protocolError); ok {
-			_ = s.enqueueWrite(outboundWrite{
-				envelope: &sessionpb.Envelope{
-					Kind: &sessionpb.Envelope_Disconnect{
-						Disconnect: &sessionpb.Disconnect{
-							Code:    "protocol-error",
-							Message: protocolErr.message,
-						},
+		if _, ok := err.(*protocolError); ok {
+			_ = s.sendEnvelopeAsync(&sessionpb.Envelope{
+				Kind: &sessionpb.Envelope_Disconnect{
+					Disconnect: &sessionpb.Disconnect{
+						Code:    "protocol-error",
+						Message: "protocol error",
 					},
 				},
 			}, true)
 		}
 
 		s.cancel(closeErr)
-
 		for _, ch := range channels {
 			ch.shutdown(closeErr)
 		}
@@ -980,6 +1387,9 @@ func (s *Session) shutdown(err error) {
 }
 
 func (s *Session) finalize(cause error) {
+	if s.stopParent != nil {
+		s.stopParent()
+	}
 	if _, ok := cause.(*protocolError); ok {
 		timer := time.NewTimer(s.config.DisconnectTimeout)
 		select {

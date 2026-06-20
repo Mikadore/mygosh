@@ -12,15 +12,15 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [ ] | T2 | P1 | Trust/files | Define and enforce supported `authorized_keys` and `known_hosts` semantics |
 | [x] | T3 | P1 | Authentication | Stop disclosing local authorization and filesystem details to peers |
 | [x] | S1 | P0 | Connection mux | Prevent handlers and writes from blocking the sole receive owner |
-| [ ] | S2 | P1 | Connection mux | Add hard connection-wide resource limits |
-| [ ] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
+| [x] | S2 | P1 | Connection mux | Add hard connection-wide resource limits |
+| [x] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
 | [ ] | E1 | P0 | Server app | Replace the one-connection demo with a bounded daemon accept loop |
 | [x] | E2 | P1 | Lifecycle | Give each connection phase one clear lifetime and close owner |
 | [ ] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
 | [ ] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
 | [ ] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
 | [x] | C1 | P1 | Credentials | Introduce immutable per-connection credentials tied to the authenticated connection |
-| [ ] | C2 | P1 | Authorization | Add connection-level permissions and concrete request authorization |
+| [x] | C2 | P1 | Authorization | Add connection-level permissions and concrete request authorization |
 | [ ] | N1 | P2 | Identity | Separate dial endpoint, host verification identity, server name, and audit identity |
 | [ ] | X1 | P2 | Transport | Restrict transport to Noise-backed encrypted framing |
 | [ ] | K1 | P2 | Keys | Make key identity canonical, immutable, and algorithm-tagged |
@@ -32,7 +32,7 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [ ] | R2 | P1 | Architecture | Enforce one-way app, protocol, security, and Unix-platform dependencies |
 | [x] | R3 | P1 | Trust/files | Split path policy, secure opening, parsing, matching, and authorization policy |
 | [x] | R4 | P1 | Accounts | Establish deliberate NSS, PAM, and process-credential seams |
-| [ ] | R5 | P1 | Services | Define a credential-aware service registry and authorized launch/forward specifications |
+| [x] | R5 | P1 | Services | Define a credential-aware service registry and authorized launch/forward specifications |
 
 Priority meanings: **P0** blocks a secure functional daemon, **P1** is required for a credible v1, **P2** is important hardening/design work, and **P3** is cleanup after the boundaries are stable.
 

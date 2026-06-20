@@ -41,16 +41,16 @@ const (
 type PendingServer struct {
 	mu sync.Mutex
 
-	ctx        context.Context
-	cancelAuth context.CancelFunc
-	stopAuth   func() bool
-	runtime    *runtime
-	secureConn *transport.Transport
-	auth       *auth.PendingServerAuth
-	cfg        ServerConfig
-	logger     *slog.Logger
-	state      pendingState
-	server     *Server
+	ctx         context.Context
+	cancelAuth  context.CancelFunc
+	stopAuth    func() bool
+	runtime     *runtime
+	secureConn  *transport.Transport
+	auth        *auth.PendingServerAuth
+	cfg         ServerConfig
+	logger      *slog.Logger
+	state       pendingState
+	server      *Server
 	transferred bool
 }
 
@@ -163,11 +163,11 @@ func (p *PendingServer) Accept(prepared *session.Prepared) (*Server, error) {
 	}
 	p.runtime.SetOwner(sess)
 
-	if err := p.auth.Accept(); err != nil {
+	if err := p.completeAuthDeadline(); err != nil {
 		_ = p.runtime.Fail(err)
 		return nil, err
 	}
-	if err := p.completeAuthDeadline(); err != nil {
+	if err := p.auth.Accept(); err != nil {
 		_ = p.runtime.Fail(err)
 		return nil, err
 	}

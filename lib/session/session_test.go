@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,10 +64,16 @@ func TestSessionNilHandlerRejectsIncomingOpenWhileActive(t *testing.T) {
 func TestSessionOpenChannelPreservesFrameBoundaries(t *testing.T) {
 	serverChannels := make(chan *Channel, 1)
 	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, req ChannelOpenRequest) ChannelOpenDecision {
+		onChannelOpen: func(_ context.Context, req ChannelOpenRequest) ChannelOpenDecision {
 			require.Equal(t, "session", req.Type)
-			serverChannels <- ch
-			return ChannelOpenDecision{OK: true}
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
 		},
 	})
 	defer clientSession.Close() //nolint:errcheck
@@ -91,7 +98,7 @@ func TestSessionOpenChannelPreservesFrameBoundaries(t *testing.T) {
 
 func TestSessionChannelRequestRoundTripsPayload(t *testing.T) {
 	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
-		onChannelOpen: func(_ context.Context, _ *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
 			return ChannelOpenDecision{
 				OK: true,
 				Handler: testChannelHandler{
@@ -124,9 +131,15 @@ func TestLocallyOpenedChannelReceivesRequests(t *testing.T) {
 	serverChannels := make(chan *Channel, 1)
 	clientRequests := make(chan ChannelRequest, 1)
 	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
-			serverChannels <- ch
-			return ChannelOpenDecision{OK: true}
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
 		},
 	})
 	defer clientSession.Close() //nolint:errcheck
@@ -153,9 +166,15 @@ func TestLocallyOpenedChannelReceivesRequests(t *testing.T) {
 func TestSessionChannelDataPreservesTerminalBytes(t *testing.T) {
 	serverChannels := make(chan *Channel, 1)
 	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
-			serverChannels <- ch
-			return ChannelOpenDecision{OK: true}
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
 		},
 	})
 	defer clientSession.Close() //nolint:errcheck
@@ -203,9 +222,15 @@ func TestSessionSendBlocksUntilWindowAdjust(t *testing.T) {
 
 	serverChannels := make(chan *Channel, 1)
 	clientSession, serverSession := activatedSessionPair(t, cfg, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
-			serverChannels <- ch
-			return ChannelOpenDecision{OK: true}
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
 		},
 	})
 	defer clientSession.Close() //nolint:errcheck
@@ -256,16 +281,23 @@ func TestSessionProtocolErrorClosesConnection(t *testing.T) {
 }
 
 func TestSessionHandlerQueueExhaustionClosesConnection(t *testing.T) {
-	cfg := Config{HandlerQueueDepth: 1}
+	cfg := Config{Limits: Limits{MaxQueuedFramesPerChannel: 1}}
 	serverChannels := make(chan *Channel, 1)
 	blockRequests := make(chan struct{})
+	requestStarted := make(chan struct{})
+	var requestStartedOnce sync.Once
 	clientSession, serverSession := activatedSessionPair(t, cfg, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
-			serverChannels <- ch
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
 			return ChannelOpenDecision{
 				OK: true,
 				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
 					onRequest: func(_ context.Context, _ *Channel, _ ChannelRequest) ChannelResponse {
+						requestStartedOnce.Do(func() {
+							close(requestStarted)
+						})
 						<-blockRequests
 						return ChannelResponse{OK: true}
 					},
@@ -277,22 +309,39 @@ func TestSessionHandlerQueueExhaustionClosesConnection(t *testing.T) {
 
 	clientChannel, err := clientSession.OpenChannel(context.Background(), "session", nil)
 	require.NoError(t, err)
-	<-serverChannels
+	serverChannel := <-serverChannels
 
-	require.NoError(t, clientChannel.SendRequest(context.Background(), "one", nil, false))
-	require.NoError(t, clientChannel.SendRequest(context.Background(), "two", nil, false))
+	_, err = clientChannel.SendRequest(context.Background(), "one", nil, false)
+	require.NoError(t, err)
+	<-requestStarted
+	_, err = clientChannel.SendRequest(context.Background(), "two", nil, false)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		serverChannel.mu.Lock()
+		defer serverChannel.mu.Unlock()
+		return serverChannel.queuedFrames == 1
+	}, time.Second, time.Millisecond)
 	_, _ = clientChannel.SendRequest(context.Background(), "three", nil, false)
 
+	require.Eventually(t, func() bool {
+		return context.Cause(serverSession.Context()) != nil
+	}, time.Second, time.Millisecond)
 	close(blockRequests)
-	require.ErrorContains(t, serverSession.Wait(), "channel handler queue exhausted")
+	require.ErrorIs(t, serverSession.Wait(), errResourceLimit)
 }
 
 func TestSessionChannelContextCancelsOnRemoteClose(t *testing.T) {
 	serverChannels := make(chan *Channel, 1)
 	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
-		onChannelOpen: func(_ context.Context, ch *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
-			serverChannels <- ch
-			return ChannelOpenDecision{OK: true}
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
 		},
 	})
 	defer clientSession.Close() //nolint:errcheck
@@ -321,13 +370,13 @@ func TestSessionCloseIsIdempotent(t *testing.T) {
 }
 
 type testHandler struct {
-	onChannelOpen   func(ctx context.Context, ch *Channel, req ChannelOpenRequest) ChannelOpenDecision
+	onChannelOpen   func(ctx context.Context, req ChannelOpenRequest) ChannelOpenDecision
 	onGlobalRequest func(ctx context.Context, req GlobalRequest) GlobalResponse
 }
 
-func (h testHandler) OnChannelOpen(ctx context.Context, ch *Channel, req ChannelOpenRequest) ChannelOpenDecision {
+func (h testHandler) OnChannelOpen(ctx context.Context, req ChannelOpenRequest) ChannelOpenDecision {
 	if h.onChannelOpen != nil {
-		return h.onChannelOpen(ctx, ch, req)
+		return h.onChannelOpen(ctx, req)
 	}
 	return ChannelOpenDecision{
 		Code:    "unsupported-channel-open",
@@ -346,9 +395,16 @@ func (h testHandler) OnGlobalRequest(ctx context.Context, req GlobalRequest) Glo
 }
 
 type testChannelHandler struct {
+	onOpen    func(ctx context.Context, ch *Channel)
 	onRequest func(ctx context.Context, ch *Channel, req ChannelRequest) ChannelResponse
 	onEOF     func(ctx context.Context, ch *Channel)
 	onClose   func(ctx context.Context, ch *Channel)
+}
+
+func (h testChannelHandler) OnOpen(ctx context.Context, ch *Channel) {
+	if h.onOpen != nil {
+		h.onOpen(ctx, ch)
+	}
 }
 
 func (h testChannelHandler) OnRequest(ctx context.Context, ch *Channel, req ChannelRequest) ChannelResponse {
@@ -374,6 +430,17 @@ func (h testChannelHandler) OnClose(ctx context.Context, ch *Channel) {
 }
 
 func activatedSessionPair(t *testing.T, cfg Config, clientHandler Handler, serverHandler Handler) (*Session, *Session) {
+	return activatedSessionPairWithContexts(t, context.Background(), context.Background(), cfg, clientHandler, serverHandler)
+}
+
+func activatedSessionPairWithContexts(
+	t *testing.T,
+	clientContext context.Context,
+	serverContext context.Context,
+	cfg Config,
+	clientHandler Handler,
+	serverHandler Handler,
+) (*Session, *Session) {
 	t.Helper()
 
 	clientConn, serverConn := sessionPipe(t)
@@ -391,7 +458,7 @@ func activatedSessionPair(t *testing.T, cfg Config, clientHandler Handler, serve
 			serverErrCh <- err
 			return
 		}
-		sess, err := prepared.Bind(context.Background(), secureConn)
+		sess, err := prepared.Bind(serverContext, secureConn)
 		if err == nil {
 			sess.Activate()
 			serverSessionCh <- sess
@@ -403,7 +470,7 @@ func activatedSessionPair(t *testing.T, cfg Config, clientHandler Handler, serve
 	require.NoError(t, err)
 	prepared, err := Prepare(cfg, clientHandler, Options{})
 	require.NoError(t, err)
-	clientSession, err := prepared.Bind(context.Background(), secureConn)
+	clientSession, err := prepared.Bind(clientContext, secureConn)
 	require.NoError(t, err)
 	clientSession.Activate()
 	require.NoError(t, <-serverErrCh)

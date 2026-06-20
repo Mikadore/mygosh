@@ -1243,30 +1243,32 @@ const file_session_session_proto_rawDesc = "" +
 	"\n" +
 	"disconnect\x18\v \x01(\v2\x13.session.DisconnectH\x00R\n" +
 	"disconnectB\r\n" +
-	"\x04kind\x12\x05\xbaH\x02\b\x01\"\xe0\x01\n" +
-	"\vChannelOpen\x12*\n" +
-	"\fchannel_type\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\vchannelType\x12*\n" +
+	"\x04kind\x12\x05\xbaH\x02\b\x01\"\xf2\x01\n" +
+	"\vChannelOpen\x12-\n" +
+	"\fchannel_type\x18\x01 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x02R\vchannelType\x12*\n" +
 	"\x11sender_channel_id\x18\x02 \x01(\x04R\x0fsenderChannelId\x12.\n" +
-	"\x0einitial_window\x18\x03 \x01(\rB\a\xbaH\x04*\x02 \x00R\rinitialWindow\x12/\n" +
-	"\x0fmax_packet_size\x18\x04 \x01(\rB\a\xbaH\x04*\x02 \x00R\rmaxPacketSize\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\"\xc4\x01\n" +
+	"\x0einitial_window\x18\x03 \x01(\rB\a\xbaH\x04*\x02 \x00R\rinitialWindow\x123\n" +
+	"\x0fmax_packet_size\x18\x04 \x01(\rB\v\xbaH\b*\x06\x18\x80\xc0\x01 \x00R\rmaxPacketSize\x12#\n" +
+	"\apayload\x18\x05 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"\xc4\x01\n" +
 	"\x11ChannelOpenResult\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x126\n" +
 	"\asuccess\x18\x02 \x01(\v2\x1a.session.ChannelOpenAcceptH\x00R\asuccess\x124\n" +
 	"\x06reject\x18\x03 \x01(\v2\x1a.session.ChannelOpenRejectH\x00R\x06rejectB\x0f\n" +
-	"\x06result\x12\x05\xbaH\x02\b\x01\"\xba\x01\n" +
+	"\x06result\x12\x05\xbaH\x02\b\x01\"\xc9\x01\n" +
 	"\x11ChannelOpenAccept\x12*\n" +
 	"\x11sender_channel_id\x18\x01 \x01(\x04R\x0fsenderChannelId\x12.\n" +
-	"\x0einitial_window\x18\x02 \x01(\rB\a\xbaH\x04*\x02 \x00R\rinitialWindow\x12/\n" +
-	"\x0fmax_packet_size\x18\x03 \x01(\rB\a\xbaH\x04*\x02 \x00R\rmaxPacketSize\x12\x18\n" +
-	"\apayload\x18\x04 \x01(\fR\apayload\"d\n" +
-	"\x11ChannelOpenReject\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\tR\x04code\x12!\n" +
-	"\amessage\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\amessage\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload\"S\n" +
+	"\x0einitial_window\x18\x02 \x01(\rB\a\xbaH\x04*\x02 \x00R\rinitialWindow\x123\n" +
+	"\x0fmax_packet_size\x18\x03 \x01(\rB\v\xbaH\b*\x06\x18\x80\xc0\x01 \x00R\rmaxPacketSize\x12#\n" +
+	"\apayload\x18\x04 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"|\n" +
+	"\x11ChannelOpenReject\x12\x1c\n" +
+	"\x04code\x18\x01 \x01(\tB\b\xbaH\x05r\x03\x18\x80\x01R\x04code\x12$\n" +
+	"\amessage\x18\x02 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80 R\amessage\x12#\n" +
+	"\apayload\x18\x03 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"`\n" +
 	"\vChannelData\x120\n" +
-	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"r\n" +
+	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12\x1f\n" +
+	"\x04data\x18\x02 \x01(\fB\v\xbaH\bz\x06\x10\x01\x18\x80\xc0\x01R\x04data\"r\n" +
 	"\x13ChannelWindowAdjust\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12)\n" +
 	"\fbytes_to_add\x18\x02 \x01(\rB\a\xbaH\x04*\x02 \x00R\n" +
@@ -1275,45 +1277,49 @@ const file_session_session_proto_rawDesc = "" +
 	"ChannelEof\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\"@\n" +
 	"\fChannelClose\x120\n" +
-	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\"\xc6\x01\n" +
+	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\"\xd4\x01\n" +
 	"\x0eChannelRequest\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x02 \x01(\x04R\trequestId\x12*\n" +
-	"\frequest_type\x18\x03 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\vrequestType\x12\x1d\n" +
+	"request_id\x18\x02 \x01(\x04R\trequestId\x12-\n" +
+	"\frequest_type\x18\x03 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x02R\vrequestType\x12\x1d\n" +
 	"\n" +
-	"want_reply\x18\x04 \x01(\bR\twantReply\x12\x18\n" +
-	"\apayload\x18\x05 \x01(\fR\apayload\"\xdc\x01\n" +
+	"want_reply\x18\x04 \x01(\bR\twantReply\x12#\n" +
+	"\apayload\x18\x05 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"\xdc\x01\n" +
 	"\rChannelResult\x120\n" +
 	"\x14recipient_channel_id\x18\x01 \x01(\x04R\x12recipientChannelId\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x02 \x01(\x04R\trequestId\x125\n" +
 	"\asuccess\x18\x03 \x01(\v2\x19.session.OperationSuccessH\x00R\asuccess\x122\n" +
 	"\x06reject\x18\x04 \x01(\v2\x18.session.OperationRejectH\x00R\x06rejectB\x0f\n" +
-	"\x06result\x12\x05\xbaH\x02\b\x01\"\x93\x01\n" +
+	"\x06result\x12\x05\xbaH\x02\b\x01\"\xa1\x01\n" +
 	"\rGlobalRequest\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x01 \x01(\x04R\trequestId\x12*\n" +
-	"\frequest_type\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\vrequestType\x12\x1d\n" +
+	"request_id\x18\x01 \x01(\x04R\trequestId\x12-\n" +
+	"\frequest_type\x18\x02 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80\x02R\vrequestType\x12\x1d\n" +
 	"\n" +
-	"want_reply\x18\x03 \x01(\bR\twantReply\x12\x18\n" +
-	"\apayload\x18\x04 \x01(\fR\apayload\"\xa9\x01\n" +
+	"want_reply\x18\x03 \x01(\bR\twantReply\x12#\n" +
+	"\apayload\x18\x04 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"\xa9\x01\n" +
 	"\fGlobalResult\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\x04R\trequestId\x125\n" +
 	"\asuccess\x18\x02 \x01(\v2\x19.session.OperationSuccessH\x00R\asuccess\x122\n" +
 	"\x06reject\x18\x03 \x01(\v2\x18.session.OperationRejectH\x00R\x06rejectB\x0f\n" +
-	"\x06result\x12\x05\xbaH\x02\b\x01\",\n" +
-	"\x10OperationSuccess\x12\x18\n" +
-	"\apayload\x18\x01 \x01(\fR\apayload\"b\n" +
-	"\x0fOperationReject\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\tR\x04code\x12!\n" +
-	"\amessage\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\amessage\x12\x18\n" +
-	"\apayload\x18\x03 \x01(\fR\apayload\"C\n" +
+	"\x06result\x12\x05\xbaH\x02\b\x01\"7\n" +
+	"\x10OperationSuccess\x12#\n" +
+	"\apayload\x18\x01 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"z\n" +
+	"\x0fOperationReject\x12\x1c\n" +
+	"\x04code\x18\x01 \x01(\tB\b\xbaH\x05r\x03\x18\x80\x01R\x04code\x12$\n" +
+	"\amessage\x18\x02 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80 R\amessage\x12#\n" +
+	"\apayload\x18\x03 \x01(\fB\t\xbaH\x06z\x04\x18\x80\xc0\x01R\apayload\"P\n" +
 	"\n" +
-	"Disconnect\x12\x12\n" +
-	"\x04code\x18\x01 \x01(\tR\x04code\x12!\n" +
-	"\amessage\x18\x02 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\amessageB<Z:github.com/Mikadore/mygosh/lib/session/sessionpb;sessionpbb\x06proto3"
+	"Disconnect\x12\x1c\n" +
+	"\x04code\x18\x01 \x01(\tB\b\xbaH\x05r\x03\x18\x80\x01R\x04code\x12$\n" +
+	"\amessage\x18\x02 \x01(\tB\n" +
+	"\xbaH\ar\x05\x10\x01\x18\x80 R\amessageB<Z:github.com/Mikadore/mygosh/lib/session/sessionpb;sessionpbb\x06proto3"
 
 var (
 	file_session_session_proto_rawDescOnce sync.Once

@@ -44,6 +44,7 @@ type Config struct {
 	Resolver            usermodel.Resolver
 	AuthorizedKeysPaths []string
 	AccountPolicy       AccountPolicy
+	PermissionPolicy    PermissionPolicy
 	Logger              *slog.Logger
 }
 
@@ -51,6 +52,7 @@ type Authz struct {
 	resolver            usermodel.Resolver
 	authorizedKeysPaths []string
 	accountPolicy       AccountPolicy
+	permissionPolicy    PermissionPolicy
 	logger              *slog.Logger
 }
 
@@ -64,11 +66,15 @@ func New(cfg Config) (*Authz, error) {
 	if cfg.AccountPolicy == nil {
 		cfg.AccountPolicy = AccountPolicyFunc(nil)
 	}
+	if cfg.PermissionPolicy == nil {
+		cfg.PermissionPolicy = PermissionPolicyFunc(nil)
+	}
 
 	return &Authz{
 		resolver:            cfg.Resolver,
 		authorizedKeysPaths: append([]string(nil), cfg.AuthorizedKeysPaths...),
 		accountPolicy:       cfg.AccountPolicy,
+		permissionPolicy:    cfg.PermissionPolicy,
 		logger:              logging.Resolve(cfg.Logger),
 	}, nil
 }
@@ -107,8 +113,16 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 	if err := a.accountPolicy.AuthorizeAccount(ctx, request, account, matchedSource); err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "apply account policy")
 	}
+	permissionDecision, err := a.permissionPolicy.ResolvePermissions(ctx, request, account, matchedSource)
+	if err != nil {
+		return ConnectionCredentials{}, eris.Wrap(err, "resolve connection permissions")
+	}
+	permissions, err := newConnectionPermissions(permissionDecision)
+	if err != nil {
+		return ConnectionCredentials{}, eris.Wrap(err, "validate connection permissions")
+	}
 
-	credentials := newConnectionCredentials(request, account, matchedSource)
+	credentials := newConnectionCredentials(request, account, matchedSource, permissions)
 	if err := credentials.validate(); err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "validate connection credentials")
 	}

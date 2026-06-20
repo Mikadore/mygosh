@@ -5,11 +5,12 @@ import (
 )
 
 type Handler interface {
-	OnChannelOpen(ctx context.Context, ch *Channel, req ChannelOpenRequest) ChannelOpenDecision
+	OnChannelOpen(ctx context.Context, req ChannelOpenRequest) ChannelOpenDecision
 	OnGlobalRequest(ctx context.Context, req GlobalRequest) GlobalResponse
 }
 
 type ChannelHandler interface {
+	OnOpen(ctx context.Context, ch *Channel)
 	OnRequest(ctx context.Context, ch *Channel, req ChannelRequest) ChannelResponse
 	OnEOF(ctx context.Context, ch *Channel)
 	OnClose(ctx context.Context, ch *Channel)
@@ -74,7 +75,7 @@ func normalizeChannelHandler(handler ChannelHandler) ChannelHandler {
 	return handler
 }
 
-func (rejectAllHandler) OnChannelOpen(_ context.Context, _ *Channel, _ ChannelOpenRequest) ChannelOpenDecision {
+func (rejectAllHandler) OnChannelOpen(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
 	return ChannelOpenDecision{
 		Code:    "unsupported-channel-open",
 		Message: "incoming channel opens are not supported",
@@ -95,5 +96,6 @@ func (rejectAllChannelHandler) OnRequest(_ context.Context, _ *Channel, _ Channe
 	}
 }
 
+func (rejectAllChannelHandler) OnOpen(_ context.Context, _ *Channel)  {}
 func (rejectAllChannelHandler) OnEOF(_ context.Context, _ *Channel)   {}
 func (rejectAllChannelHandler) OnClose(_ context.Context, _ *Channel) {}

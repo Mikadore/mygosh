@@ -25,11 +25,17 @@ message Envelope {
 }
 
 message ChannelOpen {
-  string channel_type = 1 [(buf.validate.field).string.min_len = 1];
+  string channel_type = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+  }];
   uint64 sender_channel_id = 2;
   uint32 initial_window = 3 [(buf.validate.field).uint32.gt = 0];
-  uint32 max_packet_size = 4 [(buf.validate.field).uint32.gt = 0];
-  bytes payload = 5;
+  uint32 max_packet_size = 4 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 24576
+  }];
+  bytes payload = 5 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message ChannelOpenResult {
@@ -46,19 +52,28 @@ message ChannelOpenResult {
 message ChannelOpenAccept {
   uint64 sender_channel_id = 1;
   uint32 initial_window = 2 [(buf.validate.field).uint32.gt = 0];
-  uint32 max_packet_size = 3 [(buf.validate.field).uint32.gt = 0];
-  bytes payload = 4;
+  uint32 max_packet_size = 3 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 24576
+  }];
+  bytes payload = 4 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message ChannelOpenReject {
-  string code = 1;
-  string message = 2 [(buf.validate.field).string.min_len = 1];
-  bytes payload = 3;
+  string code = 1 [(buf.validate.field).string.max_len = 128];
+  string message = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4096
+  }];
+  bytes payload = 3 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message ChannelData {
   uint64 recipient_channel_id = 1;
-  bytes data = 2;
+  bytes data = 2 [(buf.validate.field).bytes = {
+    min_len: 1
+    max_len: 24576
+  }];
 }
 
 message ChannelWindowAdjust {
@@ -77,9 +92,12 @@ message ChannelClose {
 message ChannelRequest {
   uint64 recipient_channel_id = 1;
   uint64 request_id = 2;
-  string request_type = 3 [(buf.validate.field).string.min_len = 1];
+  string request_type = 3 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+  }];
   bool want_reply = 4;
-  bytes payload = 5;
+  bytes payload = 5 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message ChannelResult {
@@ -96,9 +114,12 @@ message ChannelResult {
 
 message GlobalRequest {
   uint64 request_id = 1;
-  string request_type = 2 [(buf.validate.field).string.min_len = 1];
+  string request_type = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+  }];
   bool want_reply = 3;
-  bytes payload = 4;
+  bytes payload = 4 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message GlobalResult {
@@ -113,16 +134,22 @@ message GlobalResult {
 }
 
 message OperationSuccess {
-  bytes payload = 1;
+  bytes payload = 1 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message OperationReject {
-  string code = 1;
-  string message = 2 [(buf.validate.field).string.min_len = 1];
-  bytes payload = 3;
+  string code = 1 [(buf.validate.field).string.max_len = 128];
+  string message = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4096
+  }];
+  bytes payload = 3 [(buf.validate.field).bytes.max_len = 24576];
 }
 
 message Disconnect {
-  string code = 1;
-  string message = 2 [(buf.validate.field).string.min_len = 1];
+  string code = 1 [(buf.validate.field).string.max_len = 128];
+  string message = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 4096
+  }];
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
+	serverservices "github.com/Mikadore/mygosh/app/server/services"
 	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/establish"
 	"github.com/Mikadore/mygosh/lib/session"
@@ -66,12 +67,6 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	}
 	logger.Info("accepted connection", "remote", conn.RemoteAddr())
 
-	prepared, err := session.Prepare(session.Config{}, nil, session.Options{Logger: logger})
-	if err != nil {
-		_ = conn.Close()
-		return eris.Wrap(err, "prepare post-auth session")
-	}
-
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
 		HostKey: serverHostKey,
 		Logger:  logger,
@@ -89,6 +84,17 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		logger.Error("connection authorization failed", "err", err)
 		rejectErr := pending.Reject()
 		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
+	}
+
+	registry, err := serverservices.NewRegistry(credentials, authorization)
+	if err != nil {
+		_ = pending.Reject()
+		return eris.Wrap(err, "configure connection services")
+	}
+	prepared, err := session.Prepare(session.Config{}, registry, session.Options{Logger: logger})
+	if err != nil {
+		_ = pending.Reject()
+		return eris.Wrap(err, "prepare post-auth session")
 	}
 
 	established, err := pending.Accept(prepared)

@@ -1,0 +1,97 @@
+
+# Stage Authentication and Establish the `Authz` Boundary
+
+## Summary
+
+Refactor authentication into:
+
+`verified cryptographic proof → app-owned connection authorization → accept/reject → service authorization`
+
+No wire-schema changes or new authentication features. Preserve the current PTY demo through default no-op account/session policies.
+
+## Key Changes
+
+### Protocol and establishment
+
+- Remove account lookup, `authorized_keys`, permissions, and `lib/user` from `lib/auth`.
+- Replace `auth.RunServer` with a staged API returning:
+  - an immutable `VerifiedClient` containing the requested username, proved key, host identity, and server key;
+  - a one-shot pending decision supporting `Accept` or generic `Reject`.
+- Make rejection always send `authentication-failed`; local NSS/file/policy errors remain server-side.
+- Replace `establish.Accept` with `BeginAccept`, returning a pending server establishment with:
+  - `Context()` covering the complete auth timeout, including app policy;
+  - `VerifiedClient()`;
+  - one-shot `Accept()`, `Reject()`, and `Close()`.
+- Construct but do not expose the session mux until acceptance succeeds.
+- Keep client authentication hooks protocol-timed but policy-free. Host verification returns only success/error; app-owned source/path metadata no longer enters auth results.
+
+### Server `Authz`
+
+Add one app-owned `app/server/authz.Authz` object exposing:
+
+- `AuthorizeConnection(ctx, request) (ConnectionCredentials, error)`
+  - resolves the account through an injected `lib/user.Resolver`;
+  - expands app-configured `authorized_keys` paths;
+  - securely opens, parses, and matches the proved key;
+  - invokes an injected account policy, currently a no-op and later suitable for PAM account checks;
+  - returns validated immutable credentials before wire auth success.
+- `OpenSession(ctx, credentials, request) (SessionLease, error)`
+  - currently delegates to a no-op session policy;
+  - reserves request authorization plus future PAM open/close-session lifecycle;
+  - returns a closeable lease that the service closes on completion or disconnect.
+
+`ConnectionCredentials` will contain immutable authentication facts and an account snapshot. Mutable key/group data is copied, and accessors return copies. The account snapshot includes an optional login-shell field for a future complete NSS resolver; the current `os/user` adapter may leave it empty.
+
+The server and service layer see one `Authz` object; resolver, account-policy, and session-policy interfaces remain constructor dependencies inside it.
+
+### App-owned file policy
+
+- Move all default paths, `~` expansion, precedence, missing-file handling, logging, and file selection into `app/client`, `app/server`, or `app/server/authz`.
+- Load the host key before listening and load client identity/`known_hosts` before dialing.
+- Extend `lib/strictfiles` with exported, caller-configurable file and directory opens. Use anchored `OpenAt` access with:
+  - 16 KiB limits for private keys;
+  - 1 MiB limits for `known_hosts` and `authorized_keys`;
+  - expected current/target UID or root ownership;
+  - no group/other writes;
+  - private keys not globally readable;
+  - trust files permitted to be globally readable;
+  - no symlinks below the selected anchor.
+- Remove path-reading APIs and default paths from `lib/trust` and `lib/keys`.
+- Retain only path-independent parsers and pure key/host matchers in the libraries.
+- Preserve current parsing semantics, including the temporary `x/crypto/ssh` dependency. Native parser replacement and option handling remain deferred.
+
+### Application wiring
+
+- `app/server` calls `BeginAccept`, passes the verified proof and peer metadata to `Authz.AuthorizeConnection`, logs any detailed failure, and then calls generic `Reject` or `Accept`.
+- Pass both credentials and the same `Authz` object into `ShellDemo`.
+- Open a session lease when the `"session"` channel is authorized and close it during every completion/disconnect path.
+- Continue using the configured shell when the current account resolver provides no login shell.
+- Do not add PAM, native NSS calls, `authorized_keys` options, additional host matching semantics, retries, or new key algorithms.
+
+## Public Interface Changes
+
+- Add `auth.VerifiedClient` and one-shot pending server-auth decision.
+- Add `establish.BeginAccept` and pending establishment lifecycle; remove the authorization callback from `establish.ServerConfig`.
+- Change client host verification to an error-only decision.
+- Add `user.Resolver`, with the current `os/user` behavior as its default implementation.
+- Add app-owned `Authz`, `ConnectionCredentials`, `ConnectionRequest`, `SessionRequest`, and `SessionLease`.
+- Remove library APIs that accept filesystem paths for private keys, `known_hosts`, or `authorized_keys`.
+
+## Test Plan
+
+- Verify a valid client blocks awaiting a pending decision, succeeds after `Accept`, and receives generic failure after `Reject`.
+- Verify pending decisions are one-shot and undecided close/timeout unblocks both peers without exposing a mux.
+- Verify the auth timeout includes delayed NSS/file/account-policy work.
+- Verify internal username, path, parser, and key-mismatch details never reach the client.
+- Test `Authz` account resolution, path expansion, key matching, no-op account policy, session lease closure, and immutable credential snapshots.
+- Test strict ownership, mode, size, symlink, missing-file, and malformed-file behavior for every credential/trust file.
+- Retain host mismatch, key mismatch, exact terminal-byte, and authenticated PTY integration coverage.
+- Run `go test ./...` and `go test -race ./...`.
+
+## Assumptions
+
+- Existing protobuf messages remain unchanged.
+- The current `os/user` implementation remains the temporary resolver; complete NSS and PAM implementations are future work behind the new seams.
+- Session policies remain non-blocking no-ops until the receive-loop dispatch issue is addressed.
+- Keep the current shell demo operational, but do not redesign shell/exec semantics in this slice.
+- Update repository guidance and mark only the completed boundary/seam TODO items; leave trust-format semantics, native parser replacement, and real PAM/NSS functionality deferred.

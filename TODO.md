@@ -1,118 +1,158 @@
-# v0.1 Interactive Session TODO
+# Architecture and protocol TODO
 
-The repository now has one working provisional PTY session over the
-authenticated session/channel layer. Keep the next work deliberately narrow:
-one interactive channel, no reconnect, no SSH compatibility, and no broad
-remote execution policy.
+This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the review; `R1`–`R5` are cross-cutting refactors derived from its recommended architecture. All tasks are intentionally unchecked.
 
-## Release Blockers
+## Checklist
 
-- Replace the provisional execution privilege behavior with an explicit policy.
-  - The demo currently uses the authorized account UID, GID, supplementary
-    groups, home, and a small environment.
-  - Cross-user execution currently succeeds only when the server process
-    already has permission to assume those credentials.
-  - Add a policy-driven privileged launcher or equivalent privilege separation
-    before treating cross-user/root service mode as production-ready.
+| Done | ID | Priority | Area | Task |
+|---|---|---:|---|---|
+| [ ] | A1 | P0 | Authentication | Separate cryptographic authentication from account authorization |
+| [ ] | A2 | P1 | Authentication | Make auth success guarantee a complete, usable connection identity |
+| [ ] | T1 | P0 | Trust/files | Use bounded, race-resistant secure opens for every sensitive file |
+| [ ] | T2 | P1 | Trust/files | Define and enforce supported `authorized_keys` and `known_hosts` semantics |
+| [ ] | T3 | P1 | Authentication | Stop disclosing local authorization and filesystem details to peers |
+| [ ] | S1 | P0 | Connection mux | Prevent handlers and writes from blocking the sole receive owner |
+| [ ] | S2 | P1 | Connection mux | Add hard connection-wide resource limits |
+| [ ] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
+| [ ] | E1 | P0 | Server app | Replace the one-connection demo with a bounded daemon accept loop |
+| [ ] | E2 | P1 | Lifecycle | Give each connection phase one clear lifetime and close owner |
+| [ ] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
+| [ ] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
+| [ ] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
+| [ ] | C1 | P1 | Credentials | Introduce immutable per-connection credentials tied to the authenticated connection |
+| [ ] | C2 | P1 | Authorization | Add connection-level permissions and concrete request authorization |
+| [ ] | N1 | P2 | Identity | Separate dial endpoint, host verification identity, server name, and audit identity |
+| [ ] | X1 | P2 | Transport | Restrict transport to Noise-backed encrypted framing |
+| [ ] | K1 | P2 | Keys | Make key identity canonical, immutable, and algorithm-tagged |
+| [ ] | D1 | P2 | Client terminal | Make terminal input forwarding cancellable |
+| [ ] | D2 | P1 | Service protocol | Replace the PTY-only command demo with explicit shell and exec semantics |
+| [ ] | B1 | P2 | Verification | Add adversarial, fuzz, lifecycle, and end-to-end release gates |
+| [ ] | L1 | P3 | APIs | Replace composition-heavy `WithLogger` APIs and misleading package names |
+| [ ] | R1 | P0 | Authentication | Implement staged verified-proof → policy → accept/reject server authentication |
+| [ ] | R2 | P1 | Architecture | Enforce one-way app, protocol, security, and Unix-platform dependencies |
+| [ ] | R3 | P1 | Trust/files | Split path policy, secure opening, parsing, matching, and authorization policy |
+| [ ] | R4 | P1 | Accounts | Establish deliberate NSS, PAM, and process-credential seams |
+| [ ] | R5 | P1 | Services | Define a credential-aware service registry and authorized launch/forward specifications |
 
-- Wire `lib/strictfiles` into all trust-file reads.
-  - Protect host and client private keys, `known_hosts`, and `authorized_keys`
-    against unsafe ownership, permissions, symlinks, and path replacement.
-  - Validate directory components such as `.mygosh` and `.ssh`.
-  - Support checking files owned by the resolved target account rather than
-    assuming the process effective UID.
-  - Apply hard read-size limits through the checked descriptor.
-  - Tighten `known_hosts` marker behavior, especially revoked and unsupported
-    marker entries.
+Priority meanings: **P0** blocks a secure functional daemon, **P1** is required for a credible v1, **P2** is important hardening/design work, and **P3** is cleanup after the boundaries are stable.
 
-- Fix transport send-state handling.
-  - Reject oversized plaintext before Noise encryption advances its nonce.
-  - Treat encryption/write failures as fatal to the transport so the peers
-    cannot continue with desynchronized state.
+## Task notes
 
-- Harden session/channel resource and protocol handling.
-  - Reject or safely handle empty channel-data frames.
-  - Add limits for open channels, queued frames/bytes, and pending requests.
-  - Detect duplicate peer channel IDs.
-  - Remove canceled channel opens and requests from pending state.
-  - Ensure an accepted channel cannot send data before its open-success reply.
-  - Keep the receive loop non-blocking by handing work to bounded channel-owned
-    runtimes or queues.
+### A1 — Separate authentication from authorization
 
-- Build a real PTY process owner.
-  - Own the `exec.Cmd`, PTY descriptor, process group, wait result, and cleanup.
-  - Reap every child exactly once.
-  - Terminate the process group on channel close or connection loss, with a
-    bounded graceful wait followed by forced termination.
-  - Send exit status, EOF, and channel close in a defined order.
-  - Validate and synchronize resize requests.
+Keep `lib/auth` responsible for transcript construction, signature verification, protocol state, and the wire accept/reject exchange. Move NSS lookup, `authorized_keys` policy, Unix accounts, permissions, and service decisions into server application composition; see finding **A1** in [`REVIEW.md`](REVIEW.md#findings).
 
-## Implemented Interactive Demo Wiring
+### A2 — Make auth success mean ready
 
-- The demo defines constants and validated protobuf payloads for:
-  - the `session` channel;
-  - PTY allocation;
-  - shell start;
-  - window changes;
-  - exit status.
+Do not send auth success until account resolution, mandatory policy checks, permission calculation, and credential validation have completed. A successful peer response must guarantee that the server can construct the post-auth connection and is ready to evaluate service requests; see **A2**.
 
-- The client:
-  - start `Session.Run` and wait until it is ready;
-  - open one `session` channel;
-  - request a PTY using the local terminal type and dimensions;
-  - requests an explicit command, defaulting to client `core.shell`;
-  - enter raw mode and copy terminal bytes unchanged in both directions;
-  - forward resize events;
-  - receive exit status and always restore the local terminal.
+### T1 — Secure every sensitive file read
 
-- The server:
-  - accept only the v0.1 `session` channel and valid request ordering;
-  - uses the account returned by client-key authorization;
-  - launches `core.shell -c <command>` behind a channel-owned PTY runtime;
-  - bridge PTY bytes without transformation;
-  - close the process and channel cleanly on EOF, disconnect, or cancellation.
+Route host keys, client keys, `known_hosts`, and `authorized_keys` through bounded descriptor-based opens with explicit owner, mode, type, symlink, directory, and size policies. Adapt `strictfiles` for root-owned and target-account-owned paths instead of continuing to use unbounded `os.ReadFile`; see **T1**.
 
-## App And Lifecycle Work
+### T2 — Define trust-file semantics
 
-- Load and validate long-lived server key material before opening the listener.
-- Replace the one-connection server with a bounded accept loop and scoped
-  per-connection goroutines.
-- Close listeners, connections, sessions, PTYs, and child processes during
-  graceful shutdown.
-- Disable console logging while the client terminal is in raw mode while
-  retaining configured logfile output.
-- Use a container-specific listen address; the current localhost setting is
-  unsuitable for a Docker-published port.
+Choose and document the supported subset of OpenSSH file formats, including options, revoked keys, certificate-authority markers, hashed/wildcard hosts, malformed entries, and host-plus-port identities. Unsupported security-significant syntax must fail explicitly or produce explicit constraints rather than being silently skipped; see **T2**.
 
-## Protocol And Policy Cleanup
+### T3 — Return generic authentication failures
 
-- Add practical size and character limits for usernames, reference identities,
-  terminal names, commands, payloads, and peer-visible error messages.
-- Return generic authentication failures to peers while keeping detailed
-  reasons in server logs.
-- Validate that successful authorization returns a complete and internally
-  consistent local account.
-- Require non-zero PTY rows and columns and constrain terminal-name input.
-- Keep authentication, account authorization, execution permissions, and
-  channel behavior as separate decisions.
+Keep precise NSS, parser, path, and key-matching errors in server logs while returning stable generic failure codes/messages to the peer. Authentication must not reveal whether a username exists, which files were checked, or why local policy rejected the attempt; see **T3**.
 
-## Tests And Release Checks
+### S1 — Keep the receive owner non-blocking
 
-- Make `go test -race ./...` a release gate.
-- Add malicious-session tests for duplicate IDs, empty-frame flooding, queue
-  limits, invalid ordering, cancellation cleanup, and post-close traffic.
-- Add `lib/tty` tests for resize behavior, restoration, child reaping, process
-  termination, and exit status.
-- Add end-to-end tests covering authentication, PTY allocation, byte-preserving
-  terminal I/O, resize forwarding, shell exit, and disconnect cleanup.
-- Run `govulncheck ./...` as a release check.
-- Upgrade the declared and container Go version from 1.26.2 to at least 1.26.4
-  to include current standard-library security fixes.
+Retain exactly one frame decoder, but do not let it synchronously run arbitrary service work or wait on network writes/replies. Introduce bounded dispatch and serialized bounded writing so handler reentrancy, NSS/PAM work, process startup, and best-effort disconnects cannot deadlock the connection; see **S1**.
 
-## Deferred Until After v0.1
+### S2 — Bound all peer-controlled resources
 
-- Multiple simultaneous channel types.
-- Environment and agent forwarding.
+Add configurable limits for channels, pending opens, outstanding requests, queued frames and bytes, empty data frames, control payloads, auth attempts, and relevant timeouts. Per-channel byte windows alone do not prevent cheap connection-wide memory and ID exhaustion; see **S2**.
+
+### S3 — Formalize channel state
+
+Implement explicit opening, open, half-closed, closing, closed, and failed transitions, and validate every incoming frame against them. Detect duplicate peer channel IDs, reject data after EOF, prevent pre-accept channel use, remove canceled waiters, and define consistent rollback after send failures; see **S3**.
+
+### E1 — Build a real server accept loop
+
+Load long-lived configuration and host keys before listening, then accept multiple clients with global/per-source concurrency controls, temporary-error backoff, per-connection panic containment, connection IDs, and graceful shutdown. TCP lifecycle and admission policy remain app responsibilities; see **E1**.
+
+### E2 — Clarify connection ownership
+
+Give the raw socket, secure transport, authentication phase, and post-auth connection explicit ownership transfer rules. Move handshake/auth timeout machinery out of the session package and ensure only the current/final owner closes the connection and reports its terminal error; see **E2**.
+
+### P1 — Fix no-reply exec lifecycle
+
+An exec request with `want_reply=false` currently starts a child without starting its forwarding, waiting, or cleanup runtime. Either require replies for process-start requests or restructure startup so process ownership and reaping are active before any child can exist; see **P1**.
+
+### P2 — Make channel completion locally enforceable
+
+Closing a channel before exec and withholding a close acknowledgment must not leave the server waiting forever. Define bounded close behavior, proper stdin half-close semantics, write deadlines, and terminal states that complete independently of peer cooperation; see **P2**.
+
+### P3 — Own the full process tree
+
+Create a process runner that owns the command, PTY or pipes, process group/session, wait result, signaling sequence, and descriptor cleanup. On channel, connection, timeout, or server shutdown, terminate descendants with bounded graceful and forced phases and reap every child exactly once; see **P3**.
+
+### C1 — Use immutable connection credentials
+
+Construct one validated credential snapshot containing authentication facts, account data, and broad permissions, and carry it alongside the authenticated connection for its whole lifetime. Hide or copy mutable byte/group slices, and prevent production services from being paired with an anonymous directly constructed mux; see **C1**.
+
+### C2 — Add a two-level permission model
+
+Before auth success, resolve every permission and constraint knowable from the peer, key, account, configuration, and later PAM policy. Before resource creation, authorize the concrete shell, command, PTY, environment, subsystem, or forwarding target against that immutable connection policy; see **C2**.
+
+### N1 — Separate endpoint and identity concepts
+
+Model the network address used for dialing separately from the normalized identity used for host-key verification, an optional virtual server selector, and server-side audit metadata. Define handling for ports, DNS case/trailing dots, IPv6, and future IDNA rather than trusting a client-supplied `reference_identity` as a server fact; see **N1**.
+
+### X1 — Narrow the transport package
+
+Keep transport focused on the Noise handshake, channel binding/exporter, encrypted frame send/receive, deadlines, and close. Move protobuf encoding/validation and phase logging upward, make algorithm choices immutable, distinguish plaintext and ciphertext limits, and make any encryption/write failure fatal; see **X1**.
+
+### K1 — Harden key representation
+
+Use immutable canonical public-key identity that includes the algorithm and excludes comments, and calculate fingerprints over that encoding. Avoid panic-based signing APIs, clone key material at ownership boundaries, and apply file-size limits before parsing private keys; see **K1**.
+
+### D1 — Cancel terminal input safely
+
+Do not leave a goroutine blocked on `os.Stdin` after a remote process or connection ends, because it can later consume input intended for the restored local shell. Use polling/select on a dedicated descriptor, a safely closable duplicate, or a single terminal-I/O owner; see **D1**.
+
+### D2 — Define real shell and exec requests
+
+Replace the current mandatory-PTY `shell -c <command>` path with optional PTY setup followed by exactly one shell or exec request. Add non-PTY stdout/stderr separation, account/config-selected login shells, exit status/signals, filtered environment requests, and correct remote exit propagation; see **D2**.
+
+### B1 — Strengthen verification and release gates
+
+Make tests, race detection, vet/static analysis, vulnerability scanning, and formatting deterministic project gates. Add malformed-auth, duplicate-ID, data-after-EOF, callback-reentrancy, cancellation, queue-limit, parser fuzzing, terminal restoration, descendant cleanup, and fully authenticated process-launch tests; see **B1**.
+
+### L1 — Simplify composition APIs
+
+Remove constructors whose names encode protocol role, storage format, policy, and logger wiring all at once. Prefer small configs and pure parser/matcher primitives, let the app own operational logging, and rename generic or ambiguous packages such as the global `session` mux and current `service` protocol; see **L1**.
+
+### R1 — Implement staged server authentication
+
+Expose a verified client proof and a one-shot pending auth decision from the protocol layer, then let server policy resolve credentials before calling accept or reject. The post-auth mux must not be constructible or exposed through this production path until acceptance succeeds; see “Authentication and credential API shape” in [`REVIEW.md`](REVIEW.md#authentication-and-credential-api-shape).
+
+### R2 — Enforce dependency direction
+
+Restructure packages so app code composes protocol, security, and Unix adapters, while protocol packages never import accounts, filesystems, deployment policy, or service implementations. Consider `internal/` for unstable application APIs and use package placement/import direction—not the name `lib`—to enforce boundaries; see “Recommended architecture.”
+
+### R3 — Decompose trust handling
+
+Make the app choose file paths, precedence, missing-file behavior, and strictness; make secure-file code only open/check caller-selected paths; make parsers consume supplied streams; and make pure matchers return entries/constraints. Account authorization should combine these primitives without living in either the auth protocol or parser package; see “Safe trust-file API.”
+
+### R4 — Establish NSS and PAM seams
+
+Create a Unix account resolver that deliberately follows NSS and snapshots username, UID, GID, groups, home, and login shell, then place future PAM account/auth checks before auth success. Keep PAM session lifecycle and process credential changes in the privileged account/process layer rather than the wire protocol; see “NSS, PAM, and Unix credentials.”
+
+### R5 — Define credential-aware services
+
+Create a connection service registry that receives the immutable credential snapshot and routes only supported channel types. Each service must turn a decoded peer request plus credentials into an authorized launch or forwarding specification before allocating a PTY, starting a process, or opening a socket; see “Where authorization should occur” and “Service model for shell, exec, and forwarding.”
+
+## Explicitly deferred
+
+These are not checklist items until the foundations above are stable:
+
+- SSH wire compatibility.
 - Reconnect or session resume.
-- Escape sequences such as `~.`.
-- Cross-user/root service mode without privilege separation.
+- Broad algorithm negotiation without a second supported suite.
+- A generic plugin/service framework.
+- Immediate process separation before credential and launch interfaces settle.
+- Port forwarding on top of the current synchronous, unbounded handler model.

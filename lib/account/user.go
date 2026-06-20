@@ -1,8 +1,27 @@
-package user
+package account
+
+/*
+#include <pwd.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+
+static long get_pw_buf_size() {
+    long n = sysconf(_SC_GETPW_R_SIZE_MAX);
+    if (n < 0) {
+        // POSIX allows -1 when there is no definite limit.
+        // 16 KiB is a common fallback.
+        return 16384;
+    }
+    return n;
+}
+*/
+import "C"
 
 import (
 	"context"
-	osuser "os/user"
+	"os/user"
 
 	"github.com/rotisserie/eris"
 )
@@ -60,7 +79,7 @@ func (OSResolver) Resolve(ctx context.Context, username string) (Account, error)
 		return Account{}, err
 	}
 
-	usr, err := osuser.Lookup(username)
+	usr, err := user.Lookup(username)
 	if err != nil {
 		return Account{}, eris.Wrapf(err, "lookup user %q", username)
 	}
@@ -105,7 +124,7 @@ func lookupGroup(groupID string) (Group, error) {
 		return Group{}, eris.Wrapf(err, "parse gid %q", groupID)
 	}
 
-	group, err := osuser.LookupGroupId(groupID)
+	group, err := user.LookupGroupId(groupID)
 	if err != nil {
 		return Group{}, eris.Wrapf(err, "lookup group %q", groupID)
 	}
@@ -116,7 +135,7 @@ func lookupGroup(groupID string) (Group, error) {
 	}, nil
 }
 
-func lookupSupplementaryGroups(usr *osuser.User, primaryGroupID GUID) ([]Group, error) {
+func lookupSupplementaryGroups(usr *user.User, primaryGroupID GUID) ([]Group, error) {
 	groupIDs, err := usr.GroupIds()
 	if err != nil {
 		return nil, eris.Wrapf(err, "list groups for user %q", usr.Username)
@@ -136,7 +155,7 @@ func lookupSupplementaryGroups(usr *osuser.User, primaryGroupID GUID) ([]Group, 
 			continue
 		}
 
-		group, err := osuser.LookupGroupId(groupID)
+		group, err := user.LookupGroupId(groupID)
 		if err != nil {
 			return nil, eris.Wrapf(err, "lookup supplementary group %q for user %q", groupID, usr.Username)
 		}

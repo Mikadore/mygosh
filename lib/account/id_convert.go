@@ -1,4 +1,4 @@
-package user
+package account
 
 import (
 	"strconv"
@@ -8,7 +8,7 @@ import (
 )
 
 func IsASCIINumeric(s string) bool {
-	return lo.EveryBy([]byte(s), func (c byte) bool {
+	return lo.EveryBy([]byte(s), func(c byte) bool {
 		return c >= '0' && c <= '9'
 	})
 }

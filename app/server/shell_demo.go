@@ -11,12 +11,12 @@ import (
 	"syscall"
 
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
+	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/service"
 	"github.com/Mikadore/mygosh/lib/service/servicepb"
 	sessionmux "github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/tty"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 )
 

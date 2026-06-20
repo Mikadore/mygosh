@@ -1,8 +1,8 @@
 package authz
 
 import (
+	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/keys"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 )
 

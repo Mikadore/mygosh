@@ -1,4 +1,4 @@
-package user
+package account
 
 import (
 	osuser "os/user"

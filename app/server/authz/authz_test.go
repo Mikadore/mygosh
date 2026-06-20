@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 )

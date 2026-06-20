@@ -7,8 +7,8 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
+	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/establish"
-	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
 )
 

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/Mikadore/mygosh/app/securefiles"
 	usermodel "github.com/Mikadore/mygosh/lib/account"
@@ -28,15 +27,6 @@ type ConnectionRequest struct {
 	PeerAddress    string
 }
 
-type SessionRequest struct {
-	ChannelType string
-	Payload     []byte
-}
-
-type SessionLease interface {
-	Close() error
-}
-
 type AccountPolicy interface {
 	AuthorizeAccount(ctx context.Context, request ConnectionRequest, account usermodel.Account, matchedSource string) error
 }
@@ -50,25 +40,10 @@ func (f AccountPolicyFunc) AuthorizeAccount(ctx context.Context, request Connect
 	return f(ctx, request, usermodel.CloneAccount(account), matchedSource)
 }
 
-type SessionPolicy interface {
-	OpenSession(ctx context.Context, credentials ConnectionCredentials, request SessionRequest) (SessionLease, error)
-}
-
-type SessionPolicyFunc func(ctx context.Context, credentials ConnectionCredentials, request SessionRequest) (SessionLease, error)
-
-func (f SessionPolicyFunc) OpenSession(ctx context.Context, credentials ConnectionCredentials, request SessionRequest) (SessionLease, error) {
-	if f == nil {
-		return newNoopLease(), nil
-	}
-	request.Payload = append([]byte(nil), request.Payload...)
-	return f(ctx, credentials, request)
-}
-
 type Config struct {
 	Resolver            usermodel.Resolver
 	AuthorizedKeysPaths []string
 	AccountPolicy       AccountPolicy
-	SessionPolicy       SessionPolicy
 	Logger              *slog.Logger
 }
 
@@ -76,7 +51,6 @@ type Authz struct {
 	resolver            usermodel.Resolver
 	authorizedKeysPaths []string
 	accountPolicy       AccountPolicy
-	sessionPolicy       SessionPolicy
 	logger              *slog.Logger
 }
 
@@ -90,15 +64,11 @@ func New(cfg Config) (*Authz, error) {
 	if cfg.AccountPolicy == nil {
 		cfg.AccountPolicy = AccountPolicyFunc(nil)
 	}
-	if cfg.SessionPolicy == nil {
-		cfg.SessionPolicy = SessionPolicyFunc(nil)
-	}
 
 	return &Authz{
 		resolver:            cfg.Resolver,
 		authorizedKeysPaths: append([]string(nil), cfg.AuthorizedKeysPaths...),
 		accountPolicy:       cfg.AccountPolicy,
-		sessionPolicy:       cfg.SessionPolicy,
 		logger:              logging.Resolve(cfg.Logger),
 	}, nil
 }
@@ -152,30 +122,6 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 		"fingerprint", credentials.KeyFingerprint(),
 	)
 	return credentials, nil
-}
-
-func (a *Authz) OpenSession(ctx context.Context, credentials ConnectionCredentials, request SessionRequest) (SessionLease, error) {
-	if a == nil {
-		return nil, eris.New("server authorization is required")
-	}
-	if err := credentials.validate(); err != nil {
-		return nil, eris.Wrap(err, "validate connection credentials")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	lease, err := a.sessionPolicy.OpenSession(ctx, credentials, request)
-	if err != nil {
-		return nil, eris.Wrap(err, "apply session policy")
-	}
-	if lease == nil {
-		return nil, eris.New("session policy returned a nil lease")
-	}
-	return lease, nil
 }
 
 func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Account, provedKey keys.PublicKey) (string, error) {
@@ -252,21 +198,5 @@ func validateAccount(account usermodel.Account) error {
 	if account.HomeDir == "" {
 		return eris.New("account home directory is required")
 	}
-	return nil
-}
-
-type noopLease struct {
-	once sync.Once
-}
-
-func newNoopLease() *noopLease {
-	return &noopLease{}
-}
-
-func (l *noopLease) Close() error {
-	if l == nil {
-		return nil
-	}
-	l.once.Do(func() {})
 	return nil
 }

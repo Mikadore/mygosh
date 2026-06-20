@@ -19,9 +19,8 @@ type Settings struct {
 }
 
 type CoreSettings struct {
-	Host  string `mapstructure:"host"`
-	Port  int    `mapstructure:"port"`
-	Shell string `mapstructure:"shell"`
+	Host string `mapstructure:"host"`
+	Port int    `mapstructure:"port"`
 }
 
 type LogSettings struct {
@@ -36,7 +35,6 @@ func Load(verbosity int) (Settings, error) {
 	reader.SetConfigType("toml")
 	reader.SetDefault("core.host", "localhost")
 	reader.SetDefault("core.port", 42022)
-	reader.SetDefault("core.shell", "/bin/sh")
 	reader.SetDefault("log.level", "")
 	reader.SetDefault("log.json", false)
 	reader.SetDefault("log.file", "")
@@ -81,9 +79,6 @@ func (s Settings) Validate() error {
 	}
 	if s.Core.Port < 1 || s.Core.Port > 65535 {
 		return eris.Errorf("core.port must be between 1 and 65535, got %d", s.Core.Port)
-	}
-	if strings.TrimSpace(s.Core.Shell) == "" {
-		return eris.New("core.shell must not be empty")
 	}
 	switch s.Log.Level {
 	case "", "NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL":

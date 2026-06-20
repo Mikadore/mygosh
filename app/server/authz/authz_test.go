@@ -80,10 +80,6 @@ func TestAuthorizeConnectionExpandsHomeAndSkipsMissingFiles(t *testing.T) {
 	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
 	require.NoError(t, err)
 	require.Equal(t, path, credentials.MatchedSource())
-	lease, err := authorization.OpenSession(context.Background(), credentials, SessionRequest{ChannelType: "session"})
-	require.NoError(t, err)
-	require.NoError(t, lease.Close())
-	require.NoError(t, lease.Close())
 }
 
 func TestAuthorizeConnectionRejectsMismatchAndMalformedFile(t *testing.T) {
@@ -158,41 +154,33 @@ func TestAuthorizeConnectionEnforcesAuthorizedKeysFilePolicy(t *testing.T) {
 	})
 }
 
-func TestOpenSessionDelegatesAndLeaseCloses(t *testing.T) {
+func TestAuthorizeConnectionDelegatesAccountPolicy(t *testing.T) {
 	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()
 	path := writeAuthorizedKeys(t, clientKey.PublicKey())
-	lease := &countingLease{}
+	var policyCalls atomic.Int32
 
 	authorization, err := New(Config{
 		Resolver: usermodel.ResolverFunc(func(context.Context, string) (usermodel.Account, error) {
 			return account, nil
 		}),
 		AuthorizedKeysPaths: []string{path},
-		SessionPolicy: SessionPolicyFunc(func(_ context.Context, credentials ConnectionCredentials, request SessionRequest) (SessionLease, error) {
-			require.Equal(t, "alice", credentials.RequestedUsername())
-			require.Equal(t, "session", request.ChannelType)
-			return lease, nil
+		AccountPolicy: AccountPolicyFunc(func(_ context.Context, request ConnectionRequest, got usermodel.Account, source string) error {
+			require.Equal(t, "peer:42022", request.PeerAddress)
+			require.Equal(t, account, got)
+			require.Equal(t, path, source)
+			policyCalls.Add(1)
+			return nil
 		}),
 	})
 	require.NoError(t, err)
-	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
+	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{
+		VerifiedClient: verified,
+		PeerAddress:    "peer:42022",
+	})
 	require.NoError(t, err)
-
-	got, err := authorization.OpenSession(context.Background(), credentials, SessionRequest{ChannelType: "session"})
-	require.NoError(t, err)
-	require.Same(t, lease, got)
-	require.NoError(t, got.Close())
-	require.Equal(t, int32(1), lease.closed.Load())
-}
-
-type countingLease struct {
-	closed atomic.Int32
-}
-
-func (l *countingLease) Close() error {
-	l.closed.Add(1)
-	return nil
+	require.Equal(t, "alice", credentials.RequestedUsername())
+	require.Equal(t, int32(1), policyCalls.Load())
 }
 
 func verifiedFixture(t *testing.T, username string) (keys.Keypair, auth.VerifiedClient) {

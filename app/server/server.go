@@ -9,6 +9,7 @@ import (
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
 	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/establish"
+	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/rotisserie/eris"
 )
 
@@ -54,7 +55,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	// logging and application error handling
 	//nolint:errcheck
 	defer listener.Close()
-	logger.Info("listening", "addr", listener.Addr(), "shell", cfg.Core.Shell)
+	logger.Info("listening", "addr", listener.Addr())
 
 	conn, err := listener.Accept()
 	if err != nil {
@@ -63,13 +64,13 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		}
 		return eris.Wrap(err, "accept connection")
 	}
-	connectionOwned := true
-	defer func() {
-		if connectionOwned {
-			_ = conn.Close()
-		}
-	}()
 	logger.Info("accepted connection", "remote", conn.RemoteAddr())
+
+	prepared, err := session.Prepare(session.Config{}, nil, session.Options{Logger: logger})
+	if err != nil {
+		_ = conn.Close()
+		return eris.Wrap(err, "prepare post-auth session")
+	}
 
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
 		HostKey: serverHostKey,
@@ -78,7 +79,6 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	if err != nil {
 		return eris.Wrap(err, "establish session")
 	}
-	connectionOwned = false
 	defer pending.Close()
 
 	credentials, err := authorization.AuthorizeConnection(pending.Context(), serverauthz.ConnectionRequest{
@@ -91,7 +91,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
 	}
 
-	established, err := pending.Accept()
+	established, err := pending.Accept(prepared)
 	if err != nil {
 		return eris.Wrap(err, "accept authenticated connection")
 	}
@@ -106,12 +106,6 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		"source", credentials.MatchedSource(),
 		"fingerprint", credentials.KeyFingerprint(),
 	)
-	logger.Info("authenticated session established", "session_protocol", "terminal-demo")
-	return NewShellDemo(
-		established.Session,
-		cfg.Core.Shell,
-		credentials,
-		authorization,
-		logger,
-	).Run(ctx)
+	logger.Info("authenticated session established", "post_auth_mode", "reject-all")
+	return established.Wait()
 }

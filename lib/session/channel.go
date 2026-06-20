@@ -11,15 +11,28 @@ import (
 )
 
 var (
-	errSessionNotRunning = eris.New("session not running")
-	errSessionRunStarted = eris.New("session run already started")
-	errChannelClosed     = eris.New("channel closed")
-	errChannelWriteEOF   = eris.New("channel write side closed")
+	errSessionNotActive = eris.New("session not active")
+	errSessionClosed    = eris.New("session closed")
+	errChannelClosed    = eris.New("channel closed")
+	errChannelWriteEOF  = eris.New("channel write side closed")
 )
 
 type channelWaitResult struct {
 	response *ChannelResponse
 	err      error
+}
+
+type channelEventKind uint8
+
+const (
+	channelEventRequest channelEventKind = iota
+	channelEventEOF
+	channelEventClose
+)
+
+type channelEvent struct {
+	kind    channelEventKind
+	request *sessionpb.ChannelRequest
 }
 
 type Channel struct {
@@ -28,6 +41,9 @@ type Channel struct {
 	id     uint64
 	peerID uint64
 	typ    string
+
+	ctx    context.Context
+	cancel context.CancelCauseFunc
 
 	mu sync.Mutex
 
@@ -55,26 +71,34 @@ type Channel struct {
 	sessionErr error
 	handler    ChannelHandler
 	stateCh    chan struct{}
+	events     chan channelEvent
 }
 
 func newPendingChannel(sess *Session, localID uint64, typ string, handler ChannelHandler) *Channel {
+	ctx, cancel := context.WithCancelCause(sess.Context())
 	return &Channel{
 		sess:            sess,
 		id:              localID,
 		typ:             typ,
+		ctx:             ctx,
+		cancel:          cancel,
 		openWait:        make(chan error, 1),
 		pendingRequests: make(map[uint64]chan channelWaitResult),
 		handler:         normalizeChannelHandler(handler),
 		stateCh:         make(chan struct{}),
+		events:          make(chan channelEvent, sess.config.HandlerQueueDepth),
 	}
 }
 
 func newIncomingChannel(sess *Session, localID uint64, peerID uint64, typ string, remoteWindow uint32, maxRemotePacket uint32, handler ChannelHandler) *Channel {
+	ctx, cancel := context.WithCancelCause(sess.Context())
 	return &Channel{
 		sess:               sess,
 		id:                 localID,
 		peerID:             peerID,
 		typ:                typ,
+		ctx:                ctx,
+		cancel:             cancel,
 		openConfirmed:      true,
 		localWindow:        sess.config.InitialWindow,
 		remoteWindow:       remoteWindow,
@@ -83,8 +107,16 @@ func newIncomingChannel(sess *Session, localID uint64, peerID uint64, typ string
 		pendingRequests:    make(map[uint64]chan channelWaitResult),
 		handler:            normalizeChannelHandler(handler),
 		stateCh:            make(chan struct{}),
+		events:             make(chan channelEvent, sess.config.HandlerQueueDepth),
 		pendingWindowBytes: 0,
 	}
+}
+
+func (ch *Channel) Context() context.Context {
+	if ch == nil || ch.ctx == nil {
+		return context.Background()
+	}
+	return ch.ctx
 }
 
 func (ch *Channel) Type() string {
@@ -127,7 +159,7 @@ func (ch *Channel) Send(ctx context.Context, frame []byte) error {
 			peerID := ch.peerID
 			ch.mu.Unlock()
 
-			return ch.sess.sendEnvelope(&sessionpb.Envelope{
+			return ch.sess.sendEnvelope(ctx, &sessionpb.Envelope{
 				Kind: &sessionpb.Envelope_ChannelData{
 					ChannelData: &sessionpb.ChannelData{
 						RecipientChannelId: peerID,
@@ -143,8 +175,11 @@ func (ch *Channel) Send(ctx context.Context, frame []byte) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ch.sess.closed:
-			return ch.sess.closeCause()
+		case <-ch.Context().Done():
+			if err := ch.channelError(); err != nil {
+				return err
+			}
+			return errChannelClosed
 		case <-waitCh:
 		}
 	}
@@ -174,7 +209,7 @@ func (ch *Channel) Recv(ctx context.Context) ([]byte, error) {
 			ch.mu.Unlock()
 
 			if adjust > 0 {
-				if err := ch.sess.sendEnvelope(&sessionpb.Envelope{
+				if err := ch.sess.sendEnvelope(context.Background(), &sessionpb.Envelope{
 					Kind: &sessionpb.Envelope_ChannelWindowAdjust{
 						ChannelWindowAdjust: &sessionpb.ChannelWindowAdjust{
 							RecipientChannelId: peerID,
@@ -182,7 +217,7 @@ func (ch *Channel) Recv(ctx context.Context) ([]byte, error) {
 						},
 					},
 				}); err != nil {
-					ch.sess.closeWithCause(eris.Wrap(err, "send channel window adjust"))
+					ch.sess.shutdown(eris.Wrap(err, "send channel window adjust"))
 				}
 			}
 
@@ -196,6 +231,9 @@ func (ch *Channel) Recv(ctx context.Context) ([]byte, error) {
 		if ch.sessionErr != nil {
 			err := ch.sessionErr
 			ch.mu.Unlock()
+			if eris.Is(err, errSessionClosed) {
+				return nil, io.EOF
+			}
 			return nil, err
 		}
 
@@ -205,8 +243,14 @@ func (ch *Channel) Recv(ctx context.Context) ([]byte, error) {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-ch.sess.closed:
-			return nil, ch.sess.closeCause()
+		case <-ch.Context().Done():
+			if err := ch.channelError(); err != nil {
+				if eris.Is(err, errSessionClosed) {
+					return nil, io.EOF
+				}
+				return nil, err
+			}
+			return nil, io.EOF
 		case <-waitCh:
 		}
 	}
@@ -246,7 +290,7 @@ func (ch *Channel) SendRequest(ctx context.Context, typ string, payload []byte, 
 	peerID := ch.peerID
 	ch.mu.Unlock()
 
-	err := ch.sess.sendEnvelope(&sessionpb.Envelope{
+	err := ch.sess.sendEnvelope(ctx, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelRequest{
 			ChannelRequest: &sessionpb.ChannelRequest{
 				RecipientChannelId: peerID,
@@ -274,8 +318,8 @@ func (ch *Channel) SendRequest(ctx context.Context, typ string, payload []byte, 
 		return result.response, result.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-ch.sess.closed:
-		return nil, ch.sess.closeCause()
+	case <-ch.Context().Done():
+		return nil, ch.channelError()
 	}
 }
 
@@ -303,7 +347,7 @@ func (ch *Channel) CloseWrite() error {
 	ch.signalLocked()
 	ch.mu.Unlock()
 
-	return ch.sess.sendEnvelope(&sessionpb.Envelope{
+	return ch.sess.sendEnvelope(context.Background(), &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelEof{
 			ChannelEof: &sessionpb.ChannelEof{RecipientChannelId: peerID},
 		},
@@ -317,6 +361,7 @@ func (ch *Channel) Close() error {
 		ch.frames = nil
 		ch.signalLocked()
 		shouldRemove := ch.closeReceived
+		ch.cancel(errChannelClosed)
 		ch.mu.Unlock()
 		if shouldRemove {
 			ch.sess.removeChannel(ch.id)
@@ -332,6 +377,7 @@ func (ch *Channel) Close() error {
 	peerID := ch.peerID
 	openConfirmed := ch.openConfirmed
 	shouldRemove := ch.closeReceived
+	ch.cancel(errChannelClosed)
 	ch.mu.Unlock()
 
 	if shouldRemove {
@@ -341,16 +387,158 @@ func (ch *Channel) Close() error {
 		return nil
 	}
 
-	return ch.sess.sendEnvelope(&sessionpb.Envelope{
+	return ch.sess.sendEnvelope(context.Background(), &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelClose{
 			ChannelClose: &sessionpb.ChannelClose{RecipientChannelId: peerID},
 		},
 	})
 }
 
+func (ch *Channel) enqueueEvent(event channelEvent) error {
+	select {
+	case ch.events <- event:
+		return nil
+	default:
+		return ch.sess.queueExhausted("channel handler queue exhausted")
+	}
+}
+
+func (ch *Channel) loop() {
+	defer ch.sess.wg.Done()
+
+	if !ch.sess.waitForActivation() {
+		return
+	}
+
+	for {
+		select {
+		case event := <-ch.events:
+			if err := ch.handleEvent(event); err != nil {
+				ch.sess.shutdown(err)
+				return
+			}
+		case <-ch.Context().Done():
+			return
+		}
+	}
+}
+
+func (ch *Channel) handleEvent(event channelEvent) error {
+	switch event.kind {
+	case channelEventRequest:
+		return ch.handleRequest(event.request)
+	case channelEventEOF:
+		return ch.handleEOF()
+	case channelEventClose:
+		return ch.handleClose()
+	default:
+		return eris.Errorf("unsupported channel event %d", event.kind)
+	}
+}
+
+func (ch *Channel) handleRequest(msg *sessionpb.ChannelRequest) error {
+	ch.mu.Lock()
+	if !ch.openConfirmed {
+		ch.mu.Unlock()
+		return ch.sess.protocolErrorf("received channel request before channel %d was opened", ch.id)
+	}
+	if ch.closeSent || ch.closeReceived {
+		ch.mu.Unlock()
+		return ch.sess.protocolErrorf("received channel request for closed channel %d", ch.id)
+	}
+	handler := ch.handler
+	peerID := ch.peerID
+	ch.mu.Unlock()
+
+	response := handler.OnRequest(ch.Context(), ch, ChannelRequest{
+		Type:      msg.GetRequestType(),
+		WantReply: msg.GetWantReply(),
+		Payload:   cloneBytes(msg.GetPayload()),
+	})
+
+	if !msg.GetWantReply() {
+		return nil
+	}
+
+	result := &sessionpb.ChannelResult{
+		RecipientChannelId: peerID,
+		RequestId:          msg.GetRequestId(),
+	}
+	if response.OK {
+		result.Result = &sessionpb.ChannelResult_Success{
+			Success: &sessionpb.OperationSuccess{Payload: cloneBytes(response.Payload)},
+		}
+	} else {
+		result.Result = &sessionpb.ChannelResult_Reject{
+			Reject: &sessionpb.OperationReject{
+				Code:    normalizeRejectCode(response.Code, "channel-request-rejected"),
+				Message: normalizeRejectMessage(response.Message, "channel request rejected"),
+				Payload: cloneBytes(response.Payload),
+			},
+		}
+	}
+
+	return ch.sess.sendEnvelope(ch.Context(), &sessionpb.Envelope{
+		Kind: &sessionpb.Envelope_ChannelResult{ChannelResult: result},
+	})
+}
+
+func (ch *Channel) handleEOF() error {
+	ch.mu.Lock()
+	if ch.closeSent || ch.closeReceived {
+		ch.mu.Unlock()
+		return ch.sess.protocolErrorf("received channel EOF after channel %d was closed", ch.id)
+	}
+	if ch.eofReceived {
+		ch.mu.Unlock()
+		return nil
+	}
+	ch.eofReceived = true
+	ch.signalLocked()
+	handler := ch.handler
+	ch.mu.Unlock()
+
+	handler.OnEOF(ch.Context(), ch)
+	return nil
+}
+
+func (ch *Channel) handleClose() error {
+	ch.mu.Lock()
+	if ch.closeReceived {
+		ch.mu.Unlock()
+		return nil
+	}
+	ch.closeReceived = true
+	ch.localClosed = true
+	ch.frames = nil
+	ch.signalLocked()
+	handler := ch.handler
+	shouldRemove := ch.closeSent
+	ch.failPendingRequestsLocked(errChannelClosed)
+	ch.cancel(errChannelClosed)
+	ch.mu.Unlock()
+
+	handler.OnClose(ch.Context(), ch)
+	if shouldRemove {
+		ch.sess.removeChannel(ch.id)
+	}
+	return nil
+}
+
+func (ch *Channel) channelError() error {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	return ch.channelErrorLocked()
+}
+
 func (ch *Channel) channelErrorLocked() error {
 	if ch.sessionErr != nil {
 		return ch.sessionErr
+	}
+	if ch.ctx != nil {
+		if cause := context.Cause(ch.ctx); cause != nil {
+			return cause
+		}
 	}
 	return nil
 }
@@ -367,9 +555,14 @@ func (ch *Channel) failPendingRequestsLocked(err error) {
 		default:
 		}
 	}
+	ch.pendingRequests = make(map[uint64]chan channelWaitResult)
 }
 
 func (ch *Channel) shutdown(err error) {
+	if err == nil {
+		err = errSessionClosed
+	}
+
 	ch.mu.Lock()
 	if ch.sessionErr == nil {
 		ch.sessionErr = err
@@ -383,5 +576,6 @@ func (ch *Channel) shutdown(err error) {
 		}
 	}
 	ch.signalLocked()
+	ch.cancel(err)
 	ch.mu.Unlock()
 }

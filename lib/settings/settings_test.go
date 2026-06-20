@@ -11,7 +11,7 @@ import (
 func TestLoadDefaultsCoreHostToLocalhost(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	config := []byte("[core]\nport = 42022\nshell = \"/bin/sh\"\n")
+	config := []byte("[core]\nport = 42022\n")
 	err := os.WriteFile(filepath.Join(".", ConfigFile), config, 0o644)
 	require.NoError(t, err)
 
@@ -24,7 +24,7 @@ func TestLoadDefaultsCoreHostToLocalhost(t *testing.T) {
 func TestLoadTrimsLogFilePath(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	config := []byte("[core]\nport = 42022\nshell = \"/bin/sh\"\n[log]\nfile = \"  mygosh.log  \"\n")
+	config := []byte("[core]\nport = 42022\n[log]\nfile = \"  mygosh.log  \"\n")
 	err := os.WriteFile(filepath.Join(".", ConfigFile), config, 0o644)
 	require.NoError(t, err)
 
@@ -36,9 +36,8 @@ func TestLoadTrimsLogFilePath(t *testing.T) {
 func TestListenAddressUsesConfiguredHost(t *testing.T) {
 	cfg := Settings{
 		Core: CoreSettings{
-			Host:  "0.0.0.0",
-			Port:  42022,
-			Shell: "/bin/bash",
+			Host: "0.0.0.0",
+			Port: 42022,
 		},
 	}
 

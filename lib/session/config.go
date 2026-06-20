@@ -2,6 +2,7 @@ package session
 
 import (
 	"math"
+	"time"
 
 	"github.com/rotisserie/eris"
 )
@@ -10,12 +11,18 @@ const (
 	defaultInitialWindow       = 256 * 1024
 	defaultMaxPacketSize       = 16 * 1024
 	defaultWindowAdjustTrigger = 64 * 1024
+	defaultOutboundQueueDepth  = 32
+	defaultHandlerQueueDepth   = 8
+	defaultDisconnectTimeout   = 250 * time.Millisecond
 )
 
 type Config struct {
 	InitialWindow         uint32
 	MaxPacketSize         uint32
 	WindowAdjustThreshold uint32
+	OutboundQueueDepth    int
+	HandlerQueueDepth     int
+	DisconnectTimeout     time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -27,6 +34,15 @@ func (c Config) withDefaults() Config {
 	}
 	if c.WindowAdjustThreshold == 0 {
 		c.WindowAdjustThreshold = defaultWindowAdjustTrigger
+	}
+	if c.OutboundQueueDepth == 0 {
+		c.OutboundQueueDepth = defaultOutboundQueueDepth
+	}
+	if c.HandlerQueueDepth == 0 {
+		c.HandlerQueueDepth = defaultHandlerQueueDepth
+	}
+	if c.DisconnectTimeout == 0 {
+		c.DisconnectTimeout = defaultDisconnectTimeout
 	}
 	return c
 }
@@ -51,6 +67,15 @@ func (c Config) Validate() error {
 	}
 	if c.InitialWindow == math.MaxUint32 {
 		return eris.New("initial window must be less than max uint32")
+	}
+	if c.OutboundQueueDepth < 1 {
+		return eris.New("outbound queue depth must be greater than zero")
+	}
+	if c.HandlerQueueDepth < 1 {
+		return eris.New("handler queue depth must be greater than zero")
+	}
+	if c.DisconnectTimeout < 0 {
+		return eris.New("disconnect timeout must be non-negative")
 	}
 	return nil
 }

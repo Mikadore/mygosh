@@ -29,9 +29,9 @@ type Client struct {
 	Auth auth.ClientResult
 }
 
-// Connect is the client-side establishment path: TCP ownership stays in app
-// code, auth stays role-specific, and the returned Session remains role
-// agnostic.
+// Connect is the client-side establishment path. It consumes socket ownership,
+// performs transport and auth setup, binds the post-auth mux, activates it,
+// and returns the active session plus auth result.
 func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, error) {
 	ctx = normalizeContext(ctx)
 	if err := ctx.Err(); err != nil {
@@ -47,12 +47,16 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
 	logger := logging.Resolve(cfg.Logger)
+	prepared, err := session.Prepare(cfg.SessionConfig, nil, session.Options{Logger: logger})
+	if err != nil {
+		return nil, err
+	}
 	logger.Debug("starting client connection", "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
-	runtime := session.NewRuntime(ctx, conn, logger)
+	runtime := newRuntime(ctx, conn, logger)
 
 	var secureConn *transport.Transport
-	err := runtime.RunWithTimeout("handshake", handshakeTimeout, func() error {
+	err = runtime.RunWithTimeout(lifecycleHandshaking, handshakeTimeout, func() error {
 		var err error
 		secureConn, err = transport.HandshakeClientWithLogger(conn, logger)
 		return err
@@ -62,11 +66,12 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 		_ = runtime.Close()
 		return nil, wrapped
 	}
-	runtime.SetTarget(secureConn)
+	runtime.SetOwner(secureConn)
+	runtime.SetPhase(lifecycleAuthPending)
 	logger.Debug("client noise transport established", "remote", remoteAddrString(conn))
 
 	var result auth.ClientResult
-	err = runtime.RunWithTimeout("auth", authTimeout, func() error {
+	err = runtime.RunWithTimeout(lifecycleAuthPending, authTimeout, func() error {
 		var err error
 		result, err = auth.RunClient(runtime.Context(), secureConn, auth.ClientConfig{
 			ReferenceIdentity:      cfg.ReferenceIdentity,
@@ -84,14 +89,19 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 	}
 	logger.Debug("client authenticated server", "reference_identity", result.ReferenceIdentity, "server_fingerprint", result.ServerHostKey.FingerprintSHA256())
 
-	sess, err := session.New(secureConn, cfg.SessionConfig, session.Options{
-		Runtime: runtime,
-		Logger:  logger,
-	})
+	runtime.SetPhase(lifecyclePostAuthStarting)
+	sess, err := prepared.Bind(runtime.Context(), secureConn)
 	if err != nil {
-		_ = runtime.Close()
+		_ = runtime.Fail(err)
 		return nil, err
 	}
+	runtime.SetOwner(sess)
+	sess.Activate()
+	if cause := context.Cause(runtime.Context()); cause != nil {
+		_ = runtime.Fail(cause)
+		return nil, cause
+	}
+	runtime.Release()
 	return &Client{Session: sess, Auth: result}, nil
 }
 

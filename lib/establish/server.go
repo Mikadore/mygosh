@@ -37,20 +37,21 @@ const (
 
 // PendingServer keeps the complete authentication deadline active while app
 // policy evaluates the verified client. No post-auth mux is exposed until
-// Accept has sent the wire success response.
+// Accept has bound the prepared session, sent wire success, and activated it.
 type PendingServer struct {
 	mu sync.Mutex
 
 	ctx        context.Context
 	cancelAuth context.CancelFunc
 	stopAuth   func() bool
-	runtime    *session.Runtime
+	runtime    *runtime
 	secureConn *transport.Transport
 	auth       *auth.PendingServerAuth
 	cfg        ServerConfig
 	logger     *slog.Logger
 	state      pendingState
 	server     *Server
+	transferred bool
 }
 
 func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*PendingServer, error) {
@@ -61,19 +62,16 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 	if err := validateTimeouts(cfg.HandshakeTimeout, cfg.AuthTimeout); err != nil {
 		return nil, eris.Wrap(err, "validate server connection config")
 	}
-	if err := cfg.SessionConfig.Validate(); err != nil {
-		return nil, eris.Wrap(err, "validate server session mux config")
-	}
 
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
 	logger := logging.Resolve(cfg.Logger)
 	logger.Debug("starting server connection", "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
-	runtime := session.NewRuntime(ctx, conn, logger)
+	runtime := newRuntime(ctx, conn, logger)
 
 	var secureConn *transport.Transport
-	err := runtime.RunWithTimeout("handshake", handshakeTimeout, func() error {
+	err := runtime.RunWithTimeout(lifecycleHandshaking, handshakeTimeout, func() error {
 		var err error
 		secureConn, err = transport.HandshakeServerWithLogger(conn, logger)
 		return err
@@ -83,7 +81,8 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 		_ = runtime.Close()
 		return nil, wrapped
 	}
-	runtime.SetTarget(secureConn)
+	runtime.SetOwner(secureConn)
+	runtime.SetPhase(lifecycleAuthPending)
 	logger.Debug("server noise transport established", "remote", remoteAddrString(conn))
 
 	authCtx, cancelAuth := context.WithTimeout(runtime.Context(), authTimeout)
@@ -139,14 +138,31 @@ func (p *PendingServer) VerifiedClient() auth.VerifiedClient {
 	return p.auth.VerifiedClient()
 }
 
-func (p *PendingServer) Accept() (*Server, error) {
+func (p *PendingServer) Accept(prepared *session.Prepared) (*Server, error) {
 	if err := p.claim(pendingAccepted); err != nil {
 		return nil, err
+	}
+	if prepared == nil {
+		var err error
+		prepared, err = session.Prepare(p.cfg.SessionConfig, nil, session.Options{Logger: p.logger})
+		if err != nil {
+			_ = p.runtime.Fail(err)
+			return nil, err
+		}
 	}
 	if err := context.Cause(p.ctx); err != nil {
 		_ = p.runtime.Fail(err)
 		return nil, err
 	}
+
+	p.runtime.SetPhase(lifecyclePostAuthStarting)
+	sess, err := prepared.Bind(p.runtime.Context(), p.secureConn)
+	if err != nil {
+		_ = p.runtime.Fail(err)
+		return nil, err
+	}
+	p.runtime.SetOwner(sess)
+
 	if err := p.auth.Accept(); err != nil {
 		_ = p.runtime.Fail(err)
 		return nil, err
@@ -155,19 +171,17 @@ func (p *PendingServer) Accept() (*Server, error) {
 		_ = p.runtime.Fail(err)
 		return nil, err
 	}
-
-	sess, err := session.New(p.secureConn, p.cfg.SessionConfig, session.Options{
-		Runtime: p.runtime,
-		Logger:  p.logger,
-	})
-	if err != nil {
-		_ = p.runtime.Fail(err)
-		return nil, err
+	sess.Activate()
+	if cause := context.Cause(p.runtime.Context()); cause != nil {
+		_ = p.runtime.Fail(cause)
+		return nil, cause
 	}
+	p.runtime.Release()
 	server := &Server{Session: sess}
 
 	p.mu.Lock()
 	p.server = server
+	p.transferred = true
 	p.mu.Unlock()
 	return server, nil
 }
@@ -189,6 +203,10 @@ func (p *PendingServer) Close() error {
 
 	p.mu.Lock()
 	if p.state == pendingClosed {
+		p.mu.Unlock()
+		return nil
+	}
+	if p.transferred {
 		p.mu.Unlock()
 		return nil
 	}

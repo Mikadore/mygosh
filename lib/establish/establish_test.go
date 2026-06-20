@@ -9,11 +9,14 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
+	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
+	prepared, err := session.Prepare(session.Config{}, nil, session.Options{})
+	require.NoError(t, err)
 
 	pendingCh := make(chan *PendingServer, 1)
 	serverErrCh := make(chan error, 1)
@@ -54,7 +57,7 @@ func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 	case <-time.After(30 * time.Millisecond):
 	}
 
-	server, err := pending.Accept()
+	server, err := pending.Accept(prepared)
 	require.NoError(t, err)
 	require.NotNil(t, server.Session)
 	require.NoError(t, <-clientErrCh)
@@ -123,7 +126,7 @@ func TestPendingCloseWithoutDecisionUnblocksClient(t *testing.T) {
 	pending := <-pendingCh
 	require.NoError(t, pending.Close())
 	require.Error(t, <-clientErrCh)
-	_, err := pending.Accept()
+	_, err := pending.Accept(nil)
 	require.ErrorIs(t, err, auth.ErrDecisionMade)
 }
 
@@ -158,7 +161,9 @@ func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
 		t.Fatal("timed out waiting for pending auth deadline")
 	}
 	require.ErrorIs(t, context.Cause(pending.Context()), context.DeadlineExceeded)
-	_, err := pending.Accept()
+	prepared, err := session.Prepare(session.Config{}, nil, session.Options{})
+	require.NoError(t, err)
+	_, err = pending.Accept(prepared)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Error(t, <-clientErrCh)
 }

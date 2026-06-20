@@ -1,6 +1,6 @@
 # Architecture and protocol TODO
 
-This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the review; `R1`–`R5` are cross-cutting refactors derived from its recommended architecture. All tasks are intentionally unchecked.
+This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the review; `R1`–`R5` are cross-cutting refactors derived from its recommended architecture. The table reflects the current implementation status.
 
 ## Checklist
 
@@ -11,11 +11,11 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [x] | T1 | P0 | Trust/files | Use bounded, race-resistant secure opens for every sensitive file |
 | [ ] | T2 | P1 | Trust/files | Define and enforce supported `authorized_keys` and `known_hosts` semantics |
 | [x] | T3 | P1 | Authentication | Stop disclosing local authorization and filesystem details to peers |
-| [ ] | S1 | P0 | Connection mux | Prevent handlers and writes from blocking the sole receive owner |
+| [x] | S1 | P0 | Connection mux | Prevent handlers and writes from blocking the sole receive owner |
 | [ ] | S2 | P1 | Connection mux | Add hard connection-wide resource limits |
 | [ ] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
 | [ ] | E1 | P0 | Server app | Replace the one-connection demo with a bounded daemon accept loop |
-| [ ] | E2 | P1 | Lifecycle | Give each connection phase one clear lifetime and close owner |
+| [x] | E2 | P1 | Lifecycle | Give each connection phase one clear lifetime and close owner |
 | [ ] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
 | [ ] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
 | [ ] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
@@ -80,15 +80,15 @@ Give the raw socket, secure transport, authentication phase, and post-auth conne
 
 ### P1 — Fix no-reply exec lifecycle
 
-An exec request with `want_reply=false` currently starts a child without starting its forwarding, waiting, or cleanup runtime. Either require replies for process-start requests or restructure startup so process ownership and reaping are active before any child can exist; see **P1**.
+When a shell/exec service is reintroduced, an exec request with `want_reply=false` must not be able to start a child before forwarding, waiting, and cleanup ownership are active. Either require replies for process-start requests or restructure startup so process ownership and reaping are active before any child can exist; see **P1**.
 
 ### P2 — Make channel completion locally enforceable
 
-Closing a channel before exec and withholding a close acknowledgment must not leave the server waiting forever. Define bounded close behavior, proper stdin half-close semantics, write deadlines, and terminal states that complete independently of peer cooperation; see **P2**.
+Future shell/exec channels must complete locally even if the peer withholds a close acknowledgment. Define bounded close behavior, proper stdin half-close semantics, write deadlines, and terminal states that complete independently of peer cooperation; see **P2**.
 
 ### P3 — Own the full process tree
 
-Create a process runner that owns the command, PTY or pipes, process group/session, wait result, signaling sequence, and descriptor cleanup. On channel, connection, timeout, or server shutdown, terminate descendants with bounded graceful and forced phases and reap every child exactly once; see **P3**.
+Create a process runner for the future service layer that owns the command, PTY or pipes, process group/session, wait result, signaling sequence, and descriptor cleanup. On channel, connection, timeout, or server shutdown, terminate descendants with bounded graceful and forced phases and reap every child exactly once; see **P3**.
 
 ### C1 — Use immutable connection credentials
 
@@ -112,11 +112,11 @@ Use immutable canonical public-key identity that includes the algorithm and excl
 
 ### D1 — Cancel terminal input safely
 
-Do not leave a goroutine blocked on `os.Stdin` after a remote process or connection ends, because it can later consume input intended for the restored local shell. Use polling/select on a dedicated descriptor, a safely closable duplicate, or a single terminal-I/O owner; see **D1**.
+When an interactive client path returns, do not leave a goroutine blocked on `os.Stdin` after a remote process or connection ends, because it can later consume input intended for the restored local shell. Use polling/select on a dedicated descriptor, a safely closable duplicate, or a single terminal-I/O owner; see **D1**.
 
 ### D2 — Define real shell and exec requests
 
-Replace the current mandatory-PTY `shell -c <command>` path with optional PTY setup followed by exactly one shell or exec request. Add non-PTY stdout/stderr separation, account/config-selected login shells, exit status/signals, filtered environment requests, and correct remote exit propagation; see **D2**.
+The current app path stays connected with a reject-all mux and no service implementation. Replace that placeholder with optional PTY setup followed by exactly one shell or exec request. Add non-PTY stdout/stderr separation, account-config-selected login shells, exit status/signals, filtered environment requests, and correct remote exit propagation; see **D2**.
 
 ### B1 — Strengthen verification and release gates
 

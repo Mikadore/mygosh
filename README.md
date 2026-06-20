@@ -16,10 +16,10 @@ This section describes the current implementation as it is.
 - Client-side host-key verification before the client signs its authentication proof.
 - Server-side client-signature verification before local key/account authorization.
 - A staged server decision: verified proof, app-owned connection authorization, then generic accept/reject.
-- Immutable connection credentials and account/session policy seams in `app/server/authz`.
-- A post-auth channel/global-request multiplexer in `lib/session`.
-- One provisional `session` channel carrying a PTY-backed command.
-- Raw terminal byte forwarding, terminal resize forwarding, and exit status.
+- Immutable connection credentials and an app-owned account policy seam in `app/server/authz`.
+- A prepared/bound/activated post-auth channel/global-request multiplexer in `lib/session`.
+- Bounded post-auth receive, dispatch, per-channel callback, and write queues.
+- A reject-by-default post-auth connection that stays active until cancellation or disconnect.
 - Bounded, descriptor-checked loading of OpenSSH Ed25519 private keys, `known_hosts`, and `authorized_keys`.
 - Username/group lookup through Go's current `os/user` adapter.
 - Structured `slog` logging with optional console and JSON logfile output.
@@ -41,26 +41,21 @@ The default app path currently performs:
 5. Client public-key signature proof for the requested username.
 6. `lib/auth` returns an immutable verified client proof and pauses before its final response.
 7. `app/server/authz` resolves the account, securely checks `authorized_keys`, runs account policy, and constructs immutable credentials.
-8. The server sends generic accept/reject; only acceptance constructs and exposes the post-auth mux.
-9. One authorized `session` channel obtains a closeable lease, requests a PTY, and then requests exec.
-10. The server executes the selected login/configured shell under the authorized account.
+8. The server binds a prepared post-auth mux before auth success, then sends generic accept/reject.
+9. Successful auth activates a reject-by-default mux on both peers.
+10. Client and server log success and remain connected until cancellation or disconnect.
 
-The mux type can still be constructed directly without credentials, but the production shell path requires both connection credentials and the same app-owned `Authz` object.
+The mux type can still be constructed directly without credentials, but the default application path now attaches only a nil handler that rejects all post-auth operations.
 
 ## Known Limitations
 
 The most important current limitations are:
 
 - trust-file options, markers, revocation, wildcard/hashed-host, and malformed-entry semantics remain incomplete;
-- connection-level permissions and concrete exec/forward authorization are not yet modeled beyond the current session-policy seam;
-- the post-auth receive loop can be blocked by handlers or writes;
+- connection-level permissions and concrete request authorization are not yet modeled;
 - channel/request/queue resources are not comprehensively bounded;
 - channel state and cancellation cleanup are incomplete;
-- connection ownership is split across app, transport, runtime, and mux layers;
-- PTY process cleanup has leak and indefinite-wait paths;
-- process cancellation does not deliberately own all descendants;
-- the command service requires a PTY and does not distinguish an interactive shell from non-PTY exec;
-- the client terminal input reader is not reliably interruptible;
+- the current app path exposes no shell, exec, PTY, or terminal service yet;
 - there is no PAM integration, port forwarding, reconnect/resume, or SSH compatibility.
 
 This list is intentionally abbreviated. See [`REVIEW.md`](REVIEW.md#findings) for evidence and design recommendations.
@@ -99,7 +94,6 @@ Example:
 [core]
 host = "localhost"
 port = 42022
-shell = "/bin/bash"
 
 [log]
 level = "DEBUG"
@@ -111,8 +105,6 @@ Current field behavior:
 
 - `core.host` and `core.port` form the server listen address.
 - The client uses `core.port` when its target omits a port.
-- `core.shell` is used by the server for `shell -c <command>`.
-- When the client receives no command argument, it sends its own configured `core.shell` as the explicit remote command.
 - Handshake/auth timeouts and trust-file paths are not configurable through this file.
 
 Logging levels are `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `NONE`, or empty. CLI verbosity overrides the configured level:
@@ -123,7 +115,7 @@ mygosh -v server    # INFO
 mygosh -vv server   # DEBUG
 ```
 
-When `log.file` is set, the process appends structured JSON logs to that path and sets its mode to `0600`. The interactive client disables console logging while its local terminal is raw; configured file logging remains active.
+When `log.file` is set, the process appends structured JSON logs to that path and sets its mode to `0600`.
 
 ## Required Key And Trust Files
 
@@ -167,13 +159,7 @@ Select a requested server-side username:
 go run ./bin connect alice@localhost:42022
 ```
 
-Run an explicit command:
-
-```sh
-go run ./bin connect alice@localhost:42022 "echo hello"
-```
-
-The server resolves the requested username, checks the account's configured authorization files, and attempts to start the command with that account's UID, GID, supplementary groups, home, and a small fixed environment. The request fails if the server process lacks permission to assume those credentials.
+The server resolves the requested username, checks the account's configured authorization files, activates the authenticated reject-all mux, and then waits for cancellation or disconnect.
 
 For the current two-pane smoke test:
 
@@ -208,14 +194,14 @@ go vet ./...
 
 ## Repository Guide
 
-- `app/`: current CLI application composition, networking, and provisional terminal/process flows.
+- `app/`: current CLI application composition and networking.
 - `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
-- `app/server/authz/`: account/key authorization, immutable credentials, and account/session policy seams.
+- `app/server/authz/`: account/key authorization, immutable credentials, and account policy seams.
 - `lib/transport/`: Noise handshake, channel binding, and encrypted frame transport.
 - `lib/wire/`: transport-neutral framed connections and protobuf encoding/validation.
 - `lib/auth/`: cryptographic auth protocol and staged accept/reject decision.
 - `lib/establish/`: client composition and pending server establishment lifecycle.
-- `lib/session/`: post-auth mux plus current shared connection runtime.
+- `lib/session/`: prepared/bound post-auth mux and bounded callback/write workers.
 - `lib/trust/`: path-independent OpenSSH-format parsers and pure matchers.
 - `lib/strictfiles/`: caller-configurable secure-open primitives used by app file policy.
 - `lib/service/`: current PTY/exec payload protocol.

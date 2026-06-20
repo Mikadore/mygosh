@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
@@ -15,8 +16,13 @@ import (
 )
 
 type Options struct {
-	Runtime *Runtime
-	Logger  *slog.Logger
+	Logger *slog.Logger
+}
+
+type Prepared struct {
+	config  Config
+	handler Handler
+	logger  *slog.Logger
 }
 
 type globalWaitResult struct {
@@ -24,128 +30,160 @@ type globalWaitResult struct {
 	err      error
 }
 
+type outboundWrite struct {
+	envelope *sessionpb.Envelope
+	result   chan error
+}
+
+type dispatchTask interface {
+	dispatch(*Session) error
+}
+
+type dispatchChannelOpen struct {
+	message *sessionpb.ChannelOpen
+}
+
+type dispatchGlobalRequest struct {
+	message *sessionpb.GlobalRequest
+}
+
+type protocolError struct {
+	message string
+}
+
+func (e *protocolError) Error() string {
+	return e.message
+}
+
 type Session struct {
-	runtime *Runtime
-	conn    wire.FramedConn
-	logger  *slog.Logger
-	config  Config
+	conn   wire.FramedConn
+	logger *slog.Logger
+	config Config
+
+	ctx    context.Context
+	cancel context.CancelCauseFunc
 
 	mu                  sync.Mutex
 	nextLocalChannelID  uint64
 	channels            map[uint64]*Channel
+	peerChannelIDs      map[uint64]uint64
 	nextGlobalRequestID uint64
 	pendingGlobal       map[uint64]chan globalWaitResult
-	runStarted          bool
+	waitErr             error
+	closeErr            error
+	closing             bool
 
-	writeMu sync.Mutex
-	running chan struct{}
-	closed  chan struct{}
-	once    sync.Once
+	queueMu       sync.Mutex
+	queuesClosed  bool
+	dispatchQueue chan dispatchTask
+	controlQueue  chan outboundWrite
+	outboundQueue chan outboundWrite
+
+	activated  chan struct{}
+	done       chan struct{}
+	writerDone chan struct{}
+
+	wg           sync.WaitGroup
+	activateOnce sync.Once
+	shutdownOnce sync.Once
+	closeConn    sync.Once
+	handler      Handler
 }
 
-// New builds the post-auth multiplexer over an already authenticated framed
-// connection. Role-specific auth results belong to the caller.
-func New(conn wire.FramedConn, cfg Config, opts Options) (*Session, error) {
-	if conn == nil {
-		return nil, eris.New("session connection is required")
-	}
+func Prepare(cfg Config, handler Handler, opts Options) (*Prepared, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, eris.Wrap(err, "validate session mux config")
 	}
 
-	logger := logging.Resolve(opts.Logger)
-	runtime := opts.Runtime
-	if runtime == nil {
-		runtime = NewRuntime(context.Background(), conn, logger)
-	} else {
-		runtime.SetTarget(conn)
+	return &Prepared{
+		config:  cfg.withDefaults(),
+		handler: normalizeHandler(handler),
+		logger:  logging.Resolve(opts.Logger),
+	}, nil
+}
+
+func (p *Prepared) Bind(parent context.Context, conn wire.FramedConn) (*Session, error) {
+	if p == nil {
+		return nil, eris.New("prepared session is required")
+	}
+	if conn == nil {
+		return nil, eris.New("session connection is required")
 	}
 
+	parent = normalizeContext(parent)
+	if err := parent.Err(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancelCause(parent)
 	s := &Session{
-		runtime:       runtime,
 		conn:          conn,
-		logger:        logger,
-		config:        cfg.withDefaults(),
+		logger:        logging.Resolve(p.logger),
+		config:        p.config,
+		ctx:           ctx,
+		cancel:        cancel,
 		channels:      make(map[uint64]*Channel),
+		peerChannelIDs: make(map[uint64]uint64),
 		pendingGlobal: make(map[uint64]chan globalWaitResult),
-		running:       make(chan struct{}),
-		closed:        make(chan struct{}),
+		dispatchQueue: make(chan dispatchTask, p.config.HandlerQueueDepth),
+		controlQueue:  make(chan outboundWrite, 1),
+		outboundQueue: make(chan outboundWrite, p.config.OutboundQueueDepth),
+		activated:     make(chan struct{}),
+		done:          make(chan struct{}),
+		writerDone:    make(chan struct{}),
+		handler:       p.handler,
 	}
 
-	go func() {
-		<-runtime.Context().Done()
-		s.shutdown(context.Cause(runtime.Context()))
-	}()
+	s.wg.Add(3)
+	go s.receiverLoop()
+	go s.dispatchLoop()
+	go s.writerLoop()
 
 	return s, nil
 }
 
-func (s *Session) Run(ctx context.Context, handler Handler) error {
-	ctx = normalizeContext(ctx)
+func (s *Session) Activate() {
+	if s == nil {
+		return
+	}
+	s.activateOnce.Do(func() {
+		close(s.activated)
+	})
+}
+
+func (s *Session) Context() context.Context {
+	if s == nil || s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
+func (s *Session) Done() <-chan struct{} {
+	if s == nil || s.done == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return s.done
+}
+
+func (s *Session) Wait() error {
+	if s == nil {
+		return eris.New("session is required")
+	}
+	<-s.Done()
 
 	s.mu.Lock()
-	if s.runStarted {
-		s.mu.Unlock()
-		return errSessionRunStarted
+	defer s.mu.Unlock()
+	return s.waitErr
+}
+
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
 	}
-	s.runStarted = true
-	close(s.running)
-	s.mu.Unlock()
-
-	handler = normalizeHandler(handler)
-	logger := logging.Resolve(s.logger)
-	logger.Debug("session run loop started")
-
-	runCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-
-	stopCh := make(chan struct{})
-	go func() {
-		select {
-		case <-runCtx.Done():
-			s.closeWithCause(context.Cause(runCtx))
-		case <-stopCh:
-		}
-	}()
-	defer close(stopCh)
-
-	var finalErr error
-	defer func() {
-		if finalErr != nil {
-			s.closeWithCause(finalErr)
-		} else {
-			_ = s.runtime.Close()
-		}
-
-		disconnectCtx := context.WithoutCancel(runCtx)
-		handler.OnDisconnect(disconnectCtx, finalErr)
-	}()
-
-	for {
-		var frame sessionpb.Envelope
-		if err := wire.ReceiveProto(s.conn, &frame); err != nil {
-			if eris.Is(err, io.EOF) {
-				logger.Debug("session stream closed")
-				finalErr = nil
-				return nil
-			}
-			if cause := context.Cause(s.runtime.Context()); cause != nil {
-				finalErr = cause
-				return cause
-			}
-			if runErr := runCtx.Err(); runErr != nil {
-				finalErr = runErr
-				return runErr
-			}
-			finalErr = eris.Wrap(err, "receive session frame")
-			return finalErr
-		}
-
-		if err := s.handleEnvelope(runCtx, handler, &frame); err != nil {
-			finalErr = err
-			return err
-		}
-	}
+	s.shutdown(context.Canceled)
+	return nil
 }
 
 func (s *Session) OpenChannel(ctx context.Context, typ string, payload []byte) (*Channel, error) {
@@ -157,7 +195,7 @@ func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payloa
 	if typ == "" {
 		return nil, eris.New("channel type is required")
 	}
-	if err := s.ensureRunning(); err != nil {
+	if err := s.ensureActive(); err != nil {
 		return nil, err
 	}
 
@@ -172,7 +210,9 @@ func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payloa
 	waitCh := ch.openWait
 	s.mu.Unlock()
 
-	err := s.sendEnvelope(&sessionpb.Envelope{
+	s.startChannelWorker(ch)
+
+	err := s.sendEnvelope(ctx, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelOpen{
 			ChannelOpen: &sessionpb.ChannelOpen{
 				ChannelType:     typ,
@@ -185,6 +225,7 @@ func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payloa
 	})
 	if err != nil {
 		s.removeChannel(localID)
+		ch.shutdown(err)
 		return nil, err
 	}
 
@@ -200,24 +241,8 @@ func (s *Session) OpenChannelWithHandler(ctx context.Context, typ string, payloa
 		ch.signalLocked()
 		ch.mu.Unlock()
 		return nil, ctx.Err()
-	case <-s.closed:
+	case <-s.Context().Done():
 		return nil, s.closeCause()
-	}
-}
-
-func (s *Session) WaitUntilRunning(ctx context.Context) error {
-	if s == nil {
-		return eris.New("session is required")
-	}
-	ctx = normalizeContext(ctx)
-
-	select {
-	case <-s.running:
-		return nil
-	case <-s.closed:
-		return s.closeCause()
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
@@ -226,7 +251,7 @@ func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []b
 	if typ == "" {
 		return nil, eris.New("global request type is required")
 	}
-	if err := s.ensureRunning(); err != nil {
+	if err := s.ensureActive(); err != nil {
 		return nil, err
 	}
 
@@ -243,7 +268,7 @@ func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []b
 	}
 	s.mu.Unlock()
 
-	err := s.sendEnvelope(&sessionpb.Envelope{
+	err := s.sendEnvelope(ctx, &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_GlobalRequest{
 			GlobalRequest: &sessionpb.GlobalRequest{
 				RequestId:   requestID,
@@ -270,28 +295,118 @@ func (s *Session) SendGlobalRequest(ctx context.Context, typ string, payload []b
 		return result.response, result.err
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-s.closed:
+	case <-s.Context().Done():
 		return nil, s.closeCause()
 	}
 }
 
-func (s *Session) Close() error {
-	if s == nil {
-		return nil
+func (s *Session) receiverLoop() {
+	defer s.wg.Done()
+
+	if !s.waitForActivation() {
+		return
 	}
-	if s.runtime != nil {
-		return s.runtime.Close()
+
+	for {
+		var frame sessionpb.Envelope
+		if err := wire.ReceiveProto(s.conn, &frame); err != nil {
+			switch {
+			case eris.Is(err, io.EOF):
+				s.shutdown(nil)
+			case context.Cause(s.Context()) != nil:
+				s.shutdown(s.closeCause())
+			default:
+				s.shutdown(eris.Wrap(err, "receive session frame"))
+			}
+			return
+		}
+
+		if err := s.routeEnvelope(&frame); err != nil {
+			s.shutdown(err)
+			return
+		}
 	}
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
 }
 
-func (s *Session) handleEnvelope(ctx context.Context, handler Handler, frame *sessionpb.Envelope) error {
+func (s *Session) dispatchLoop() {
+	defer s.wg.Done()
+
+	if !s.waitForActivation() {
+		return
+	}
+
+	for {
+		select {
+		case task := <-s.dispatchQueue:
+			if err := task.dispatch(s); err != nil {
+				s.shutdown(err)
+				return
+			}
+		case <-s.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *Session) writerLoop() {
+	defer s.wg.Done()
+	defer close(s.writerDone)
+
+	if !s.waitForActivation() {
+		return
+	}
+
+	controlQueue := s.controlQueue
+	outboundQueue := s.outboundQueue
+
+	for controlQueue != nil || outboundQueue != nil {
+		var (
+			msg outboundWrite
+			ok  bool
+		)
+
+		select {
+		case msg, ok = <-controlQueue:
+			if !ok {
+				controlQueue = nil
+				continue
+			}
+		default:
+			select {
+			case msg, ok = <-controlQueue:
+				if !ok {
+					controlQueue = nil
+					continue
+				}
+			case msg, ok = <-outboundQueue:
+				if !ok {
+					outboundQueue = nil
+					continue
+				}
+			}
+		}
+
+		err := wire.SendProto(s.conn, msg.envelope)
+		if err != nil {
+			err = eris.Wrap(err, "send session envelope")
+		}
+		if msg.result != nil {
+			select {
+			case msg.result <- err:
+			default:
+			}
+		}
+		if err != nil {
+			s.shutdown(err)
+			return
+		}
+	}
+}
+
+func (s *Session) routeEnvelope(frame *sessionpb.Envelope) error {
 	switch kind := frame.GetKind().(type) {
 	case *sessionpb.Envelope_ChannelOpen:
-		return s.handleChannelOpen(ctx, handler, kind.ChannelOpen)
+		return s.enqueueDispatch(dispatchChannelOpen{message: kind.ChannelOpen})
 	case *sessionpb.Envelope_ChannelOpenResult:
 		return s.handleChannelOpenResult(kind.ChannelOpenResult)
 	case *sessionpb.Envelope_ChannelData:
@@ -299,15 +414,18 @@ func (s *Session) handleEnvelope(ctx context.Context, handler Handler, frame *se
 	case *sessionpb.Envelope_ChannelWindowAdjust:
 		return s.handleChannelWindowAdjust(kind.ChannelWindowAdjust)
 	case *sessionpb.Envelope_ChannelEof:
-		return s.handleChannelEOF(ctx, kind.ChannelEof)
+		return s.enqueueChannelEvent(kind.ChannelEof.GetRecipientChannelId(), channelEvent{kind: channelEventEOF})
 	case *sessionpb.Envelope_ChannelClose:
-		return s.handleChannelClose(ctx, kind.ChannelClose)
+		return s.enqueueChannelEvent(kind.ChannelClose.GetRecipientChannelId(), channelEvent{kind: channelEventClose})
 	case *sessionpb.Envelope_ChannelRequest:
-		return s.handleChannelRequest(ctx, kind.ChannelRequest)
+		return s.enqueueChannelEvent(kind.ChannelRequest.GetRecipientChannelId(), channelEvent{
+			kind:    channelEventRequest,
+			request: kind.ChannelRequest,
+		})
 	case *sessionpb.Envelope_ChannelResult:
 		return s.handleChannelResult(kind.ChannelResult)
 	case *sessionpb.Envelope_GlobalRequest:
-		return s.handleGlobalRequest(ctx, handler, kind.GlobalRequest)
+		return s.enqueueDispatch(dispatchGlobalRequest{message: kind.GlobalRequest})
 	case *sessionpb.Envelope_GlobalResult:
 		return s.handleGlobalResult(kind.GlobalResult)
 	case *sessionpb.Envelope_Disconnect:
@@ -317,18 +435,30 @@ func (s *Session) handleEnvelope(ctx context.Context, handler Handler, frame *se
 	}
 }
 
-func (s *Session) handleChannelOpen(ctx context.Context, handler Handler, msg *sessionpb.ChannelOpen) error {
+func (s *Session) handleChannelOpen(msg *sessionpb.ChannelOpen) error {
+	if msg == nil {
+		return s.protocolErrorf("received nil channel open")
+	}
+
+	s.mu.Lock()
+	if _, exists := s.peerChannelIDs[msg.GetSenderChannelId()]; exists {
+		s.mu.Unlock()
+		return s.protocolErrorf("received duplicate peer channel id %d", msg.GetSenderChannelId())
+	}
+	s.mu.Unlock()
+
 	localID := s.reserveLocalChannelID()
 	ch := newIncomingChannel(s, localID, msg.GetSenderChannelId(), msg.GetChannelType(), msg.GetInitialWindow(), msg.GetMaxPacketSize(), nil)
 
-	decision := handler.OnChannelOpen(ctx, ch, ChannelOpenRequest{
+	decision := s.handler.OnChannelOpen(s.Context(), ch, ChannelOpenRequest{
 		Type:          msg.GetChannelType(),
 		Payload:       cloneBytes(msg.GetPayload()),
 		InitialWindow: msg.GetInitialWindow(),
 		MaxPacketSize: msg.GetMaxPacketSize(),
 	})
 	if !decision.OK {
-		return s.sendEnvelope(&sessionpb.Envelope{
+		ch.shutdown(errChannelClosed)
+		return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
 			Kind: &sessionpb.Envelope_ChannelOpenResult{
 				ChannelOpenResult: &sessionpb.ChannelOpenResult{
 					RecipientChannelId: msg.GetSenderChannelId(),
@@ -348,9 +478,12 @@ func (s *Session) handleChannelOpen(ctx context.Context, handler Handler, msg *s
 
 	s.mu.Lock()
 	s.channels[localID] = ch
+	s.peerChannelIDs[msg.GetSenderChannelId()] = localID
 	s.mu.Unlock()
 
-	return s.sendEnvelope(&sessionpb.Envelope{
+	s.startChannelWorker(ch)
+
+	return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_ChannelOpenResult{
 			ChannelOpenResult: &sessionpb.ChannelOpenResult{
 				RecipientChannelId: msg.GetSenderChannelId(),
@@ -375,7 +508,7 @@ func (s *Session) handleChannelOpenResult(msg *sessionpb.ChannelOpenResult) erro
 
 	var openWait chan error
 	var autoClose bool
-	var remove bool
+	var openErr error
 
 	ch.mu.Lock()
 	if ch.openConfirmed || ch.openWait == nil {
@@ -387,6 +520,15 @@ func (s *Session) handleChannelOpenResult(msg *sessionpb.ChannelOpenResult) erro
 
 	switch result := msg.GetResult().(type) {
 	case *sessionpb.ChannelOpenResult_Success:
+		s.mu.Lock()
+		if _, exists := s.peerChannelIDs[result.Success.GetSenderChannelId()]; exists {
+			s.mu.Unlock()
+			ch.mu.Unlock()
+			return s.protocolErrorf("received duplicate peer channel id %d", result.Success.GetSenderChannelId())
+		}
+		s.peerChannelIDs[result.Success.GetSenderChannelId()] = ch.id
+		s.mu.Unlock()
+
 		ch.openConfirmed = true
 		ch.peerID = result.Success.GetSenderChannelId()
 		ch.localWindow = s.config.InitialWindow
@@ -396,22 +538,24 @@ func (s *Session) handleChannelOpenResult(msg *sessionpb.ChannelOpenResult) erro
 		ch.signalLocked()
 		autoClose = ch.openCanceled
 	case *sessionpb.ChannelOpenResult_Reject:
-		remove = true
+		openErr = eris.Errorf("channel open rejected: %s", result.Reject.GetMessage())
 		ch.signalLocked()
-		select {
-		case openWait <- eris.Errorf("channel open rejected: %s", result.Reject.GetMessage()):
-		default:
-		}
-		ch.mu.Unlock()
-		if remove {
-			s.removeChannel(ch.id)
-		}
-		return nil
+		ch.cancel(openErr)
 	default:
 		ch.mu.Unlock()
 		return s.protocolErrorf("received invalid channel open result for channel %d", msg.GetRecipientChannelId())
 	}
 	ch.mu.Unlock()
+
+	if openErr != nil {
+		s.removeChannel(ch.id)
+		ch.shutdown(openErr)
+		select {
+		case openWait <- openErr:
+		default:
+		}
+		return nil
+	}
 
 	select {
 	case openWait <- nil:
@@ -476,110 +620,6 @@ func (s *Session) handleChannelWindowAdjust(msg *sessionpb.ChannelWindowAdjust) 
 	return nil
 }
 
-func (s *Session) handleChannelEOF(ctx context.Context, msg *sessionpb.ChannelEof) error {
-	ch := s.lookupChannel(msg.GetRecipientChannelId())
-	if ch == nil {
-		return s.protocolErrorf("received channel EOF for unknown channel %d", msg.GetRecipientChannelId())
-	}
-
-	ch.mu.Lock()
-	if ch.closeSent || ch.closeReceived {
-		ch.mu.Unlock()
-		return s.protocolErrorf("received channel EOF after channel %d was closed", ch.id)
-	}
-	if ch.eofReceived {
-		ch.mu.Unlock()
-		return nil
-	}
-	ch.eofReceived = true
-	ch.signalLocked()
-	handler := ch.handler
-	ch.mu.Unlock()
-
-	handler.OnEOF(ctx, ch)
-	return nil
-}
-
-func (s *Session) handleChannelClose(ctx context.Context, msg *sessionpb.ChannelClose) error {
-	ch := s.lookupChannel(msg.GetRecipientChannelId())
-	if ch == nil {
-		return s.protocolErrorf("received channel close for unknown channel %d", msg.GetRecipientChannelId())
-	}
-
-	ch.mu.Lock()
-	if ch.closeReceived {
-		ch.mu.Unlock()
-		return nil
-	}
-	ch.closeReceived = true
-	ch.signalLocked()
-	handler := ch.handler
-	shouldRemove := ch.closeSent
-	ch.mu.Unlock()
-
-	handler.OnClose(ctx, ch)
-	if shouldRemove {
-		s.removeChannel(ch.id)
-	}
-	return nil
-}
-
-func (s *Session) handleChannelRequest(ctx context.Context, msg *sessionpb.ChannelRequest) error {
-	ch := s.lookupChannel(msg.GetRecipientChannelId())
-	if ch == nil {
-		return s.protocolErrorf("received channel request for unknown channel %d", msg.GetRecipientChannelId())
-	}
-
-	ch.mu.Lock()
-	if ch.closeSent || ch.closeReceived {
-		ch.mu.Unlock()
-		return s.protocolErrorf("received channel request for closed channel %d", ch.id)
-	}
-	handler := ch.handler
-	peerID := ch.peerID
-	ch.mu.Unlock()
-
-	response := handler.OnRequest(ctx, ch, ChannelRequest{
-		Type:      msg.GetRequestType(),
-		WantReply: msg.GetWantReply(),
-		Payload:   cloneBytes(msg.GetPayload()),
-	})
-
-	if !msg.GetWantReply() {
-		return nil
-	}
-
-	result := &sessionpb.ChannelResult{
-		RecipientChannelId: peerID,
-		RequestId:          msg.GetRequestId(),
-	}
-	if response.OK {
-		result.Result = &sessionpb.ChannelResult_Success{
-			Success: &sessionpb.OperationSuccess{Payload: cloneBytes(response.Payload)},
-		}
-	} else {
-		result.Result = &sessionpb.ChannelResult_Reject{
-			Reject: &sessionpb.OperationReject{
-				Code:    normalizeRejectCode(response.Code, "channel-request-rejected"),
-				Message: normalizeRejectMessage(response.Message, "channel request rejected"),
-				Payload: cloneBytes(response.Payload),
-			},
-		}
-	}
-
-	sendErr := s.sendEnvelope(&sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_ChannelResult{ChannelResult: result},
-	})
-	if replyHandler, ok := handler.(ChannelRequestReplyHandler); ok {
-		replyHandler.OnRequestReplied(ctx, ch, ChannelRequest{
-			Type:      msg.GetRequestType(),
-			WantReply: msg.GetWantReply(),
-			Payload:   cloneBytes(msg.GetPayload()),
-		}, response, sendErr)
-	}
-	return sendErr
-}
-
 func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
 	ch := s.lookupChannel(msg.GetRecipientChannelId())
 	if ch == nil {
@@ -625,8 +665,8 @@ func (s *Session) handleChannelResult(msg *sessionpb.ChannelResult) error {
 	}
 }
 
-func (s *Session) handleGlobalRequest(ctx context.Context, handler Handler, msg *sessionpb.GlobalRequest) error {
-	response := handler.OnGlobalRequest(ctx, GlobalRequest{
+func (s *Session) handleGlobalRequest(msg *sessionpb.GlobalRequest) error {
+	response := s.handler.OnGlobalRequest(s.Context(), GlobalRequest{
 		Type:      msg.GetRequestType(),
 		WantReply: msg.GetWantReply(),
 		Payload:   cloneBytes(msg.GetPayload()),
@@ -650,7 +690,7 @@ func (s *Session) handleGlobalRequest(ctx context.Context, handler Handler, msg 
 		}
 	}
 
-	return s.sendEnvelope(&sessionpb.Envelope{
+	return s.sendEnvelope(s.Context(), &sessionpb.Envelope{
 		Kind: &sessionpb.Envelope_GlobalResult{GlobalResult: result},
 	})
 }
@@ -707,13 +747,118 @@ func (s *Session) handleDisconnect(msg *sessionpb.Disconnect) error {
 	return eris.Errorf("remote disconnect: %s", msg.GetMessage())
 }
 
-func (s *Session) ensureRunning() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.runStarted {
-		return errSessionNotRunning
+func (s *Session) sendEnvelope(ctx context.Context, frame *sessionpb.Envelope) error {
+	ctx = normalizeContext(ctx)
+	if frame == nil {
+		return eris.New("session envelope is required")
 	}
-	return nil
+	if err := s.ensureActive(); err != nil {
+		return err
+	}
+
+	result := make(chan error, 1)
+	if err := s.enqueueWrite(outboundWrite{
+		envelope: frame,
+		result:   result,
+	}, false); err != nil {
+		return err
+	}
+
+	select {
+	case err := <-result:
+		if err != nil {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.Context().Done():
+		return s.closeCause()
+	}
+}
+
+func (s *Session) enqueueWrite(msg outboundWrite, control bool) error {
+	if msg.envelope == nil {
+		return eris.New("session envelope is required")
+	}
+
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+
+	if s.queuesClosed {
+		return s.closeCause()
+	}
+
+	queue := s.outboundQueue
+	if control {
+		queue = s.controlQueue
+	}
+
+	select {
+	case queue <- msg:
+		return nil
+	default:
+	}
+
+	err := eris.New("session outbound queue exhausted")
+	go s.shutdown(err)
+	return err
+}
+
+func (s *Session) enqueueDispatch(task dispatchTask) error {
+	select {
+	case s.dispatchQueue <- task:
+		return nil
+	default:
+		return s.queueExhausted("connection dispatch queue exhausted")
+	}
+}
+
+func (s *Session) enqueueChannelEvent(localID uint64, event channelEvent) error {
+	ch := s.lookupChannel(localID)
+	if ch == nil {
+		return s.protocolErrorf("received channel frame for unknown channel %d", localID)
+	}
+	return ch.enqueueEvent(event)
+}
+
+func (s *Session) queueExhausted(message string) error {
+	err := eris.New(message)
+	go s.shutdown(err)
+	return err
+}
+
+func (s *Session) ensureActive() error {
+	if s == nil {
+		return eris.New("session is required")
+	}
+
+	select {
+	case <-s.activated:
+	default:
+		return errSessionNotActive
+	}
+
+	select {
+	case <-s.Context().Done():
+		return s.closeCause()
+	default:
+		return nil
+	}
+}
+
+func (s *Session) waitForActivation() bool {
+	select {
+	case <-s.activated:
+		return true
+	case <-s.Context().Done():
+		return false
+	}
+}
+
+func (s *Session) startChannelWorker(ch *Channel) {
+	s.wg.Add(1)
+	go ch.loop()
 }
 
 func (s *Session) reserveLocalChannelID() uint64 {
@@ -733,91 +878,134 @@ func (s *Session) lookupChannel(id uint64) *Channel {
 func (s *Session) removeChannel(id uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.channels, id)
+	s.removeChannelLocked(id)
 }
 
-func (s *Session) sendEnvelope(frame *sessionpb.Envelope) error {
-	if frame == nil {
-		return eris.New("session envelope is required")
+func (s *Session) removeChannelLocked(id uint64) {
+	ch, ok := s.channels[id]
+	if !ok {
+		return
 	}
-	if cause := context.Cause(s.runtime.Context()); cause != nil {
-		return cause
+	delete(s.channels, id)
+	if ch.openConfirmed {
+		delete(s.peerChannelIDs, ch.peerID)
 	}
-
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-
-	if cause := context.Cause(s.runtime.Context()); cause != nil {
-		return cause
-	}
-
-	if err := wire.SendProto(s.conn, frame); err != nil {
-		if cause := context.Cause(s.runtime.Context()); cause != nil {
-			return cause
-		}
-		return eris.Wrap(err, "send session envelope")
-	}
-	return nil
 }
 
 func (s *Session) protocolErrorf(format string, args ...any) error {
-	message := fmt.Sprintf(format, args...)
-	_ = s.sendEnvelope(&sessionpb.Envelope{
-		Kind: &sessionpb.Envelope_Disconnect{
-			Disconnect: &sessionpb.Disconnect{
-				Code:    "protocol-error",
-				Message: message,
-			},
-		},
-	})
-	return eris.New(message)
-}
-
-func (s *Session) closeWithCause(cause error) {
-	if s == nil || s.runtime == nil {
-		return
-	}
-	_ = s.runtime.Fail(cause)
+	return &protocolError{message: fmt.Sprintf(format, args...)}
 }
 
 func (s *Session) closeCause() error {
-	if s == nil || s.runtime == nil {
+	if s == nil {
 		return context.Canceled
 	}
-	if cause := context.Cause(s.runtime.Context()); cause != nil {
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closeErr != nil {
+		return s.closeErr
+	}
+	if cause := context.Cause(s.Context()); cause != nil {
 		return cause
 	}
 	return context.Canceled
 }
 
 func (s *Session) shutdown(err error) {
-	if err == nil {
-		err = context.Canceled
-	}
+	s.shutdownOnce.Do(func() {
+		waitErr := err
+		closeErr := err
+		if waitErr == nil {
+			closeErr = errSessionClosed
+		}
+		if closeErr == nil {
+			closeErr = context.Canceled
+		}
 
-	s.once.Do(func() {
 		s.mu.Lock()
+		s.waitErr = waitErr
+		s.closeErr = closeErr
+		s.closing = true
+
 		channels := make([]*Channel, 0, len(s.channels))
 		for _, ch := range s.channels {
 			channels = append(channels, ch)
 		}
+
 		pendingGlobal := make([]chan globalWaitResult, 0, len(s.pendingGlobal))
 		for _, waitCh := range s.pendingGlobal {
 			pendingGlobal = append(pendingGlobal, waitCh)
 		}
 		s.pendingGlobal = make(map[uint64]chan globalWaitResult)
 		s.channels = make(map[uint64]*Channel)
-		close(s.closed)
+		s.peerChannelIDs = make(map[uint64]uint64)
 		s.mu.Unlock()
 
+		if protocolErr, ok := err.(*protocolError); ok {
+			_ = s.enqueueWrite(outboundWrite{
+				envelope: &sessionpb.Envelope{
+					Kind: &sessionpb.Envelope_Disconnect{
+						Disconnect: &sessionpb.Disconnect{
+							Code:    "protocol-error",
+							Message: protocolErr.message,
+						},
+					},
+				},
+			}, true)
+		}
+
+		s.cancel(closeErr)
+
 		for _, ch := range channels {
-			ch.shutdown(err)
+			ch.shutdown(closeErr)
 		}
 		for _, waitCh := range pendingGlobal {
 			select {
-			case waitCh <- globalWaitResult{err: err}:
+			case waitCh <- globalWaitResult{err: closeErr}:
 			default:
 			}
+		}
+
+		s.queueMu.Lock()
+		if !s.queuesClosed {
+			close(s.controlQueue)
+			close(s.outboundQueue)
+			s.queuesClosed = true
+		}
+		s.queueMu.Unlock()
+
+		go s.finalize(err)
+	})
+}
+
+func (s *Session) finalize(cause error) {
+	if _, ok := cause.(*protocolError); ok {
+		timer := time.NewTimer(s.config.DisconnectTimeout)
+		select {
+		case <-s.writerDone:
+		case <-timer.C:
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}
+
+	s.closeUnderlyingConn()
+	s.wg.Wait()
+	close(s.done)
+}
+
+func (s *Session) closeUnderlyingConn() {
+	s.closeConn.Do(func() {
+		if s.conn == nil {
+			return
+		}
+		if err := s.conn.Close(); err != nil {
+			s.logger.Debug("session close cleanup failed", "err", err)
 		}
 	})
 }
@@ -838,4 +1026,12 @@ func normalizeRejectMessage(message string, fallback string) string {
 		return fallback
 	}
 	return message
+}
+
+func (task dispatchChannelOpen) dispatch(s *Session) error {
+	return s.handleChannelOpen(task.message)
+}
+
+func (task dispatchGlobalRequest) dispatch(s *Session) error {
+	return s.handleGlobalRequest(task.message)
 }

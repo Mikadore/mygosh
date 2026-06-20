@@ -7,19 +7,12 @@ import (
 type Handler interface {
 	OnChannelOpen(ctx context.Context, ch *Channel, req ChannelOpenRequest) ChannelOpenDecision
 	OnGlobalRequest(ctx context.Context, req GlobalRequest) GlobalResponse
-	OnDisconnect(ctx context.Context, err error)
 }
 
 type ChannelHandler interface {
 	OnRequest(ctx context.Context, ch *Channel, req ChannelRequest) ChannelResponse
 	OnEOF(ctx context.Context, ch *Channel)
 	OnClose(ctx context.Context, ch *Channel)
-}
-
-// ChannelRequestReplyHandler is an optional extension for channel handlers
-// that need to start work only after a requested reply has been written.
-type ChannelRequestReplyHandler interface {
-	OnRequestReplied(ctx context.Context, ch *Channel, req ChannelRequest, response ChannelResponse, sendErr error)
 }
 
 type ChannelOpenRequest struct {
@@ -94,8 +87,6 @@ func (rejectAllHandler) OnGlobalRequest(_ context.Context, _ GlobalRequest) Glob
 		Message: "global requests are not supported",
 	}
 }
-
-func (rejectAllHandler) OnDisconnect(_ context.Context, _ error) {}
 
 func (rejectAllChannelHandler) OnRequest(_ context.Context, _ *Channel, _ ChannelRequest) ChannelResponse {
 	return ChannelResponse{

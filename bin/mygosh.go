@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/Mikadore/mygosh/app/client"
@@ -68,15 +67,11 @@ func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 	})
 
 	cmdRoot.AddCommand(&cobra.Command{
-		Use:   "connect [user@]address[:port] [command]",
+		Use:   "connect [user@]address[:port]",
 		Short: "connect to a mygosh server",
-		Args:  cobra.MinimumNArgs(1),
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			connectArgs := client.ConnectArgs{Target: args[0]}
-			if len(args) > 1 {
-				connectArgs.Command = strings.Join(args[1:], " ")
-			}
-			return client.RunClient(ctx, appRoot, connectArgs)
+			return client.RunClient(ctx, appRoot, client.ConnectArgs{Target: args[0]})
 		},
 	})
 

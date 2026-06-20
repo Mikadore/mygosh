@@ -1,0 +1,129 @@
+syntax = "proto3";
+
+package command;
+
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/Mikadore/mygosh/lib/command/commandpb;commandpb";
+
+message ClientFrame {
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+
+    Start start = 1;
+    Stdin stdin = 2;
+    StdinEof stdin_eof = 3;
+    WindowChange window_change = 4;
+  }
+}
+
+message ServerFrame {
+  oneof kind {
+    option (buf.validate.oneof).required = true;
+
+    StartResult start_result = 1;
+    Stdout stdout = 2;
+    Stderr stderr = 3;
+    Exit exit = 4;
+  }
+}
+
+message Start {
+  uint32 protocol_version = 1 [(buf.validate.field).uint32.const = 1];
+
+  oneof target {
+    option (buf.validate.oneof).required = true;
+
+    Shell shell = 2;
+    Exec exec = 3;
+  }
+
+  Pty pty = 4;
+  repeated Environment environment = 5 [(buf.validate.field).repeated.max_items = 128];
+}
+
+message Shell {}
+
+message Exec {
+  string command = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 24576
+  }];
+}
+
+message Pty {
+  string terminal = 1 [(buf.validate.field).string.max_len = 256];
+  uint32 rows = 2 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+  uint32 columns = 3 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+}
+
+message Environment {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 256
+  }];
+  string value = 2 [(buf.validate.field).string.max_len = 16384];
+}
+
+message Stdin {
+  bytes data = 1 [(buf.validate.field).bytes = {
+    min_len: 1
+    max_len: 8388608
+  }];
+}
+
+message StdinEof {}
+
+message WindowChange {
+  uint32 rows = 1 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+  uint32 columns = 2 [(buf.validate.field).uint32 = {
+    gt: 0
+    lte: 65535
+  }];
+}
+
+message StartResult {
+  bool accepted = 1;
+  string code = 2 [(buf.validate.field).string.max_len = 64];
+  string message = 3 [(buf.validate.field).string.max_len = 1024];
+}
+
+message Stdout {
+  bytes data = 1 [(buf.validate.field).bytes = {
+    min_len: 1
+    max_len: 8388608
+  }];
+}
+
+message Stderr {
+  bytes data = 1 [(buf.validate.field).bytes = {
+    min_len: 1
+    max_len: 8388608
+  }];
+}
+
+message Exit {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+
+    int32 status = 1;
+    string signal = 2 [(buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    }];
+    RuntimeFailure runtime_failure = 3;
+  }
+}
+
+message RuntimeFailure {
+  string message = 1 [(buf.validate.field).string.max_len = 1024];
+}

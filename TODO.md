@@ -16,16 +16,16 @@ This checklist is distilled from [`REVIEW.md`](REVIEW.md). Finding IDs match the
 | [x] | S3 | P1 | Connection mux | Formalize channel state, ordering, identity, and cancellation cleanup |
 | [ ] | E1 | P0 | Server app | Replace the one-connection demo with a bounded daemon accept loop |
 | [x] | E2 | P1 | Lifecycle | Give each connection phase one clear lifetime and close owner |
-| [ ] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
-| [ ] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
-| [ ] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
+| [x] | P1 | P1 | Process service | Prevent no-reply exec requests from leaking started children |
+| [x] | P2 | P1 | Process service | Remove peer-dependent and pre-exec indefinite waits |
+| [x] | P3 | P1 | Process service | Own, terminate, and reap complete child process groups |
 | [x] | C1 | P1 | Credentials | Introduce immutable per-connection credentials tied to the authenticated connection |
 | [x] | C2 | P1 | Authorization | Add connection-level permissions and concrete request authorization |
 | [ ] | N1 | P2 | Identity | Separate dial endpoint, host verification identity, server name, and audit identity |
 | [ ] | X1 | P2 | Transport | Restrict transport to Noise-backed encrypted framing |
 | [ ] | K1 | P2 | Keys | Make key identity canonical, immutable, and algorithm-tagged |
-| [ ] | D1 | P2 | Client terminal | Make terminal input forwarding cancellable |
-| [ ] | D2 | P1 | Service protocol | Replace the PTY-only command demo with explicit shell and exec semantics |
+| [x] | D1 | P2 | Client terminal | Make terminal input forwarding cancellable |
+| [x] | D2 | P1 | Service protocol | Replace the PTY-only command demo with explicit shell and exec semantics |
 | [ ] | B1 | P2 | Verification | Add adversarial, fuzz, lifecycle, and end-to-end release gates |
 | [ ] | L1 | P3 | APIs | Replace composition-heavy `WithLogger` APIs and misleading package names |
 | [x] | R1 | P0 | Authentication | Implement staged verified-proof → policy → accept/reject server authentication |
@@ -80,15 +80,15 @@ Give the raw socket, secure transport, authentication phase, and post-auth conne
 
 ### P1 — Fix no-reply exec lifecycle
 
-When a shell/exec service is reintroduced, an exec request with `want_reply=false` must not be able to start a child before forwarding, waiting, and cleanup ownership are active. Either require replies for process-start requests or restructure startup so process ownership and reaping are active before any child can exist; see **P1**.
+The command protocol no longer uses session requests. Its mandatory `StartResult` is sent only after authorization succeeds and `app/server/process` has started the child with an installed wait owner. No no-reply launch path exists; see **P1**.
 
 ### P2 — Make channel completion locally enforceable
 
-Future shell/exec channels must complete locally even if the peer withholds a close acknowledgment. Define bounded close behavior, proper stdin half-close semantics, write deadlines, and terminal states that complete independently of peer cooperation; see **P2**.
+Command completion is driven locally by process exit, protocol failure, channel loss, or cancellation. Command stdin EOF is a protocol half-close, output drain and terminal sends are bounded, and cleanup does not wait for peer close acknowledgment; see **P2**.
 
 ### P3 — Own the full process tree
 
-Create a process runner for the future service layer that owns the command, PTY or pipes, process group/session, wait result, signaling sequence, and descriptor cleanup. On channel, connection, timeout, or server shutdown, terminate descendants with bounded graceful and forced phases and reap every child exactly once; see **P3**.
+`app/server/process.Runner` owns the command, PTY or separate pipes, process group/session, descriptors, wait result, and signaling sequence. It validates explicit credentials before start, reaps once, and applies bounded process-group `SIGTERM`/`SIGKILL` cleanup on cancellation and after leader exit; see **P3**.
 
 ### C1 — Use immutable connection credentials
 
@@ -112,19 +112,19 @@ Use immutable canonical public-key identity that includes the algorithm and excl
 
 ### D1 — Cancel terminal input safely
 
-When an interactive client path returns, do not leave a goroutine blocked on `os.Stdin` after a remote process or connection ends, because it can later consume input intended for the restored local shell. Use polling/select on a dedicated descriptor, a safely closable duplicate, or a single terminal-I/O owner; see **D1**.
+The client reads through a duplicated descriptor with `poll` plus a private cancellation pipe. Command completion cancels and joins input forwarding before returning, while the original stdin descriptor remains open for the restored local shell; see **D1**.
 
 ### D2 — Define real shell and exec requests
 
-The current app path stays connected with a reject-all mux and no service implementation. Replace that placeholder with optional PTY setup followed by exactly one shell or exec request. Add non-PTY stdout/stderr separation, account-config-selected login shells, exit status/signals, filtered environment requests, and correct remote exit propagation; see **D2**.
+The directional `lib/command` protocol supports exactly one shell or exec start, optional PTY, non-PTY stdout/stderr separation, filtered environment requests, resize, stdin EOF, and exit status/signal/runtime results. Production composition authorizes the exact request and runs the account login shell or shell `-c`; the CLI propagates remote exit results; see **D2**.
 
 ### B1 — Strengthen verification and release gates
 
-Make tests, race detection, vet/static analysis, vulnerability scanning, and formatting deterministic project gates. Add malformed-auth, duplicate-ID, data-after-EOF, callback-reentrancy, cancellation, queue-limit, parser fuzzing, terminal restoration, descendant cleanup, and fully authenticated process-launch tests; see **B1**.
+Make tests, race detection, vet/static analysis, vulnerability scanning, and formatting deterministic project gates. The command milestone added malformed/order, blocked-writer, raw-byte, session-adapter, terminal-input cancellation, real process/PTY, descendant cleanup, and authenticated shell/exec smoke coverage. B1 remains open because parser fuzzing, vulnerability scanning, deterministic formatting/static-analysis gates, and broader adversarial authentication coverage are still incomplete; see **B1**.
 
 ### L1 — Simplify composition APIs
 
-Remove constructors whose names encode protocol role, storage format, policy, and logger wiring all at once. Prefer small configs and pure parser/matcher primitives, let the app own operational logging, and rename generic or ambiguous packages such as the global `session` mux and current `service` protocol; see **L1**.
+Remove constructors whose names encode protocol role, storage format, policy, and logger wiring all at once. Prefer small configs and pure parser/matcher primitives, let the app own operational logging, and rename remaining generic or ambiguous packages such as the global `session` mux. The former generic `lib/service` protocol was removed in favor of `lib/command`, but the broader API cleanup remains open; see **L1**.
 
 ### R1 — Implement staged server authentication
 
@@ -132,7 +132,7 @@ Expose a verified client proof and a one-shot pending auth decision from the pro
 
 ### R2 — Enforce dependency direction
 
-Restructure packages so app code composes protocol, security, and Unix adapters, while protocol packages never import accounts, filesystems, deployment policy, or service implementations. Consider `internal/` for unstable application APIs and use package placement/import direction—not the name `lib`—to enforce boundaries; see “Recommended architecture.”
+Restructure packages so app code composes protocol, security, and Unix adapters, while protocol packages never import accounts, filesystems, deployment policy, or service implementations. The command milestone established the intended `lib/command` → `app/commandchannel` → app service/process direction, but repository-wide package placement and remaining `lib` boundaries still need review. Consider `internal/` for unstable application APIs and use package placement/import direction—not the name `lib`—to enforce boundaries; see “Recommended architecture.”
 
 ### R3 — Decompose trust handling
 
@@ -155,4 +155,4 @@ These are not checklist items until the foundations above are stable:
 - Broad algorithm negotiation without a second supported suite.
 - A generic plugin/service framework.
 - Immediate process separation before credential and launch interfaces settle.
-- Port forwarding on top of the current synchronous, unbounded handler model.
+- Port forwarding before destination-specific authorization, limits, and lifecycle ownership are designed.

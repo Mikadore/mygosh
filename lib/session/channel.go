@@ -191,6 +191,17 @@ func (ch *Channel) Type() string {
 	return ch.typ
 }
 
+// MaxSendFrameSize reports the largest channel-data frame the peer advertised.
+// Higher-level protocols should use it to chunk their own encoded frames.
+func (ch *Channel) MaxSendFrameSize() int {
+	if ch == nil {
+		return 0
+	}
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	return int(ch.maxRemotePacket)
+}
+
 func (ch *Channel) Send(ctx context.Context, frame []byte) error {
 	ctx = normalizeContext(ctx)
 	frame = cloneBytes(frame)
@@ -298,7 +309,11 @@ func (ch *Channel) Recv(ctx context.Context) ([]byte, error) {
 		}
 
 		if ch.state.readEOF() {
+			closed := ch.state == channelClosed
 			ch.mu.Unlock()
+			if closed {
+				ch.cancel(errChannelClosed)
+			}
 			return nil, io.EOF
 		}
 		if ch.sessionErr != nil {
@@ -772,12 +787,14 @@ func (ch *Channel) handleRequest(msg *sessionpb.ChannelRequest) error {
 func (ch *Channel) handleRemoteClose() error {
 	ch.mu.Lock()
 	handler := ch.handler
-	ch.discardQueuedLocked()
 	ch.failPendingRequestsLocked(errChannelClosed)
+	cancelNow := len(ch.frames) == 0
 	ch.mu.Unlock()
 
 	handler.OnClose(ch.Context(), ch)
-	ch.cancel(errChannelClosed)
+	if cancelNow {
+		ch.cancel(errChannelClosed)
+	}
 	return nil
 }
 

@@ -12,7 +12,7 @@ import (
 func TestEmptyRegistryRejectsAllChannels(t *testing.T) {
 	registry, err := NewRegistry(serverauthz.ConnectionCredentials{}, rejectingAuthorizer{})
 	require.NoError(t, err)
-	decision := registry.OnChannelOpen(context.Background(), session.ChannelOpenRequest{Type: "session"})
+	decision := registry.OnChannelOpen(context.Background(), session.ChannelOpenRequest{Type: "command"})
 	require.False(t, decision.OK)
 	require.Equal(t, "unsupported-channel-type", decision.Code)
 }
@@ -40,7 +40,7 @@ func (rejectingAuthorizer) AuthorizeChannel(
 type testService struct{}
 
 func (testService) ChannelType() string {
-	return "session"
+	return "command"
 }
 
 func (testService) Open(

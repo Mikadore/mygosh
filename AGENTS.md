@@ -36,17 +36,21 @@ The following describes the code as it exists now, not the target architecture:
 - Establishment-owned lifecycle management tracks pre-auth phases and transfers close ownership to `Session` only after the post-auth mux is bound.
 - `lib/auth` verifies server and client signatures, runs the auth wire state machine, and returns an immutable `VerifiedClient` plus a one-shot accept/reject decision. It does not import Unix accounts or authorize client keys.
 - `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs account and permission policy seams, and returns immutable connection credentials with deny-by-default connection permissions before wire auth success.
-- `app/server/services.Registry` binds one credential snapshot to registered channel services. The production registry is currently empty and therefore rejects every channel.
-- `lib/session.Session` is the channel/global-request multiplexer. It is prepared separately, bound to an authenticated `wire.FramedConn`, activates its own workers automatically, enforces explicit channel states and hard connection/per-channel limits, and still does not itself interpret authenticated credentials.
+- `app/server/services.Registry` binds one credential snapshot to registered channel services. Production composition registers the command service.
+- `lib/session.Session` is the channel/global-request multiplexer. It is prepared separately, bound to an authenticated `wire.FramedConn`, starts its workers after explicit activation, enforces explicit channel states and hard connection/per-channel limits, and still does not itself interpret authenticated credentials.
+- `lib/command` implements a directional protobuf command protocol over an injected framed connection. It owns command ordering, dynamic data chunking, one client receive loop, serialized writes, and typed start/exit/protocol errors without importing session, accounts, authz, TTY, filesystem, or process packages.
+- `app/commandchannel` is the only adapter aware of both `session.Channel` and `command.FrameConn`.
+- `app/server/command` accepts only empty-payload `"command"` channels, authorizes exact shell/exec launches, and hands plain authorized specifications to `app/server/process`.
+- `app/server/process` launches explicit Unix identities with PTY or separate pipes, owns process groups and reaping, and performs bounded graceful/forced descendant cleanup.
 - `lib/trust` contains path-independent OpenSSH-format parsers and pure key/host matchers.
 - `lib/strictfiles` provides caller-configurable checked directory/file opens. App-owned `app/securefiles` uses anchored `OpenAt` traversal and bounded reads for every private-key and trust file.
 - The client securely loads `~/.mygosh/id_ed25519` and `~/.mygosh/known_hosts` before dialing.
-- The server securely loads `~/.mygosh/host_ed25519` before listening, resolves the requested username through the injected `lib/user.Resolver`, and securely checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
+- The server securely loads `~/.mygosh/host_ed25519` before listening, resolves the requested username through the injected `lib/account.Resolver`, and securely checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
 - The client verifies the server signature and host-key policy before using its client signer.
 - The server verifies the client signature before invoking local account/key authorization.
-- After auth, the default app path activates a reject-by-default mux, logs success, and waits for cancellation or disconnect.
-- Incoming channels and global requests are rejected normally when the nil handler is used.
-- Terminal channel data is still carried as raw bytes and tested for byte preservation.
+- After auth, the default client opens one command channel for an interactive shell or shell `-c` exec. Global and session-channel requests remain unsupported.
+- The CLI supports default interactive PTY selection, `-t`, `-T`, repeatable `--env`, resize forwarding, cancellable descriptor-polled input, raw terminal restoration, and remote exit propagation.
+- Terminal and command stream data is carried as raw bytes and tested for byte preservation.
 
 ## Known Architectural And Security Gaps
 
@@ -54,9 +58,9 @@ These are current defects or incomplete boundaries. Do not preserve them merely 
 
 - Trust-file marker, option, revocation, host matching, and malformed-entry semantics are incomplete.
 - General key and account model values still expose mutable slices, although `VerifiedClient` and `ConnectionCredentials` clone mutable data at their boundaries and accessors return copies.
-- The permission and authorized-launch boundaries exist, but no production shell/exec service consumes them yet.
 - Dial endpoint, host verification identity, client-supplied server name, and audit identity are conflated.
-- The current app path exposes no shell, exec, PTY, or terminal service yet.
+- The production permission policy is currently an explicit hardcoded demo policy rather than configuration, `authorized_keys` constraints, or PAM.
+- The server still accepts only one connection, and command processes have no PAM session, cgroup, sandbox, or configurable resource-limit integration.
 
 See [`REVIEW.md`](REVIEW.md#findings) for evidence and [`TODO.md`](TODO.md) for the checklist.
 
@@ -70,7 +74,7 @@ Application code should compose protocol, security, policy, and Unix-platform co
 
 ```text
 app/client and app/server
-    -> protocol transport/auth/connection/service packages
+    -> protocol transport/auth/session/command packages
     -> security key/secure-file/parser/matcher packages
     -> Unix account/PTY/process adapters
 ```
@@ -155,7 +159,7 @@ Treat encryption or write failure as fatal because Noise cipher state may alread
 
 ### Post-Auth Connection And Channels
 
-The global post-auth object should eventually be named `connection` or `mux`; reserve “session” for the shell/exec channel concept.
+The global post-auth object should eventually be named `connection` or `mux`; use “command” for the shell/exec channel protocol.
 
 Maintain:
 
@@ -170,9 +174,9 @@ Maintain:
 
 Do not let a handler wait for a reply that only the same blocked receive loop can process.
 
-### Services And Authorization
+### Command Service And Authorization
 
-The session/exec service should support:
+The command service must preserve:
 
 - optional PTY setup;
 - exactly one `shell` or `exec` start request;
@@ -189,7 +193,7 @@ Future forwarding should follow the same pattern: broad permission in connection
 
 ### Unix Accounts, PAM, And Processes
 
-Use a deliberate NSS-aware account adapter to snapshot account and group data. `os/user` is the current stub; a real login service also needs the login shell and account-status policy.
+`lib/account` is the current NSS-aware adapter. It uses reentrant libc account/group lookups and snapshots username, UID, GID, supplementary groups, home, and login shell. A real login service still needs explicit account-status and PAM policy.
 
 Leave a policy seam for future PAM checks before auth success. PAM session lifecycle, environment, credential switching, and process launch belong in the privileged account/process layer rather than the auth wire package.
 
@@ -207,24 +211,27 @@ This section is factual; package placement is expected to change during boundary
 
 - `bin/`: binary entrypoint and Cobra command setup.
 - `app/root/`: settings/logging construction and shutdown hooks.
-- `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, trust wiring, and reject-all post-auth activation.
+- `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, command CLI behavior, local terminal integration, and exit propagation.
+- `app/commandchannel/`: `session.Channel` to `command.FrameConn` adapter.
 - `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
-- `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and reject-all post-auth activation.
+- `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and demo command policy composition.
 - `app/server/authz/`: account resolution, `authorized_keys` path/file policy, immutable connection credentials and permissions, account/permission policy seams, and channel/launch authorization.
-- `app/server/services/`: credential-aware channel service registry; currently empty in production.
+- `app/server/command/`: command channel service and authorized-launch-to-process adapter.
+- `app/server/process/`: explicit-credential Unix process, PTY/pipe, process-group, shutdown, and reaping owner.
+- `app/server/services/`: credential-aware channel service registry.
 - `lib/transport/`: Noise handshake, channel binding, encrypted frame I/O, deadlines, and close.
 - `lib/wire/`: transport-neutral framed-connection contracts and protobuf encoding/validation.
 - `lib/auth/`: auth schema, state machine, signed payloads, proof result, and pending accept/reject decision.
 - `lib/establish/`: client connection composition and pending server establishment lifecycle.
 - `lib/session/`: prepared/bound post-auth mux, explicit channel states, mandatory resource limits, bounded callback queues, serialized post-auth writing, and bounded close behavior.
-- `lib/service/`: current PTY/exec payload protocol.
+- `lib/command/`: pure command protocol, codec, client/server state machines, chunking, and typed results.
 - `lib/strictfiles/`: descriptor-based, caller-configurable secure-open primitives used by app file policy.
 - `lib/trust/`: path-independent OpenSSH `authorized_keys`/`known_hosts` parsers and pure matchers.
 - `lib/keys/`, `lib/bincoder/`: key and binary encoding helpers.
-- `lib/user/`: account snapshot, resolver seam, and current `os/user` adapter; login shell may be empty.
-- `lib/tty/`: local raw TTY and server PTY mechanics.
+- `lib/account/`: NSS-aware account/group snapshot, resolver seam, and login-shell lookup.
+- `lib/tty/`: local raw TTY and cancellable poll-based input mechanics.
 - `lib/settings/`, `lib/logging/`: application configuration and logging infrastructure currently under `lib`.
-- `proto/`: auth, session, and command service protobuf schemas.
+- `proto/`: auth, session mux, and command protocol protobuf schemas.
 
 ## Development Rules
 
@@ -256,7 +263,8 @@ go vet ./...
 
 For protocol tests:
 
-- use `net.Pipe` with deadlines for bidirectional behavior;
+- use an in-memory `command.FrameConn` for pure command state-machine tests;
+- use `net.Pipe` with deadlines for transport/session bidirectional behavior;
 - ensure the peer reads when the test expects a write to complete;
 - test malformed messages, invalid ordering, duplicate IDs, cancellation, blocking peers, and limit exhaustion;
 - keep an explicit raw-terminal-byte preservation test.
@@ -283,4 +291,4 @@ Manual smoke testing currently uses:
 ./run-tmux.sh
 ```
 
-The current smoke path expects the key/trust files documented in [`README.md`](README.md), one accepted connection, successful auth, and an idle authenticated connection that remains up until interrupted. Treat successful smoke behavior as demo verification, not evidence of production security.
+The current smoke path expects the key/trust files documented in [`README.md`](README.md), one accepted connection, successful auth, and an interactive remote shell. Treat successful smoke behavior as demo verification, not evidence of production security.

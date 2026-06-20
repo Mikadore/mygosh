@@ -12,7 +12,7 @@ import (
 // PermissionDecision is the mutable policy output accepted at the application
 // boundary. It is validated and copied into immutable ConnectionPermissions.
 type PermissionDecision struct {
-	AllowSession       bool
+	AllowCommand       bool
 	AllowShell         bool
 	AllowExec          bool
 	AllowPTY           bool
@@ -50,7 +50,7 @@ func (f PermissionPolicyFunc) ResolvePermissions(
 
 // ConnectionPermissions is an immutable connection-wide permission snapshot.
 type ConnectionPermissions struct {
-	allowSession       bool
+	allowCommand       bool
 	allowShell         bool
 	allowExec          bool
 	allowPTY           bool
@@ -66,8 +66,8 @@ func newConnectionPermissions(decision PermissionDecision) (ConnectionPermission
 	if len(decision.ForcedCommand) > 24<<10 {
 		return ConnectionPermissions{}, eris.New("forced command exceeds maximum size")
 	}
-	if (decision.AllowShell || decision.AllowExec || decision.AllowPTY || decision.ForcedCommand != "") && !decision.AllowSession {
-		return ConnectionPermissions{}, eris.New("session sub-permissions require session permission")
+	if (decision.AllowShell || decision.AllowExec || decision.AllowPTY || decision.ForcedCommand != "") && !decision.AllowCommand {
+		return ConnectionPermissions{}, eris.New("command sub-permissions require command permission")
 	}
 	if decision.ForcedCommand != "" && !decision.AllowShell && !decision.AllowExec {
 		return ConnectionPermissions{}, eris.New("forced command requires shell or exec permission")
@@ -95,7 +95,7 @@ func newConnectionPermissions(decision PermissionDecision) (ConnectionPermission
 	slices.Sort(allowed)
 
 	return ConnectionPermissions{
-		allowSession:       decision.AllowSession,
+		allowCommand:       decision.AllowCommand,
 		allowShell:         decision.AllowShell,
 		allowExec:          decision.AllowExec,
 		allowPTY:           decision.AllowPTY,
@@ -104,8 +104,8 @@ func newConnectionPermissions(decision PermissionDecision) (ConnectionPermission
 	}, nil
 }
 
-func (p ConnectionPermissions) AllowSession() bool {
-	return p.allowSession
+func (p ConnectionPermissions) AllowCommand() bool {
+	return p.allowCommand
 }
 
 func (p ConnectionPermissions) AllowShell() bool {
@@ -135,7 +135,7 @@ func cloneConnectionPermissions(p ConnectionPermissions) ConnectionPermissions {
 
 func (p ConnectionPermissions) validate() error {
 	_, err := newConnectionPermissions(PermissionDecision{
-		AllowSession:       p.allowSession,
+		AllowCommand:       p.allowCommand,
 		AllowShell:         p.allowShell,
 		AllowExec:          p.allowExec,
 		AllowPTY:           p.allowPTY,

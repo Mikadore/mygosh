@@ -2,7 +2,7 @@
 
 `mygosh` is an experimental, from-scratch SSH-like client/server written in Go. It is not compatible with the SSH wire protocol.
 
-> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. Authentication, authorization, connection lifecycle, mux limits, and secure-file boundaries are staged, but trust-format, daemon, service-runtime, and process-cleanup gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
+> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. Authentication, authorization, command execution, connection lifecycle, mux limits, process cleanup, and secure-file boundaries are staged, but trust-format, daemon, PAM, and broader hardening gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
 
 ## What Exists Today
 
@@ -17,12 +17,16 @@ This section describes the current implementation as it is.
 - Server-side client-signature verification before local key/account authorization.
 - A staged server decision: verified proof, app-owned connection authorization, then generic accept/reject.
 - Immutable connection credentials, deny-by-default permissions, and app-owned account/permission policy seams in `app/server/authz`.
-- Channel-admission and launch-authorization boundaries plus an empty credential-aware production service registry.
+- Channel-admission and launch-authorization boundaries plus a credential-aware command service.
 - A prepared/bound/activated post-auth channel/global-request multiplexer in `lib/session`.
 - Explicit channel states, duplicate-ID/order validation, cancellation cleanup, bounded close, and mandatory connection/per-channel resource limits.
-- A reject-by-default post-auth connection that stays active until cancellation or disconnect.
+- A directional protobuf command protocol carried only through `"command"` channel data.
+- Interactive shell and shell `-c` exec modes, each with optional PTY allocation.
+- Separate stdout/stderr for non-PTY commands, merged PTY output, terminal resize, stdin half-close, environment filtering, and remote exit propagation.
+- A Unix process owner with explicit credentials, process-group cleanup, bounded TERM/KILL shutdown, and exactly-once reaping.
+- Poll-based cancellable client input and restoration of local raw terminal state.
 - Bounded, descriptor-checked loading of OpenSSH Ed25519 private keys, `known_hosts`, and `authorized_keys`.
-- Username/group lookup through Go's current `os/user` adapter.
+- NSS-aware username, UID, GID, supplementary-group, home, and login-shell lookup through `lib/account`.
 - Structured `slog` logging with optional console and JSON logfile output.
 
 The current server accepts exactly one connection, runs that connection, and exits.
@@ -43,19 +47,19 @@ The default app path currently performs:
 6. `lib/auth` returns an immutable verified client proof and pauses before its final response.
 7. `app/server/authz` resolves the account, securely checks `authorized_keys`, runs account policy, and constructs immutable credentials.
 8. The server binds a prepared post-auth mux before auth success, then sends generic accept/reject.
-9. Successful auth activates a reject-by-default mux on both peers.
-10. Client and server log success and remain connected until cancellation or disconnect.
-
-The mux type can still be constructed directly without credentials, but the default application path now attaches only a nil handler that rejects all post-auth operations.
+9. Successful auth activates the mux and the client opens a `"command"` channel.
+10. The client sends one shell or exec start frame; the server authorizes the exact launch before creating a process.
+11. Command stdin, output, resize, and exit frames travel only as channel data.
+12. Process exit or cancellation drives bounded local cleanup and channel closure.
 
 ## Known Limitations
 
 The most important current limitations are:
 
 - trust-file options, markers, revocation, wildcard/hashed-host, and malformed-entry semantics remain incomplete;
-- connection permissions and launch specifications are modeled, but no production service consumes them yet;
-- the current app path exposes no shell, exec, PTY, or terminal service yet;
-- there is no PAM integration, port forwarding, reconnect/resume, or SSH compatibility.
+- the server still accepts only one connection and uses a hardcoded demo command permission policy;
+- command execution has no PAM session, cgroup, sandbox, or configurable resource-limit integration;
+- there is no port forwarding, reconnect/resume, or SSH compatibility.
 
 This list is intentionally abbreviated. See [`REVIEW.md`](REVIEW.md#findings) for evidence and design recommendations.
 
@@ -77,8 +81,7 @@ The target design is:
 
 Future functional goals include:
 
-- distinct interactive shell and non-PTY exec requests;
-- NSS login-shell/config policy;
+- configurable command and environment policy;
 - PAM account/auth and session seams;
 - a bounded multi-client daemon;
 - port forwarding after the channel and permission layers are hardened.
@@ -158,7 +161,26 @@ Select a requested server-side username:
 go run ./bin connect alice@localhost:42022
 ```
 
-The server resolves the requested username, checks the account's configured authorization files, activates the authenticated reject-all mux, and then waits for cancellation or disconnect.
+Run a non-PTY command through the account shell:
+
+```sh
+go run ./bin connect localhost:42022 printf hello
+```
+
+Force or disable PTY allocation:
+
+```sh
+go run ./bin connect -t localhost:42022 top
+go run ./bin connect -T localhost:42022
+```
+
+Request allowlisted environment forwarding:
+
+```sh
+go run ./bin connect --env LANG --env COLORTERM=true localhost:42022
+```
+
+The current demo server permits command channels, shell, exec, PTY, and `TERM`, `COLORTERM`, `LANG`, `LC_ALL`, and `LC_CTYPE`. Authorization remains deny-by-default outside that explicit composition policy.
 
 For the current two-pane smoke test:
 
@@ -194,18 +216,22 @@ go vet ./...
 ## Repository Guide
 
 - `app/`: current CLI application composition and networking.
+- `app/commandchannel/`: the only adapter between session channels and command framing.
 - `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
 - `app/server/authz/`: account/key authorization, immutable credentials and permissions, and channel/launch authorization.
-- `app/server/services/`: credential-aware service registry; empty in the current production path.
+- `app/server/command/`: command service and authorized-launch adapter.
+- `app/server/process/`: Unix process, PTY/pipe, process-group, and reaping owner.
+- `app/server/services/`: credential-aware channel service registry.
+- `lib/account/`: NSS-aware account and group resolution.
 - `lib/transport/`: Noise handshake, channel binding, and encrypted frame transport.
 - `lib/wire/`: transport-neutral framed connections and protobuf encoding/validation.
 - `lib/auth/`: cryptographic auth protocol and staged accept/reject decision.
 - `lib/establish/`: client composition and pending server establishment lifecycle.
 - `lib/session/`: prepared/bound post-auth mux, explicit channel states, resource limits, and bounded callback/write workers.
+- `lib/command/`: pure command framing, client/server state machines, chunking, and typed results.
 - `lib/trust/`: path-independent OpenSSH-format parsers and pure matchers.
 - `lib/strictfiles/`: caller-configurable secure-open primitives used by app file policy.
-- `lib/service/`: current PTY/exec payload protocol.
-- `proto/`: protobuf source schemas.
+- `proto/`: authentication, session mux, and command protobuf schemas.
 
 Package placement describes the current tree, not the intended final boundaries. See [`AGENTS.md`](AGENTS.md) for contributor guidance.
 
@@ -214,4 +240,5 @@ Package placement describes the current tree, not the intended final boundaries.
 - [`REVIEW.md`](REVIEW.md): comprehensive review of the current implementation and proposed architecture.
 - [`TODO.md`](TODO.md): prioritized unchecked architecture/protocol checklist.
 - [`AGENTS.md`](AGENTS.md): factual current-state notes plus explicit design intent for contributors.
+- [`REFACTOR_REPORT.md`](REFACTOR_REPORT.md): command-service milestone changes, rationale, verification, and remaining gaps.
 - [`PLAN.md`](PLAN.md): older planning context; where it conflicts with the review or current code, prefer `REVIEW.md`, `TODO.md`, and `AGENTS.md`.

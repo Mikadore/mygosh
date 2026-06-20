@@ -7,6 +7,8 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
+	servercommand "github.com/Mikadore/mygosh/app/server/command"
+	serverprocess "github.com/Mikadore/mygosh/app/server/process"
 	serverservices "github.com/Mikadore/mygosh/app/server/services"
 	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/establish"
@@ -37,7 +39,27 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	authorization, err := serverauthz.New(serverauthz.Config{
 		Resolver:            usermodel.OSResolver{},
 		AuthorizedKeysPaths: defaultAuthorizedKeysPaths,
-		Logger:              logger,
+		PermissionPolicy: serverauthz.PermissionPolicyFunc(func(
+			context.Context,
+			serverauthz.ConnectionRequest,
+			usermodel.Account,
+			string,
+		) (serverauthz.PermissionDecision, error) {
+			return serverauthz.PermissionDecision{
+				AllowCommand: true,
+				AllowShell:   true,
+				AllowExec:    true,
+				AllowPTY:     true,
+				AllowedEnvironment: []string{
+					"TERM",
+					"COLORTERM",
+					"LANG",
+					"LC_ALL",
+					"LC_CTYPE",
+				},
+			}, nil
+		}),
+		Logger: logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "configure server authorization")
@@ -86,7 +108,12 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
 	}
 
-	registry, err := serverservices.NewRegistry(credentials, authorization)
+	commandService, err := servercommand.NewService(authorization, serverprocess.Runner{}, logger)
+	if err != nil {
+		_ = pending.Reject()
+		return eris.Wrap(err, "configure command service")
+	}
+	registry, err := serverservices.NewRegistry(credentials, authorization, commandService)
 	if err != nil {
 		_ = pending.Reject()
 		return eris.Wrap(err, "configure connection services")
@@ -112,6 +139,6 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		"source", credentials.MatchedSource(),
 		"fingerprint", credentials.KeyFingerprint(),
 	)
-	logger.Info("authenticated session established", "post_auth_mode", "reject-all")
+	logger.Info("authenticated session established", "post_auth_mode", "command")
 	return established.Wait()
 }

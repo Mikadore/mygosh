@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"io"
 	"net"
 	"sync"
 	"testing"
@@ -94,6 +95,36 @@ func TestSessionOpenChannelPreservesFrameBoundaries(t *testing.T) {
 	frame, err = serverChannel.Recv(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, []byte("frame-2"), frame)
+}
+
+func TestRemoteClosePreservesAlreadyQueuedChannelData(t *testing.T) {
+	serverChannels := make(chan *Channel, 1)
+	clientSession, serverSession := activatedSessionPair(t, Config{}, nil, testHandler{
+		onChannelOpen: func(_ context.Context, _ ChannelOpenRequest) ChannelOpenDecision {
+			return ChannelOpenDecision{
+				OK: true,
+				Handler: testChannelHandler{
+					onOpen: func(_ context.Context, ch *Channel) {
+						serverChannels <- ch
+					},
+				},
+			}
+		},
+	})
+	defer clientSession.Close() //nolint:errcheck
+	defer serverSession.Close() //nolint:errcheck
+
+	clientChannel, err := clientSession.OpenChannel(context.Background(), "command", nil)
+	require.NoError(t, err)
+	serverChannel := <-serverChannels
+	require.NoError(t, serverChannel.Send(context.Background(), []byte("terminal-frame")))
+	require.NoError(t, serverChannel.Close())
+
+	frame, err := clientChannel.Recv(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []byte("terminal-frame"), frame)
+	_, err = clientChannel.Recv(context.Background())
+	require.ErrorIs(t, err, io.EOF)
 }
 
 func TestSessionChannelRequestRoundTripsPayload(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-const SessionChannelType = "session"
+const CommandChannelType = "command"
 
 type ChannelAuthorizationRequest struct {
 	Type    string
@@ -126,11 +126,11 @@ func (a *Authz) AuthorizeChannel(
 	if err := credentials.validate(); err != nil {
 		return AuthorizedChannel{}, eris.Wrap(err, "validate connection credentials")
 	}
-	if request.Type != SessionChannelType {
+	if request.Type != CommandChannelType {
 		return AuthorizedChannel{}, eris.Errorf("unsupported channel type %q", request.Type)
 	}
-	if !credentials.permissions.allowSession {
-		return AuthorizedChannel{}, eris.New("session channels are not permitted")
+	if !credentials.permissions.allowCommand {
+		return AuthorizedChannel{}, eris.New("command channels are not permitted")
 	}
 	return AuthorizedChannel{
 		channelType:        request.Type,
@@ -156,7 +156,7 @@ func (a *Authz) AuthorizeLaunch(
 	if err := credentials.validate(); err != nil {
 		return AuthorizedLaunchSpec{}, eris.Wrap(err, "validate connection credentials")
 	}
-	if channel.channelType != SessionChannelType || channel.credentialIdentity == nil || channel.credentialIdentity != credentials.identity() {
+	if channel.channelType != CommandChannelType || channel.credentialIdentity == nil || channel.credentialIdentity != credentials.identity() {
 		return AuthorizedLaunchSpec{}, eris.New("authorized channel does not belong to these credentials")
 	}
 

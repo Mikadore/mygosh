@@ -11,16 +11,16 @@ import (
 func TestConnectionPermissionsDefaultToDenyAndAreImmutable(t *testing.T) {
 	authorization, credentials := authorizedCredentials(t, PermissionDecision{})
 	permissions := credentials.Permissions()
-	require.False(t, permissions.AllowSession())
+	require.False(t, permissions.AllowCommand())
 	require.False(t, permissions.AllowShell())
 	require.False(t, permissions.AllowExec())
 	require.False(t, permissions.AllowPTY())
 
-	_, err := authorization.AuthorizeChannel(context.Background(), credentials, ChannelAuthorizationRequest{Type: SessionChannelType})
+	_, err := authorization.AuthorizeChannel(context.Background(), credentials, ChannelAuthorizationRequest{Type: CommandChannelType})
 	require.ErrorContains(t, err, "not permitted")
 
 	authorization, credentials = authorizedCredentials(t, PermissionDecision{
-		AllowSession:       true,
+		AllowCommand:       true,
 		AllowExec:          true,
 		AllowedEnvironment: []string{"TERM", "LANG"},
 	})
@@ -31,17 +31,17 @@ func TestConnectionPermissionsDefaultToDenyAndAreImmutable(t *testing.T) {
 
 func TestAuthorizeChannelAndLaunch(t *testing.T) {
 	authorization, credentials := authorizedCredentials(t, PermissionDecision{
-		AllowSession:       true,
+		AllowCommand:       true,
 		AllowShell:         true,
 		AllowExec:          true,
 		AllowPTY:           true,
 		AllowedEnvironment: []string{"LANG", "TERM"},
 	})
 	channel, err := authorization.AuthorizeChannel(context.Background(), credentials, ChannelAuthorizationRequest{
-		Type: SessionChannelType,
+		Type: CommandChannelType,
 	})
 	require.NoError(t, err)
-	require.Equal(t, SessionChannelType, channel.Type())
+	require.Equal(t, CommandChannelType, channel.Type())
 
 	spec, err := authorization.AuthorizeLaunch(context.Background(), credentials, channel, LaunchRequest{
 		Kind:    LaunchExec,
@@ -70,13 +70,13 @@ func TestAuthorizeChannelAndLaunch(t *testing.T) {
 
 func TestAuthorizeLaunchAppliesForcedCommandAndRejectsConstraints(t *testing.T) {
 	authorization, credentials := authorizedCredentials(t, PermissionDecision{
-		AllowSession:       true,
+		AllowCommand:       true,
 		AllowShell:         true,
 		AllowExec:          true,
 		ForcedCommand:      "restricted-command",
 		AllowedEnvironment: []string{"LANG"},
 	})
-	channel, err := authorization.AuthorizeChannel(context.Background(), credentials, ChannelAuthorizationRequest{Type: SessionChannelType})
+	channel, err := authorization.AuthorizeChannel(context.Background(), credentials, ChannelAuthorizationRequest{Type: CommandChannelType})
 	require.NoError(t, err)
 
 	spec, err := authorization.AuthorizeLaunch(context.Background(), credentials, channel, LaunchRequest{
@@ -119,7 +119,7 @@ func TestPermissionPolicyRejectsIncoherentDecision(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
-	require.ErrorContains(t, err, "require session permission")
+	require.ErrorContains(t, err, "require command permission")
 }
 
 func authorizedCredentials(t *testing.T, decision PermissionDecision) (*Authz, ConnectionCredentials) {

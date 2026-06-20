@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth"
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/transport"
@@ -16,17 +17,14 @@ import (
 )
 
 type ServerConfig struct {
-	HostKeyProvider  auth.HostKeyProvider
+	HostKey          keys.Keypair
 	HandshakeTimeout time.Duration
 	AuthTimeout      time.Duration
 	SessionConfig    session.Config
 	Logger           *slog.Logger
 }
 
-type Server struct {
-	*session.Session
-	VerifiedClient auth.VerifiedClient
-}
+type Server struct{ *session.Session }
 
 type pendingState uint8
 
@@ -96,8 +94,8 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 	})
 
 	pendingAuth, err := auth.BeginServer(authCtx, secureConn, auth.ServerConfig{
-		HostKeyProvider: cfg.HostKeyProvider,
-		Logger:          logger,
+		HostKey: cfg.HostKey,
+		Logger:  logger,
 	})
 	if err != nil {
 		stopAuth()
@@ -166,10 +164,7 @@ func (p *PendingServer) Accept() (*Server, error) {
 		_ = p.runtime.Fail(err)
 		return nil, err
 	}
-	server := &Server{
-		Session:        sess,
-		VerifiedClient: p.auth.VerifiedClient(),
-	}
+	server := &Server{Session: sess}
 
 	p.mu.Lock()
 	p.server = server

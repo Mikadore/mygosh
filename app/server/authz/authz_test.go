@@ -17,7 +17,7 @@ import (
 )
 
 func TestAuthorizeConnectionBuildsImmutableCredentials(t *testing.T) {
-	clientKey, serverKey, verified := verifiedFixture(t, "alice")
+	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()
 	account.SupplementaryGroups = []usermodel.Group{{Id: 23, Name: "staff"}}
 	path := writeAuthorizedKeys(t, clientKey.PublicKey())
@@ -47,10 +47,8 @@ func TestAuthorizeConnectionBuildsImmutableCredentials(t *testing.T) {
 	require.Equal(t, int32(1), policyCalls.Load())
 	require.Equal(t, AuthenticationMethodPublicKey, credentials.AuthenticationMethod())
 	require.Equal(t, "alice", credentials.RequestedUsername())
-	require.Equal(t, "server.example.test", credentials.HostIdentity())
 	require.Equal(t, clientKey.PublicKey().FingerprintSHA256(), credentials.KeyFingerprint())
 	require.Equal(t, clientKey.PublicKey(), credentials.ProvedKey())
-	require.Equal(t, serverKey.PublicKey(), credentials.ServerKey())
 	require.Equal(t, account, credentials.Account())
 	require.Equal(t, path, credentials.MatchedSource())
 
@@ -63,7 +61,7 @@ func TestAuthorizeConnectionBuildsImmutableCredentials(t *testing.T) {
 }
 
 func TestAuthorizeConnectionExpandsHomeAndSkipsMissingFiles(t *testing.T) {
-	clientKey, _, verified := verifiedFixture(t, "alice")
+	clientKey, verified := verifiedFixture(t, "alice")
 	homeDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(homeDir, ".mygosh"), 0o700))
 	path := filepath.Join(homeDir, ".mygosh", "authorized_keys")
@@ -89,7 +87,7 @@ func TestAuthorizeConnectionExpandsHomeAndSkipsMissingFiles(t *testing.T) {
 }
 
 func TestAuthorizeConnectionRejectsMismatchAndMalformedFile(t *testing.T) {
-	_, _, verified := verifiedFixture(t, "alice")
+	_, verified := verifiedFixture(t, "alice")
 	otherKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 	account := testAccount()
@@ -122,7 +120,7 @@ func TestAuthorizeConnectionRejectsMismatchAndMalformedFile(t *testing.T) {
 }
 
 func TestAuthorizeConnectionEnforcesAuthorizedKeysFilePolicy(t *testing.T) {
-	clientKey, _, verified := verifiedFixture(t, "alice")
+	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()
 
 	authorizePath := func(t *testing.T, path string) error {
@@ -161,7 +159,7 @@ func TestAuthorizeConnectionEnforcesAuthorizedKeysFilePolicy(t *testing.T) {
 }
 
 func TestOpenSessionDelegatesAndLeaseCloses(t *testing.T) {
-	clientKey, _, verified := verifiedFixture(t, "alice")
+	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()
 	path := writeAuthorizedKeys(t, clientKey.PublicKey())
 	lease := &countingLease{}
@@ -197,7 +195,7 @@ func (l *countingLease) Close() error {
 	return nil
 }
 
-func verifiedFixture(t *testing.T, username string) (keys.Keypair, keys.Keypair, auth.VerifiedClient) {
+func verifiedFixture(t *testing.T, username string) (keys.Keypair, auth.VerifiedClient) {
 	t.Helper()
 	clientKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
@@ -205,7 +203,7 @@ func verifiedFixture(t *testing.T, username string) (keys.Keypair, keys.Keypair,
 	require.NoError(t, err)
 	verified, err := auth.NewVerifiedClient("server.example.test", username, clientKey.PublicKey(), serverKey.PublicKey())
 	require.NoError(t, err)
-	return clientKey, serverKey, verified
+	return clientKey, verified
 }
 
 func testAccount() usermodel.Account {

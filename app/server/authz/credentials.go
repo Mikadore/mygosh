@@ -9,11 +9,9 @@ import (
 type ConnectionCredentials struct {
 	authenticationMethod string
 	keyFingerprint       string
-	hostIdentity         string
 	requestedUsername    string
 	peerAddress          string
 	provedKey            keys.PublicKey
-	serverKey            keys.PublicKey
 	account              usermodel.Account
 	matchedSource        string
 }
@@ -24,11 +22,9 @@ func newConnectionCredentials(request ConnectionRequest, account usermodel.Accou
 	return ConnectionCredentials{
 		authenticationMethod: AuthenticationMethodPublicKey,
 		keyFingerprint:       provedKey.FingerprintSHA256(),
-		hostIdentity:         verified.HostIdentity(),
 		requestedUsername:    verified.RequestedUsername(),
 		peerAddress:          request.PeerAddress,
 		provedKey:            clonePublicKey(provedKey),
-		serverKey:            clonePublicKey(verified.ServerKey()),
 		account:              usermodel.CloneAccount(account),
 		matchedSource:        matchedSource,
 	}
@@ -42,10 +38,6 @@ func (c ConnectionCredentials) KeyFingerprint() string {
 	return c.keyFingerprint
 }
 
-func (c ConnectionCredentials) HostIdentity() string {
-	return c.hostIdentity
-}
-
 func (c ConnectionCredentials) RequestedUsername() string {
 	return c.requestedUsername
 }
@@ -56,10 +48,6 @@ func (c ConnectionCredentials) PeerAddress() string {
 
 func (c ConnectionCredentials) ProvedKey() keys.PublicKey {
 	return clonePublicKey(c.provedKey)
-}
-
-func (c ConnectionCredentials) ServerKey() keys.PublicKey {
-	return clonePublicKey(c.serverKey)
 }
 
 func (c ConnectionCredentials) Account() usermodel.Account {
@@ -79,9 +67,6 @@ func (c ConnectionCredentials) validate() error {
 	}
 	if err := c.provedKey.Validate(); err != nil {
 		return eris.Wrap(err, "proved client key")
-	}
-	if err := c.serverKey.Validate(); err != nil {
-		return eris.Wrap(err, "server key")
 	}
 	if c.keyFingerprint == "" {
 		return eris.New("client key fingerprint is required")

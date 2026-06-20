@@ -7,7 +7,6 @@ import (
 
 	"github.com/Mikadore/mygosh/app/root"
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
-	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/establish"
 	usermodel "github.com/Mikadore/mygosh/lib/user"
 	"github.com/rotisserie/eris"
@@ -73,8 +72,8 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 	logger.Info("accepted connection", "remote", conn.RemoteAddr())
 
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
-		HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
-		Logger:          logger,
+		HostKey: serverHostKey,
+		Logger:  logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")

@@ -19,7 +19,7 @@ func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 	serverErrCh := make(chan error, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
+			HostKey: serverHostKey,
 		})
 		if err == nil {
 			pendingCh <- pending
@@ -72,7 +72,7 @@ func TestBeginAcceptRejectsGenerically(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
+			HostKey: serverHostKey,
 		})
 		require.NoError(t, err)
 		pendingCh <- pending
@@ -103,7 +103,7 @@ func TestPendingCloseWithoutDecisionUnblocksClient(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
+			HostKey: serverHostKey,
 		})
 		require.NoError(t, err)
 		pendingCh <- pending
@@ -133,8 +133,8 @@ func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
 	pendingCh := make(chan *PendingServer, 1)
 	go func() {
 		pending, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
-			AuthTimeout:     75 * time.Millisecond,
+			HostKey:     serverHostKey,
+			AuthTimeout: 75 * time.Millisecond,
 		})
 		require.NoError(t, err)
 		pendingCh <- pending
@@ -171,7 +171,7 @@ func TestConnectRejectsUnexpectedHostKey(t *testing.T) {
 	serverErrCh := make(chan error, 1)
 	go func() {
 		_, err := BeginAccept(context.Background(), serverConn, ServerConfig{
-			HostKeyProvider: auth.StaticHostKeyProvider(serverHostKey),
+			HostKey: serverHostKey,
 		})
 		serverErrCh <- err
 	}()

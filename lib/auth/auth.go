@@ -12,34 +12,6 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-type HostKeyRequest struct {
-	ReferenceIdentity string
-}
-
-// HostKeyProvider is deliberately separate from auth policy: it supplies the
-// server key selected for the client's reference identity.
-type HostKeyProvider interface {
-	HostKey(ctx context.Context, req HostKeyRequest) (keys.Keypair, error)
-}
-
-type HostKeyProviderFunc func(ctx context.Context, req HostKeyRequest) (keys.Keypair, error)
-
-func (f HostKeyProviderFunc) HostKey(ctx context.Context, req HostKeyRequest) (keys.Keypair, error) {
-	if f == nil {
-		return keys.Keypair{}, eris.New("host key provider is required")
-	}
-	return f(ctx, req)
-}
-
-func StaticHostKeyProvider(keypair keys.Keypair) HostKeyProvider {
-	return HostKeyProviderFunc(func(_ context.Context, _ HostKeyRequest) (keys.Keypair, error) {
-		if err := keypair.Validate(); err != nil {
-			return keys.Keypair{}, eris.Wrap(err, "server host key")
-		}
-		return cloneKeypair(keypair), nil
-	})
-}
-
 type ClientIdentityRequest struct {
 	ReferenceIdentity string
 	Username          string
@@ -115,13 +87,13 @@ func (c ClientConfig) Validate() error {
 }
 
 type ServerConfig struct {
-	HostKeyProvider HostKeyProvider
-	Logger          *slog.Logger
+	HostKey keys.Keypair
+	Logger  *slog.Logger
 }
 
 func (c ServerConfig) Validate() error {
-	if c.HostKeyProvider == nil {
-		return eris.New("server host key provider is required")
+	if err := c.HostKey.Validate(); err != nil {
+		return eris.Wrap(err, "server host key")
 	}
 	return nil
 }

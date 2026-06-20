@@ -131,18 +131,7 @@ func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (Verif
 		return VerifiedClient{}, eris.Wrap(err, "hash host auth init")
 	}
 
-	hostKey, err := cfg.HostKeyProvider.HostKey(ctx, HostKeyRequest{
-		ReferenceIdentity: hostAuthInit.GetReferenceIdentity(),
-	})
-	if err != nil {
-		sendAuthError(m.conn, "host-key-unavailable", "server host key unavailable")
-		return VerifiedClient{}, eris.Wrap(err, "select server host key")
-	}
-	if err := hostKey.Validate(); err != nil {
-		sendAuthError(m.conn, "invalid-host-key", "server host key unavailable")
-		return VerifiedClient{}, eris.Wrap(err, "validate server host key")
-	}
-
+	hostKey := cloneKeypair(cfg.HostKey)
 	hostPublicKey := hostKey.PublicKey()
 	hostPublicKeyBlob, err := hostPublicKey.MarshalBinary()
 	if err != nil {

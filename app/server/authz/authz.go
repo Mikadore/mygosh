@@ -19,7 +19,7 @@ import (
 
 const (
 	AuthenticationMethodPublicKey = "public-key"
-	AuthorizedKeysMaxSize         = 1 << 20
+	AuthorizedKeysMaxSize         = 8 << 20
 )
 
 type ConnectionRequest struct {
@@ -140,7 +140,8 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 
 func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Account, provedKey keys.PublicKey) (string, error) {
 	var errs error
-	keyCount := 0
+	var authorizedKeys trust.AuthorizedKeys
+	var authorizedKeySources []string
 
 	for _, configuredPath := range a.authorizedKeysPaths {
 		if err := ctx.Err(); err != nil {
@@ -166,21 +167,26 @@ func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Accoun
 			continue
 		}
 
-		authorizedKeys, err := trust.ParseAuthorizedKeys(contents)
+		authorizedKeysFile, err := trust.ParseAuthorizedKeys(contents)
 		if err != nil {
 			errs = errors.Join(errs, eris.Wrapf(err, "parse authorized_keys %q", resolved))
 			continue
 		}
-		keyCount += len(authorizedKeys)
-		if trust.MatchAuthorizedKey(authorizedKeys, provedKey) {
-			return resolved, nil
+		authorizedKeys.Entries = append(authorizedKeys.Entries, authorizedKeysFile.Entries...)
+		for range authorizedKeysFile.Entries {
+			authorizedKeySources = append(authorizedKeySources, resolved)
 		}
 	}
 
+	for index, entry := range authorizedKeys.Entries {
+		if entry.Key.Compare(provedKey) == 0 {
+			return authorizedKeySources[index], nil
+		}
+	}
 	if errs != nil {
 		return "", errs
 	}
-	if keyCount == 0 {
+	if len(authorizedKeys.Entries) == 0 {
 		return "", eris.Errorf("no authorized keys found for user %q", account.Username)
 	}
 	return "", eris.Errorf("client public key is not authorized for user %q", account.Username)

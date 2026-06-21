@@ -115,6 +115,25 @@ func TestAuthorizeConnectionRejectsMismatchAndMalformedFile(t *testing.T) {
 	})
 }
 
+func TestAuthorizeConnectionAcceptsAuthorizedKeyWithOptions(t *testing.T) {
+	clientKey, verified := verifiedFixture(t, "alice")
+	account := testAccount()
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	require.NoError(t, os.WriteFile(path, []byte(`restrict,command="locked-down" `+authorizedKeysLine(t, clientKey.PublicKey())+"\n"), 0o600))
+
+	authorization, err := New(Config{
+		Resolver: usermodel.ResolverFunc(func(context.Context, string) (usermodel.Account, error) {
+			return account, nil
+		}),
+		AuthorizedKeysPaths: []string{path},
+	})
+	require.NoError(t, err)
+
+	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
+	require.NoError(t, err)
+	require.Equal(t, path, credentials.MatchedSource())
+}
+
 func TestAuthorizeConnectionEnforcesAuthorizedKeysFilePolicy(t *testing.T) {
 	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()

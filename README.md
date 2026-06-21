@@ -133,7 +133,7 @@ The current hardcoded defaults are:
 
 The `~` for server authorization files is expanded against the requested account's resolved home directory.
 
-Current trust-file support is a strict and incomplete subset. In particular, `authorized_keys` options are skipped, host matching is exact, and marker/revocation behavior is not complete. Files are opened beneath app-selected anchors without following lower-path symlinks, are ownership/mode/type checked, and are bounded to 16 KiB for private keys or 1 MiB for trust files.
+Current trust-file support is a strict and incomplete subset. In particular, `authorized_keys` options are parsed and retained but not yet enforced, host matching is exact, and marker/revocation behavior is not complete. Files are opened beneath app-selected anchors without following lower-path symlinks, are ownership/mode/type checked, and are bounded to 16 KiB for private keys or 8 MiB for trust files.
 
 ## Run
 

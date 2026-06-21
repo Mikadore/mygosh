@@ -1,7 +1,6 @@
 package trust
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -26,6 +25,12 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 
 	got, err := ParseAuthorizedKeys([]byte(contents))
 	require.NoError(t, err)
+
+	firstExpected := firstKey.PublicKey()
+	firstExpected.Comment = "user-one"
+	secondExpected := secondKey.PublicKey()
+	secondExpected.Comment = "user-two"
+
 	require.Equal(t, AuthorizedKeys{
 		Entries: []AuthorizedKeyEntry{
 			{
@@ -33,11 +38,7 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 					{Name: "command", Value: `"echo hi"`, HasValue: true},
 					{Name: "no-pty"},
 				},
-				Key: keys.PublicKey{
-					Algorithm: firstKey.PublicKey().Algorithm,
-					Bytes:     append([]byte(nil), firstKey.PublicKey().Bytes...),
-					Comment:   "user-one",
-				},
+				Key: firstExpected,
 			},
 			{
 				Options: []AuthorizedKeyOption{
@@ -45,11 +46,7 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 					{Name: "environment", Value: `"LC_ALL=C"`, HasValue: true},
 					{Name: "restrict"},
 				},
-				Key: keys.PublicKey{
-					Algorithm: secondKey.PublicKey().Algorithm,
-					Bytes:     append([]byte(nil), secondKey.PublicKey().Bytes...),
-					Comment:   "user-two",
-				},
+				Key: secondExpected,
 			},
 		},
 	}, got)
@@ -71,10 +68,10 @@ func TestMatchAuthorizedKeyAcceptsOptionBearingEntries(t *testing.T) {
 func authorizedKeysLine(t *testing.T, publicKey keys.PublicKey, comment string) string {
 	t.Helper()
 
-	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(publicKey.Bytes))
+	encoded, err := publicKey.MarshalBinary()
 	require.NoError(t, err)
 
-	line := sshPublicKey.Type() + " " + base64.StdEncoding.EncodeToString(sshPublicKey.Marshal())
+	line := ssh.KeyAlgoED25519 + " " + base64.StdEncoding.EncodeToString(encoded)
 	if comment != "" {
 		line += " " + comment
 	}

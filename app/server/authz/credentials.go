@@ -35,7 +35,7 @@ func newConnectionCredentials(
 		keyFingerprint:       provedKey.FingerprintSHA256(),
 		requestedUsername:    verified.RequestedUsername(),
 		peerAddress:          request.PeerAddress,
-		provedKey:            clonePublicKey(provedKey),
+		provedKey:            provedKey.Clone(),
 		account:              usermodel.CloneAccount(account),
 		matchedSource:        matchedSource,
 		permissions:          cloneConnectionPermissions(permissions),
@@ -60,7 +60,7 @@ func (c ConnectionCredentials) PeerAddress() string {
 }
 
 func (c ConnectionCredentials) ProvedKey() keys.PublicKey {
-	return clonePublicKey(c.provedKey)
+	return c.provedKey.Clone()
 }
 
 func (c ConnectionCredentials) Account() usermodel.Account {
@@ -111,12 +111,4 @@ func (c ConnectionCredentials) validate() error {
 		return eris.New("credential identity token is required")
 	}
 	return nil
-}
-
-func clonePublicKey(key keys.PublicKey) keys.PublicKey {
-	return keys.PublicKey{
-		Algorithm: key.Algorithm,
-		Bytes:     append([]byte(nil), key.Bytes...),
-		Comment:   key.Comment,
-	}
 }

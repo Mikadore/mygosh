@@ -74,7 +74,7 @@ func parseOpensshPrivateKeyV1(key []byte) (Keypair, error) {
 		return Keypair{}, err
 	}
 
-	if !bytes.Equal(public, privateKey.Public) {
+	if !bytes.Equal(public, privateKey.public) {
 		return Keypair{}, eris.Errorf("public key mismatch between public and private sections")
 	}
 
@@ -94,7 +94,7 @@ func parseOpensshEd25519PublicBlob(blob []byte) ([]byte, error) {
 	if len(public) != ed25519PublicKeySize {
 		return nil, eris.Errorf("public key length %d does not match expected length %d", len(public), ed25519PublicKeySize)
 	}
-	return cloneBytes(public), nil
+	return bytes.Clone(public), nil
 }
 
 func parseOpensshEd25519PrivateBlob(blob []byte) (Keypair, error) {
@@ -136,8 +136,8 @@ func parseOpensshEd25519PrivateBlob(blob []byte) (Keypair, error) {
 	}
 
 	keypair := Keypair{
-		Public:  cloneBytes(public),
-		Private: cloneBytes(private[:ed25519SeedSize]),
+		public:  bytes.Clone(public),
+		private: bytes.Clone(private[:ed25519SeedSize]),
 		Comment: comment,
 	}
 	if err := keypair.Validate(); err != nil {

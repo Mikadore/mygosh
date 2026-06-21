@@ -81,7 +81,7 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	}
 	err = cfg.VerifyServerHostKey.VerifyHostKey(ctx, HostKeyVerificationRequest{
 		ReferenceIdentity: cfg.ReferenceIdentity,
-		HostKey:           clonePublicKey(serverHostKey),
+		HostKey:           serverHostKey.Clone(),
 	})
 	if err != nil {
 		return ClientResult{}, eris.Wrap(err, "verify server host key")
@@ -96,7 +96,7 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 	clientKey, err := cfg.ClientIdentityProvider.ClientIdentity(ctx, ClientIdentityRequest{
 		ReferenceIdentity: cfg.ReferenceIdentity,
 		Username:          cfg.Username,
-		ServerHostKey:     clonePublicKey(serverHostKey),
+		ServerHostKey:     serverHostKey.Clone(),
 	})
 	if err != nil {
 		return ClientResult{}, eris.Wrap(err, "select client identity")
@@ -157,8 +157,8 @@ func (m *authMachine) authenticateClient(ctx context.Context, cfg ClientConfig) 
 
 	return ClientResult{
 		ReferenceIdentity: cfg.ReferenceIdentity,
-		ServerHostKey:     clonePublicKey(serverHostKey),
-		ClientIdentity:    ClientIdentity{Username: cfg.Username, PublicKey: clonePublicKey(clientPublicKey)},
+		ServerHostKey:     serverHostKey.Clone(),
+		ClientIdentity:    ClientIdentity{Username: cfg.Username, PublicKey: clientPublicKey.Clone()},
 	}, nil
 }
 

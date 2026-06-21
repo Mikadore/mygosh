@@ -1,7 +1,6 @@
 package client
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -45,9 +44,9 @@ func TestLoadClientIdentityRejectsMalformedKey(t *testing.T) {
 func TestLoadKnownHostsPermitsGlobalRead(t *testing.T) {
 	serverKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
-	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(serverKey.Public))
+	encoded, err := serverKey.PublicKey().MarshalBinary()
 	require.NoError(t, err)
-	line := "server.example.test " + sshPublicKey.Type() + " " + base64.StdEncoding.EncodeToString(sshPublicKey.Marshal()) + "\n"
+	line := "server.example.test " + ssh.KeyAlgoED25519 + " " + base64.StdEncoding.EncodeToString(encoded) + "\n"
 
 	path := filepath.Join(t.TempDir(), "known_hosts")
 	require.NoError(t, os.WriteFile(path, []byte(line), 0o644))

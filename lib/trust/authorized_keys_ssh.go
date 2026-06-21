@@ -54,7 +54,7 @@ func ParseAuthorizedKeys(contents []byte) (AuthorizedKeys, error) {
 
 		out.Entries = append(out.Entries, AuthorizedKeyEntry{
 			Options: parsedOptions,
-			Key:     clonePublicKey(publicKey),
+			Key:     publicKey.Clone(),
 		})
 	}
 

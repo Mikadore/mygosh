@@ -9,7 +9,7 @@ func (k *Keypair) Sign(msg []byte) Signature {
 		panic("keys: Sign requires a valid ed25519 keypair")
 	}
 
-	return cloneBytes(ed25519.Sign(ed25519.NewKeyFromSeed(k.Private), msg))
+	return append(Signature(nil), ed25519.Sign(ed25519.NewKeyFromSeed(k.private), msg)...)
 }
 
 func (k *Keypair) Verify(msg []byte, sig Signature) bool {
@@ -26,5 +26,5 @@ func (k *PublicKey) Verify(msg []byte, sig Signature) bool {
 		panic("keys: Verify requires a valid ed25519 public key")
 	}
 
-	return ed25519.Verify(ed25519.PublicKey(k.Bytes), msg, sig)
+	return ed25519.Verify(ed25519.PublicKey(k.bytes), msg, sig)
 }

@@ -21,8 +21,8 @@ func TestParseOpensshPrivateKeyRawPEM(t *testing.T) {
 	keypair, err := ParseOpensshPrivateKeyRaw([]byte(testOpenSSHPrivateKeyPEM))
 	require.NoError(t, err)
 	require.Equal(t, "mikadore@archlinux", keypair.Comment)
-	require.Equal(t, "e8ba0dc20d95598d42bc4b5a09a640b3d8fbc75092e9590a6c8bc7028c2c64e2", hex.EncodeToString(keypair.Public))
-	require.Equal(t, "bbc85166d303d9b1c173aa83706125a16ad2682a228ad32b5baefcebbbf8479f", hex.EncodeToString(keypair.Private))
+	require.Equal(t, "e8ba0dc20d95598d42bc4b5a09a640b3d8fbc75092e9590a6c8bc7028c2c64e2", hex.EncodeToString(keypair.public))
+	require.Equal(t, "bbc85166d303d9b1c173aa83706125a16ad2682a228ad32b5baefcebbbf8479f", hex.EncodeToString(keypair.private))
 	require.NoError(t, keypair.Validate())
 }
 
@@ -32,6 +32,6 @@ func TestParseOpensshPrivateKeyRawBinary(t *testing.T) {
 
 	keypair, err := ParseOpensshPrivateKeyRaw(block.Bytes)
 	require.NoError(t, err)
-	require.Len(t, keypair.Public, ed25519PublicKeySize)
-	require.Len(t, keypair.Private, ed25519SeedSize)
+	require.Len(t, keypair.public, ed25519PublicKeySize)
+	require.Len(t, keypair.private, ed25519SeedSize)
 }

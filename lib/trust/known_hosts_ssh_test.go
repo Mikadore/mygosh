@@ -1,7 +1,6 @@
 package trust
 
 import (
-	"crypto/ed25519"
 	"encoding/base64"
 	"strings"
 	"testing"
@@ -62,8 +61,8 @@ func TestJoinHostPublicKeys(t *testing.T) {
 		"right.example.test":  {rightKey.PublicKey()},
 	}, joined)
 
-	left["left.example.test"][0].Bytes[0] ^= 0xff
-	right["shared.example.test"][0].Bytes[0] ^= 0xff
+	left["left.example.test"][0] = rightKey.PublicKey()
+	right["shared.example.test"][0] = leftKey.PublicKey()
 
 	require.Equal(t, leftKey.PublicKey(), joined["left.example.test"][0])
 	require.Equal(t, sharedKey.PublicKey(), joined["shared.example.test"][0])
@@ -73,10 +72,10 @@ func TestJoinHostPublicKeys(t *testing.T) {
 func knownHostsLine(t *testing.T, hosts []string, publicKey keys.PublicKey, comment string) string {
 	t.Helper()
 
-	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(publicKey.Bytes))
+	encoded, err := publicKey.MarshalBinary()
 	require.NoError(t, err)
 
-	line := strings.Join(hosts, ",") + " " + sshPublicKey.Type() + " " + base64.StdEncoding.EncodeToString(sshPublicKey.Marshal())
+	line := strings.Join(hosts, ",") + " " + ssh.KeyAlgoED25519 + " " + base64.StdEncoding.EncodeToString(encoded)
 	if comment != "" {
 		line += " " + comment
 	}

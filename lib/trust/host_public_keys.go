@@ -26,11 +26,7 @@ func clonePublicKeys(publicKeys []keys.PublicKey) []keys.PublicKey {
 }
 
 func clonePublicKey(publicKey keys.PublicKey) keys.PublicKey {
-	return keys.PublicKey{
-		Algorithm: publicKey.Algorithm,
-		Bytes:     append([]byte(nil), publicKey.Bytes...),
-		Comment:   publicKey.Comment,
-	}
+	return publicKey.Clone()
 }
 
 func sshEd25519PublicKey(publicKey ssh.PublicKey, comment string) (keys.PublicKey, bool, error) {

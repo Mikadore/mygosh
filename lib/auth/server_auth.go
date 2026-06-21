@@ -52,8 +52,8 @@ func (p *PendingServerAuth) VerifiedClient() VerifiedClient {
 	return VerifiedClient{
 		hostIdentity:      p.verified.hostIdentity,
 		requestedUsername: p.verified.requestedUsername,
-		provenKey:         clonePublicKey(p.verified.provenKey),
-		serverKey:         clonePublicKey(p.verified.serverKey),
+		provenKey:         p.verified.provenKey.Clone(),
+		serverKey:         p.verified.serverKey.Clone(),
 	}
 }
 
@@ -130,7 +130,7 @@ func (m *authMachine) verifyClient(ctx context.Context, cfg ServerConfig) (Verif
 		return VerifiedClient{}, eris.Wrap(err, "hash host auth init")
 	}
 
-	hostKey := cloneKeypair(cfg.HostKey)
+	hostKey := cfg.HostKey.Clone()
 	hostPublicKey := hostKey.PublicKey()
 	hostPublicKeyBlob, err := hostPublicKey.MarshalBinary()
 	if err != nil {

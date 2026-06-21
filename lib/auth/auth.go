@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 
@@ -38,7 +37,7 @@ func StaticClientIdentityProvider(keypair keys.Keypair) ClientIdentityProvider {
 		if err := keypair.Validate(); err != nil {
 			return keys.Keypair{}, eris.Wrap(err, "client identity key")
 		}
-		return cloneKeypair(keypair), nil
+		return keypair.Clone(), nil
 	})
 }
 
@@ -142,8 +141,8 @@ func NewVerifiedClient(hostIdentity string, requestedUsername string, provenKey 
 	return VerifiedClient{
 		hostIdentity:      hostIdentity,
 		requestedUsername: requestedUsername,
-		provenKey:         clonePublicKey(provenKey),
-		serverKey:         clonePublicKey(serverKey),
+		provenKey:         provenKey.Clone(),
+		serverKey:         serverKey.Clone(),
 	}, nil
 }
 
@@ -156,11 +155,11 @@ func (v VerifiedClient) RequestedUsername() string {
 }
 
 func (v VerifiedClient) ProvenKey() keys.PublicKey {
-	return clonePublicKey(v.provenKey)
+	return v.provenKey.Clone()
 }
 
 func (v VerifiedClient) ServerKey() keys.PublicKey {
-	return clonePublicKey(v.serverKey)
+	return v.serverKey.Clone()
 }
 
 type authState string
@@ -328,30 +327,14 @@ func sendClientAuthReject(messageTransport wire.Framer, code string, message str
 }
 
 func ExactHostKeyVerifier(referenceIdentity string, expected keys.PublicKey) HostKeyVerifier {
-	expected = clonePublicKey(expected)
+	expected = expected.Clone()
 	return HostKeyVerifierFunc(func(_ context.Context, req HostKeyVerificationRequest) error {
 		if req.ReferenceIdentity != referenceIdentity {
 			return eris.Errorf("reference identity %q does not match expected %q", req.ReferenceIdentity, referenceIdentity)
 		}
-		if req.HostKey.Algorithm != expected.Algorithm || !bytes.Equal(req.HostKey.Bytes, expected.Bytes) {
+		if !req.HostKey.Equal(expected) {
 			return eris.Errorf("unexpected host key fingerprint %s", req.HostKey.FingerprintSHA256())
 		}
 		return nil
 	})
-}
-
-func clonePublicKey(key keys.PublicKey) keys.PublicKey {
-	return keys.PublicKey{
-		Algorithm: key.Algorithm,
-		Bytes:     cloneBytes(key.Bytes),
-		Comment:   key.Comment,
-	}
-}
-
-func cloneKeypair(keypair keys.Keypair) keys.Keypair {
-	return keys.Keypair{
-		Public:  cloneBytes(keypair.Public),
-		Private: cloneBytes(keypair.Private),
-		Comment: keypair.Comment,
-	}
 }

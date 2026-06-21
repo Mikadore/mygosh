@@ -2,7 +2,6 @@ package authz
 
 import (
 	"context"
-	"crypto/ed25519"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -53,7 +52,7 @@ func TestAuthorizeConnectionBuildsImmutableCredentials(t *testing.T) {
 	require.Equal(t, path, credentials.MatchedSource())
 
 	mutableKey := credentials.ProvedKey()
-	mutableKey.Bytes[0] ^= 0xff
+	mutableKey.Comment = "mutated"
 	mutableAccount := credentials.Account()
 	mutableAccount.SupplementaryGroups[0].Id++
 	require.Equal(t, clientKey.PublicKey(), credentials.ProvedKey())
@@ -234,7 +233,8 @@ func writeAuthorizedKeys(t *testing.T, publicKey keys.PublicKey) string {
 
 func authorizedKeysLine(t *testing.T, publicKey keys.PublicKey) string {
 	t.Helper()
-	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(publicKey.Bytes))
+
+	encoded, err := publicKey.MarshalBinary()
 	require.NoError(t, err)
-	return sshPublicKey.Type() + " " + base64.StdEncoding.EncodeToString(sshPublicKey.Marshal())
+	return ssh.KeyAlgoED25519 + " " + base64.StdEncoding.EncodeToString(encoded)
 }

@@ -1,6 +1,7 @@
 package keys
 
 import (
+	"bytes"
 	"crypto/ed25519"
 
 	"github.com/rotisserie/eris"
@@ -24,7 +25,7 @@ func ParseSSHPublicKey(publicKey ssh.PublicKey, comment string) (PublicKey, bool
 
 	return PublicKey{
 		Algorithm: AlgorithmEd25519,
-		Bytes:     cloneBytes(ed25519Key),
+		bytes:     bytes.Clone(ed25519Key),
 		Comment:   comment,
 	}, true, nil
 }
@@ -34,11 +35,11 @@ func (k PublicKey) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 
-	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(k.Bytes))
+	sshPublicKey, err := ssh.NewPublicKey(ed25519.PublicKey(k.bytes))
 	if err != nil {
 		return nil, eris.Wrap(err, "encode public key")
 	}
-	return cloneBytes(sshPublicKey.Marshal()), nil
+	return bytes.Clone(sshPublicKey.Marshal()), nil
 }
 
 func ParsePublicKey(b []byte) (PublicKey, error) {

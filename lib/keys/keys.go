@@ -24,13 +24,13 @@ const (
 
 type PublicKey struct {
 	Algorithm Algorithm
-	Bytes     []byte
+	bytes     []byte
 	Comment   string
 }
 
 type Keypair struct {
-	Public  []byte
-	Private []byte
+	public  []byte
+	private []byte
 	Comment string
 }
 
@@ -48,8 +48,8 @@ func GenerateEd25519() (Keypair, error) {
 	}
 
 	return Keypair{
-		Public:  cloneBytes(public),
-		Private: cloneBytes(private.Seed()),
+		public:  bytes.Clone(public),
+		private: bytes.Clone(private.Seed()),
 	}, nil
 }
 
@@ -64,17 +64,45 @@ func GenerateEd25519FromSeed(seed []byte) (Keypair, error) {
 	}
 
 	return Keypair{
-		Public:  public,
-		Private: cloneBytes(seed),
+		public:  public,
+		private: bytes.Clone(seed),
 	}, nil
 }
 
 func (k Keypair) PublicKey() PublicKey {
 	return PublicKey{
 		Algorithm: AlgorithmEd25519,
-		Bytes:     cloneBytes(k.Public),
+		bytes:     bytes.Clone(k.public),
 		Comment:   k.Comment,
 	}
+}
+
+func (k PublicKey) Clone() PublicKey {
+	return PublicKey{
+		Algorithm: k.Algorithm,
+		bytes:     bytes.Clone(k.bytes),
+		Comment:   k.Comment,
+	}
+}
+
+// Equal reports whether both values contain the same public-key material.
+// Comments are metadata and are not considered.
+func (k PublicKey) Equal(other PublicKey) bool {
+	return k.Compare(other) == 0
+}
+
+func (k Keypair) Clone() Keypair {
+	return Keypair{
+		public:  bytes.Clone(k.public),
+		private: bytes.Clone(k.private),
+		Comment: k.Comment,
+	}
+}
+
+// Equal reports whether both values contain the same key material.
+// Comments are metadata and are not considered.
+func (k Keypair) Equal(other Keypair) bool {
+	return bytes.Equal(k.public, other.public) && bytes.Equal(k.private, other.private)
 }
 
 func (k PublicKey) Validate() error {
@@ -83,7 +111,7 @@ func (k PublicKey) Validate() error {
 	}
 
 	if k.Algorithm == AlgorithmEd25519 {
-		return validateKeyLength(k.Bytes, ed25519PublicKeySize, "public")
+		return validateKeyLength(k.bytes, ed25519PublicKeySize, "public")
 	}
 	return eris.Errorf("validate public key: unsupported algorithm %q", k.Algorithm)
 }
@@ -92,23 +120,23 @@ func (k PublicKey) Validate() error {
 func (k PublicKey) Compare(other PublicKey) int {
 	return cmp.Or(
 		cmp.Compare(string(k.Algorithm), string(other.Algorithm)),
-		bytes.Compare(k.Bytes, other.Bytes),
+		bytes.Compare(k.bytes, other.bytes),
 	)
 }
 
 func (k Keypair) Validate() error {
-	if err := validateKeyLength(k.Public, ed25519PublicKeySize, "public"); err != nil {
+	if err := validateKeyLength(k.public, ed25519PublicKeySize, "public"); err != nil {
 		return err
 	}
-	if err := validateKeyLength(k.Private, ed25519SeedSize, "private"); err != nil {
+	if err := validateKeyLength(k.private, ed25519SeedSize, "private"); err != nil {
 		return err
 	}
 
-	derived, err := deriveEd25519Public(k.Private)
+	derived, err := deriveEd25519Public(k.private)
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(derived, k.Public) {
+	if !bytes.Equal(derived, k.public) {
 		return eris.New("ed25519 keypair public key does not match private key")
 	}
 	return nil
@@ -119,15 +147,15 @@ func ParseKeypair(b []byte) (Keypair, error) {
 }
 
 func (k PublicKey) FingerprintSHA256() string {
-	sum := sha256.Sum256(k.Bytes)
+	sum := sha256.Sum256(k.bytes)
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
 func (k PublicKey) IsZero() bool {
-	if len(k.Bytes) == 0 {
+	if len(k.bytes) == 0 {
 		return true
 	}
-	for _, b := range k.Bytes {
+	for _, b := range k.bytes {
 		if b != 0 {
 			return false
 		}
@@ -144,13 +172,6 @@ func validateAlgorithm(alg Algorithm) error {
 	}
 }
 
-func cloneBytes(b []byte) []byte {
-	if len(b) == 0 {
-		return nil
-	}
-	return append([]byte(nil), b...)
-}
-
 func validateKeyLength(b []byte, want int, label string) error {
 	if len(b) != want {
 		return eris.Errorf("%s key length %d does not match expected length %d", label, len(b), want)
@@ -164,5 +185,5 @@ func deriveEd25519Public(seed []byte) ([]byte, error) {
 	}
 
 	private := ed25519.NewKeyFromSeed(seed)
-	return cloneBytes(private.Public().(ed25519.PublicKey)), nil
+	return bytes.Clone(private.Public().(ed25519.PublicKey)), nil
 }

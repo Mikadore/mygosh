@@ -25,7 +25,7 @@ func TestEd25519SignAndVerify(t *testing.T) {
 func TestInvalidKeysPanicOnSignAndVerify(t *testing.T) {
 	keypair, err := GenerateEd25519()
 	require.NoError(t, err)
-	keypair.Private = keypair.Private[:len(keypair.Private)-1]
+	keypair.private = keypair.private[:len(keypair.private)-1]
 
 	require.Panics(t, func() {
 		_ = (&keypair).Sign([]byte("sign me"))
@@ -35,7 +35,7 @@ func TestInvalidKeysPanicOnSignAndVerify(t *testing.T) {
 	})
 
 	public := keypair.PublicKey()
-	public.Bytes = public.Bytes[:len(public.Bytes)-1]
+	public.bytes = public.bytes[:len(public.bytes)-1]
 	require.Panics(t, func() {
 		_ = (&public).Verify([]byte("sign me"), Signature([]byte("sig")))
 	})

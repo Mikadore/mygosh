@@ -18,7 +18,7 @@ func RunClient(ctx context.Context, conn BoundFramer, cfg ClientConfig) (ClientR
 		return ClientResult{}, eris.Wrap(err, "validate client auth config")
 	}
 
-	machine := newAuthMachine("client", conn, cfg.Logger)
+	machine := newAuthMachine("client", conn)
 	return machine.authenticateClient(ctx, cfg)
 }
 

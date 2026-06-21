@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 
+	"github.com/Mikadore/mygosh/app/config"
 	"github.com/Mikadore/mygosh/app/root"
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
 	servercommand "github.com/Mikadore/mygosh/app/server/command"
@@ -16,29 +17,26 @@ import (
 	"github.com/rotisserie/eris"
 )
 
-var defaultAuthorizedKeysPaths = []string{
-	"~/.mygosh/authorized_keys",
-	"~/.ssh/authorized_keys",
-}
-
-func RunServer(ctx context.Context, appRoot *root.Root) error {
+func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if appRoot == nil {
 		return eris.New("project root is required")
 	}
-	logger := appRoot.Logger.With("command", "server")
-	cfg := appRoot.Settings
-	addr := cfg.ListenAddress()
+	if err := cfg.Validate(); err != nil {
+		return eris.Wrap(err, "validate server config")
+	}
+	logger := appRoot.Audit.With("command", "server")
+	addr := cfg.Listen.Address
 
-	serverHostKey, err := loadHostKey(defaultHostKeyPath, logger)
+	serverHostKey, err := loadHostKey(cfg.Identity.HostKey)
 	if err != nil {
 		return err
 	}
 	authorization, err := serverauthz.New(serverauthz.Config{
 		Resolver:            usermodel.OSResolver{},
-		AuthorizedKeysPaths: defaultAuthorizedKeysPaths,
+		AuthorizedKeysPaths: cfg.Authorization.AuthorizedKeys,
 		PermissionPolicy: serverauthz.PermissionPolicyFunc(func(
 			context.Context,
 			serverauthz.ConnectionRequest,
@@ -59,7 +57,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 				},
 			}, nil
 		}),
-		Logger: logger,
+		AuditLogger: logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "configure server authorization")
@@ -91,7 +89,6 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
 		HostKey: serverHostKey,
-		Logger:  logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
@@ -108,7 +105,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
 	}
 
-	commandService, err := servercommand.NewService(authorization, serverprocess.Runner{}, logger)
+	commandService, err := servercommand.NewService(authorization, serverprocess.Runner{})
 	if err != nil {
 		_ = pending.Reject()
 		return eris.Wrap(err, "configure command service")
@@ -118,7 +115,7 @@ func RunServer(ctx context.Context, appRoot *root.Root) error {
 		_ = pending.Reject()
 		return eris.Wrap(err, "configure connection services")
 	}
-	prepared, err := session.Prepare(session.Config{}, registry, session.Options{Logger: logger})
+	prepared, err := session.Prepare(session.Config{}, registry)
 	if err != nil {
 		_ = pending.Reject()
 		return eris.Wrap(err, "prepare post-auth session")

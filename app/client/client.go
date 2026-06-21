@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/Mikadore/mygosh/app/commandchannel"
+	"github.com/Mikadore/mygosh/app/config"
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/auth"
 	commandprotocol "github.com/Mikadore/mygosh/lib/command"
@@ -29,7 +30,7 @@ type ConnectArgs struct {
 	Environment []string
 }
 
-func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error {
+func RunClient(ctx context.Context, appRoot *root.Root, cfg config.Client, args ConnectArgs) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -42,25 +43,27 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 	if args.ForcePTY && args.DisablePTY {
 		return eris.New("-t and -T cannot be used together")
 	}
-	logger := appRoot.Logger.With("command", "client")
-	cfg := appRoot.Settings
+	if err := cfg.Validate(); err != nil {
+		return eris.Wrap(err, "validate client config")
+	}
+	logger := appRoot.Audit.With("command", "client")
 
 	target, err := parseConnectTarget(args.Target)
 	if err != nil {
 		return err
 	}
 
-	clientIdentity, err := loadClientIdentity(defaultClientIdentityPath, logger)
+	clientIdentity, err := loadClientIdentity(cfg.Identity.PrivateKey)
 	if err != nil {
 		return err
 	}
-	knownHosts, knownHostsSource, err := loadKnownHosts(defaultKnownHostsPath, logger)
+	knownHosts, knownHostsSource, err := loadKnownHosts(cfg.Trust.KnownHosts)
 	if err != nil {
 		return err
 	}
 
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", target.dialAddress(cfg.Core.Port))
+	conn, err := dialer.DialContext(ctx, "tcp", target.dialAddress(cfg.Connection.DefaultPort))
 	if err != nil {
 		if cause := context.Cause(ctx); cause != nil {
 			return cause
@@ -74,7 +77,6 @@ func RunClient(ctx context.Context, appRoot *root.Root, args ConnectArgs) error 
 		Username:               target.resolvedUsername(),
 		ClientIdentityProvider: auth.StaticClientIdentityProvider(clientIdentity),
 		VerifyServerHostKey:    knownHostsVerifier(knownHosts, knownHostsSource, logger),
-		Logger:                 logger,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")

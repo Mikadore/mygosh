@@ -12,9 +12,40 @@ import (
 
 	charmlog "github.com/charmbracelet/log"
 	"github.com/rotisserie/eris"
-
-	"github.com/Mikadore/mygosh/lib/settings"
 )
+
+type Config struct {
+	Level string `mapstructure:"level"`
+	JSON  bool   `mapstructure:"json"`
+	File  string `mapstructure:"file"`
+}
+
+func NormalizeConfig(cfg Config, verbosity int) (Config, error) {
+	cfg.Level = strings.ToUpper(strings.TrimSpace(cfg.Level))
+	cfg.File = strings.TrimSpace(cfg.File)
+	if cfg.Level == "WARNING" {
+		cfg.Level = "WARN"
+	}
+	if verbosity == 1 {
+		cfg.Level = "INFO"
+	}
+	if verbosity >= 2 {
+		cfg.Level = "DEBUG"
+	}
+	if err := cfg.Validate(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c Config) Validate() error {
+	switch strings.ToUpper(strings.TrimSpace(c.Level)) {
+	case "", "NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL":
+		return nil
+	default:
+		return eris.Errorf("log.level must be one of DEBUG, INFO, WARN, ERROR, FATAL, NONE; got %q", c.Level)
+	}
+}
 
 var (
 	nopOnce   sync.Once
@@ -22,23 +53,28 @@ var (
 )
 
 type Service struct {
-	logger         *slog.Logger
+	audit          *slog.Logger
+	diagnostics    *slog.Logger
 	consoleEnabled *atomic.Bool
 	file           io.Closer
 	closeOnce      sync.Once
 	closeErr       error
 }
 
-func NewService(cfg settings.LogSettings) (*Service, error) {
-	if enabledLevel(cfg.Level) && cfg.File != "" {
-		logFile, err := openLogFile(cfg.File)
+func NewService(cfg Config) (*Service, error) {
+	normalized, err := NormalizeConfig(cfg, 0)
+	if err != nil {
+		return nil, err
+	}
+	if enabledLevel(normalized.Level) && normalized.File != "" {
+		logFile, err := openLogFile(normalized.File)
 		if err != nil {
 			return nil, err
 		}
-		return newService(cfg, os.Stderr, logFile, logFile), nil
+		return newService(normalized, os.Stderr, logFile, logFile), nil
 	}
 
-	return newService(cfg, os.Stderr, nil, nil), nil
+	return newService(normalized, os.Stderr, nil, nil), nil
 }
 
 func openLogFile(path string) (*os.File, error) {
@@ -55,7 +91,7 @@ func openLogFile(path string) (*os.File, error) {
 	return file, nil
 }
 
-func newService(cfg settings.LogSettings, consoleOutput io.Writer, fileOutput io.Writer, file io.Closer) *Service {
+func newService(cfg Config, consoleOutput io.Writer, fileOutput io.Writer, file io.Closer) *Service {
 	consoleEnabled := &atomic.Bool{}
 	consoleEnabled.Store(true)
 
@@ -73,18 +109,27 @@ func newService(cfg settings.LogSettings, consoleOutput io.Writer, fileOutput io
 		}
 	}
 
+	base := slog.New(multiHandler(handlers))
 	return &Service{
-		logger:         slog.New(multiHandler(handlers)),
+		audit:          base.With("stream", "audit"),
+		diagnostics:    base.With("stream", "diagnostic"),
 		consoleEnabled: consoleEnabled,
 		file:           file,
 	}
 }
 
-func (s *Service) Logger() *slog.Logger {
+func (s *Service) Audit() *slog.Logger {
 	if s == nil {
-		return Nop()
+		return nop()
 	}
-	return s.logger
+	return s.audit
+}
+
+func (s *Service) Diagnostics() *slog.Logger {
+	if s == nil {
+		return nop()
+	}
+	return s.diagnostics
 }
 
 func (s *Service) SetConsoleEnabled(enabled bool) {
@@ -106,18 +151,11 @@ func (s *Service) Close() error {
 	return s.closeErr
 }
 
-func Nop() *slog.Logger {
+func nop() *slog.Logger {
 	nopOnce.Do(func() {
 		nopLogger = slog.New(multiHandler(nil))
 	})
 	return nopLogger
-}
-
-func Resolve(logger *slog.Logger) *slog.Logger {
-	if logger != nil {
-		return logger
-	}
-	return Nop()
 }
 
 func newConsoleHandler(output io.Writer, level slog.Level, jsonOutput bool) slog.Handler {

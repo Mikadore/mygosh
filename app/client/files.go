@@ -10,20 +10,17 @@ import (
 	"github.com/Mikadore/mygosh/app/securefiles"
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
 
 const (
-	defaultClientIdentityPath = "~/.mygosh/id_ed25519"
-	defaultKnownHostsPath     = "~/.mygosh/known_hosts"
-	privateKeyMaxSize         = 16 << 10
-	knownHostsMaxSize         = 1 << 20
+	privateKeyMaxSize = 16 << 10
+	knownHostsMaxSize = 1 << 20
 )
 
-func loadClientIdentity(path string, logger *slog.Logger) (keys.Keypair, error) {
-	logger = logging.Resolve(logger)
+func loadClientIdentity(path string) (keys.Keypair, error) {
+	logger := slog.Default().With("component", "client-files")
 	contents, resolved, err := readCurrentUserFile(path, privateKeyMaxSize, false)
 	if err != nil {
 		return keys.Keypair{}, eris.Wrap(err, "load client identity")
@@ -36,8 +33,8 @@ func loadClientIdentity(path string, logger *slog.Logger) (keys.Keypair, error) 
 	return keypair, nil
 }
 
-func loadKnownHosts(path string, logger *slog.Logger) (*trust.KnownHosts, string, error) {
-	logger = logging.Resolve(logger)
+func loadKnownHosts(path string) (*trust.KnownHosts, string, error) {
+	logger := slog.Default().With("component", "client-files")
 	contents, resolved, err := readCurrentUserFile(path, knownHostsMaxSize, true)
 	if err != nil {
 		return nil, "", eris.Wrap(err, "load known_hosts")
@@ -51,7 +48,9 @@ func loadKnownHosts(path string, logger *slog.Logger) (*trust.KnownHosts, string
 }
 
 func knownHostsVerifier(knownHosts *trust.KnownHosts, source string, logger *slog.Logger) auth.HostKeyVerifier {
-	logger = logging.Resolve(logger)
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error {
 		entry, ok := knownHosts.Match(func(entry *trust.KnownHostEntry) bool {
 			return entry.MatchesValid(req.ReferenceIdentity)

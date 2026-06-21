@@ -9,7 +9,6 @@ import (
 	serverauthz "github.com/Mikadore/mygosh/app/server/authz"
 	serverprocess "github.com/Mikadore/mygosh/app/server/process"
 	commandprotocol "github.com/Mikadore/mygosh/lib/command"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/rotisserie/eris"
 )
@@ -23,10 +22,9 @@ type ProcessRunner interface {
 type Service struct {
 	authorizer serverauthz.LaunchAuthorizer
 	runner     ProcessRunner
-	logger     *slog.Logger
 }
 
-func NewService(authorizer serverauthz.LaunchAuthorizer, runner ProcessRunner, logger *slog.Logger) (*Service, error) {
+func NewService(authorizer serverauthz.LaunchAuthorizer, runner ProcessRunner) (*Service, error) {
 	if authorizer == nil {
 		return nil, eris.New("launch authorizer is required")
 	}
@@ -36,7 +34,6 @@ func NewService(authorizer serverauthz.LaunchAuthorizer, runner ProcessRunner, l
 	return &Service{
 		authorizer: authorizer,
 		runner:     runner,
-		logger:     logging.Resolve(logger),
 	}, nil
 }
 
@@ -88,7 +85,7 @@ func (h *channelHandler) OnOpen(_ context.Context, channel *session.Channel) {
 			authorized:  h.authorized,
 		}
 		if err := commandprotocol.Serve(conn, starter); err != nil {
-			h.service.logger.Debug("command channel ended", "err", err)
+			slog.Default().With("component", "command-service").Debug("command channel ended", "err", err)
 		}
 		_ = channel.Close()
 	}()

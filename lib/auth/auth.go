@@ -6,7 +6,6 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth/authpb"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 )
@@ -66,7 +65,6 @@ type ClientConfig struct {
 	Username               string
 	ClientIdentityProvider ClientIdentityProvider
 	VerifyServerHostKey    HostKeyVerifier
-	Logger                 *slog.Logger
 }
 
 func (c ClientConfig) Validate() error {
@@ -87,7 +85,6 @@ func (c ClientConfig) Validate() error {
 
 type ServerConfig struct {
 	HostKey keys.Keypair
-	Logger  *slog.Logger
 }
 
 // BoundFramer is the framed auth channel plus the Noise channel binding used
@@ -183,13 +180,13 @@ type authMachine struct {
 	logger         *slog.Logger
 }
 
-func newAuthMachine(role string, conn BoundFramer, logger *slog.Logger) *authMachine {
+func newAuthMachine(role string, conn BoundFramer) *authMachine {
 	return &authMachine{
 		role:           role,
 		state:          authStateNoiseEstablished,
 		conn:           conn,
 		channelBinding: cloneBytes(conn.ChannelBinding()),
-		logger:         logging.Resolve(logger),
+		logger:         slog.Default().With("component", "auth"),
 	}
 }
 

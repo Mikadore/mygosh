@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/rotisserie/eris"
 )
 
@@ -41,7 +40,7 @@ type runtime struct {
 	terminal error
 }
 
-func newRuntime(parent context.Context, owner io.Closer, logger *slog.Logger) *runtime {
+func newRuntime(parent context.Context, owner io.Closer, role string) *runtime {
 	parent = normalizeContext(parent)
 
 	ctx, cancel := context.WithCancelCause(parent)
@@ -50,7 +49,7 @@ func newRuntime(parent context.Context, owner io.Closer, logger *slog.Logger) *r
 		cancel: cancel,
 		owner:  owner,
 		phase:  lifecycleAccepted,
-		logger: logging.Resolve(logger),
+		logger: slog.Default().With("component", "establish", "role", role),
 	}
 
 	go func() {

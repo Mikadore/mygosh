@@ -1,0 +1,21 @@
+[listen]
+address = "localhost:42022"
+
+[identity]
+host_key = "~/.mygosh/host_ed25519"
+
+[authorization]
+authorized_keys = [
+  "~/.mygosh/authorized_keys",
+  "~/.ssh/authorized_keys",
+]
+
+[log]
+# One of: DEBUG INFO WARN ERROR FATAL NONE
+level = "DEBUG"
+
+# Output console logs as JSON
+json = false
+
+# Append structured JSON logs to this file
+file = "mygosh-server.log"

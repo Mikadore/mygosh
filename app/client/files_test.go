@@ -25,19 +25,19 @@ func TestLoadClientIdentityRequiresPrivateMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "id_ed25519")
 	require.NoError(t, os.WriteFile(path, []byte(testOpenSSHPrivateKeyPEM), 0o600))
 
-	keypair, err := loadClientIdentity(path, nil)
+	keypair, err := loadClientIdentity(path)
 	require.NoError(t, err)
 	require.NoError(t, keypair.Validate())
 
 	require.NoError(t, os.Chmod(path, 0o644))
-	_, err = loadClientIdentity(path, nil)
+	_, err = loadClientIdentity(path)
 	require.ErrorContains(t, err, "read permission")
 }
 
 func TestLoadClientIdentityRejectsMalformedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "id_ed25519")
 	require.NoError(t, os.WriteFile(path, []byte("not a private key"), 0o600))
-	_, err := loadClientIdentity(path, nil)
+	_, err := loadClientIdentity(path)
 	require.ErrorContains(t, err, "parse client identity")
 }
 
@@ -50,7 +50,7 @@ func TestLoadKnownHostsPermitsGlobalRead(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "known_hosts")
 	require.NoError(t, os.WriteFile(path, []byte(line), 0o644))
-	knownHosts, source, err := loadKnownHosts(path, nil)
+	knownHosts, source, err := loadKnownHosts(path)
 	require.NoError(t, err)
 	require.Equal(t, path, source)
 	require.NoError(t, knownHostsVerifier(knownHosts, source, nil).VerifyHostKey(t.Context(), authHostRequest(serverKey.PublicKey())))
@@ -59,7 +59,7 @@ func TestLoadKnownHostsPermitsGlobalRead(t *testing.T) {
 func TestLoadKnownHostsRejectsMalformedFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "known_hosts")
 	require.NoError(t, os.WriteFile(path, []byte("not a known_hosts entry\n"), 0o600))
-	_, _, err := loadKnownHosts(path, nil)
+	_, _, err := loadKnownHosts(path)
 	require.ErrorContains(t, err, "parse known_hosts")
 }
 

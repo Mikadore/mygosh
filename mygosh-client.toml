@@ -1,0 +1,18 @@
+[connection]
+default_port = 42022
+
+[identity]
+private_key = "~/.mygosh/id_ed25519"
+
+[trust]
+known_hosts = "~/.mygosh/known_hosts"
+
+[log]
+# One of: DEBUG INFO WARN ERROR FATAL NONE
+level = "DEBUG"
+
+# Output console logs as JSON
+json = false
+
+# Append structured JSON logs to this file
+file = "mygosh-client.log"

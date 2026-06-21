@@ -33,7 +33,7 @@ func BeginServer(ctx context.Context, conn BoundFramer, cfg ServerConfig) (*Pend
 		return nil, eris.Wrap(err, "validate server auth config")
 	}
 
-	machine := newAuthMachine("server", conn, cfg.Logger)
+	machine := newAuthMachine("server", conn)
 	verified, err := machine.verifyClient(ctx, cfg)
 	if err != nil {
 		return nil, err

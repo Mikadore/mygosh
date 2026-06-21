@@ -21,7 +21,7 @@ func TestSessionOpenChannelRequiresActivation(t *testing.T) {
 	go func() {
 		secureConn, err := transport.HandshakeServer(serverConn)
 		require.NoError(t, err)
-		prepared, err := Prepare(Config{}, nil, Options{})
+		prepared, err := Prepare(Config{}, nil)
 		require.NoError(t, err)
 		sess, err := prepared.Bind(context.Background(), secureConn)
 		require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestSessionOpenChannelRequiresActivation(t *testing.T) {
 
 	secureConn, err := transport.HandshakeClient(clientConn)
 	require.NoError(t, err)
-	prepared, err := Prepare(Config{}, nil, Options{})
+	prepared, err := Prepare(Config{}, nil)
 	require.NoError(t, err)
 	clientSession, err := prepared.Bind(context.Background(), secureConn)
 	require.NoError(t, err)
@@ -484,7 +484,7 @@ func activatedSessionPairWithContexts(
 			serverErrCh <- err
 			return
 		}
-		prepared, err := Prepare(cfg, serverHandler, Options{})
+		prepared, err := Prepare(cfg, serverHandler)
 		if err != nil {
 			serverErrCh <- err
 			return
@@ -499,7 +499,7 @@ func activatedSessionPairWithContexts(
 
 	secureConn, err := transport.HandshakeClient(clientConn)
 	require.NoError(t, err)
-	prepared, err := Prepare(cfg, clientHandler, Options{})
+	prepared, err := Prepare(cfg, clientHandler)
 	require.NoError(t, err)
 	clientSession, err := prepared.Bind(clientContext, secureConn)
 	require.NoError(t, err)

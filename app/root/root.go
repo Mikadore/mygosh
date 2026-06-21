@@ -6,33 +6,39 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/Mikadore/mygosh/lib/logging"
-	"github.com/Mikadore/mygosh/lib/settings"
+	"github.com/Mikadore/mygosh/app/logging"
 )
 
 type ShutdownFunc func(context.Context) error
 
 type Root struct {
-	Settings settings.Settings
-	Logger   *slog.Logger
-	Logging  *logging.Service
+	Audit   *slog.Logger
+	Logging *logging.Service
 
 	mu        sync.Mutex
 	shutdowns []ShutdownFunc
+
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
 
-func New(cfg settings.Settings) (*Root, error) {
-	loggingService, err := logging.NewService(cfg.Log)
+func New(cfg logging.Config) (*Root, error) {
+	loggingService, err := logging.NewService(cfg)
 	if err != nil {
 		return nil, err
 	}
 
+	previousDiagnostics := slog.Default()
+	slog.SetDefault(loggingService.Diagnostics())
+
 	root := &Root{
-		Settings: cfg,
-		Logger:   loggingService.Logger(),
-		Logging:  loggingService,
+		Audit:   loggingService.Audit(),
+		Logging: loggingService,
 	}
 	root.RegisterShutdown(func(context.Context) error {
+		if slog.Default() == loggingService.Diagnostics() {
+			slog.SetDefault(previousDiagnostics)
+		}
 		return loggingService.Close()
 	})
 	return root, nil
@@ -53,13 +59,14 @@ func (r *Root) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	r.mu.Lock()
-	shutdowns := append([]ShutdownFunc(nil), r.shutdowns...)
-	r.mu.Unlock()
+	r.shutdownOnce.Do(func() {
+		r.mu.Lock()
+		shutdowns := append([]ShutdownFunc(nil), r.shutdowns...)
+		r.mu.Unlock()
 
-	var err error
-	for i := len(shutdowns) - 1; i >= 0; i-- {
-		err = errors.Join(err, shutdowns[i](ctx))
-	}
-	return err
+		for i := len(shutdowns) - 1; i >= 0; i-- {
+			r.shutdownErr = errors.Join(r.shutdownErr, shutdowns[i](ctx))
+		}
+	})
+	return r.shutdownErr
 }

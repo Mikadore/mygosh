@@ -19,9 +19,10 @@ services:
             - .git/
             - build/
             - dist/
-            - mygosh.toml
+            - mygosh-server.toml
+            - mygosh-client.toml
 
         - action: sync+restart
-          path: ./mygosh.toml
-          target: /workspace/mygosh.toml
+          path: ./mygosh-server.toml
+          target: /workspace/mygosh-server.toml
           #initial_sync: true

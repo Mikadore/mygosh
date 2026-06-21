@@ -366,7 +366,7 @@ func TestSessionRejectsEmptyDataAndIDExhaustion(t *testing.T) {
 
 func TestLocalChannelCloseIsRemovedAfterTimeout(t *testing.T) {
 	framer := newBlockingFramedConn()
-	prepared, err := Prepare(Config{ChannelCloseTimeout: 20 * time.Millisecond}, nil, Options{})
+	prepared, err := Prepare(Config{ChannelCloseTimeout: 20 * time.Millisecond}, nil)
 	require.NoError(t, err)
 	sess, err := prepared.Bind(context.Background(), framer)
 	require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestLocalChannelCloseIsRemovedAfterTimeout(t *testing.T) {
 
 func TestQueuedWriteCancellationReleasesBudget(t *testing.T) {
 	framer := newControlledWriteFramedConn()
-	prepared, err := Prepare(Config{}, nil, Options{})
+	prepared, err := Prepare(Config{}, nil)
 	require.NoError(t, err)
 	sess, err := prepared.Bind(context.Background(), framer)
 	require.NoError(t, err)
@@ -429,7 +429,7 @@ func TestQueuedWriteCancellationReleasesBudget(t *testing.T) {
 
 func TestStartedWriteFailureIsConnectionFatal(t *testing.T) {
 	framer := &failingFramedConn{blockingFramedConn: newBlockingFramedConn()}
-	prepared, err := Prepare(Config{}, nil, Options{})
+	prepared, err := Prepare(Config{}, nil)
 	require.NoError(t, err)
 	sess, err := prepared.Bind(context.Background(), framer)
 	require.NoError(t, err)

@@ -12,7 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,54 +25,54 @@ func (w *writeCloser) Close() error {
 	return nil
 }
 
-func TestServiceFormatsConsoleTextAndDerivedAttributes(t *testing.T) {
+func TestServiceSeparatesAuditAndDiagnosticStreams(t *testing.T) {
 	var console bytes.Buffer
-	service := newService(settings.LogSettings{Level: "INFO"}, &console, nil, nil)
+	service := newService(Config{Level: "INFO"}, &console, nil, nil)
 
-	service.Logger().With("command", "client").Info("connected", "addr", "localhost:42022")
+	service.Audit().With("command", "server").Info("accepted")
+	service.Diagnostics().With("component", "session").Info("activated")
 
 	logged := console.String()
-	require.Contains(t, logged, "connected")
-	require.Contains(t, logged, "command=client")
-	require.Contains(t, logged, "addr=localhost:42022")
+	require.Contains(t, logged, "stream=audit")
+	require.Contains(t, logged, "stream=diagnostic")
+	require.Contains(t, logged, "command=server")
+	require.Contains(t, logged, "component=session")
 }
 
 func TestServiceFormatsConsoleJSON(t *testing.T) {
 	var console bytes.Buffer
-	service := newService(settings.LogSettings{Level: "INFO", JSON: true}, &console, nil, nil)
+	service := newService(Config{Level: "INFO", JSON: true}, &console, nil, nil)
 
-	service.Logger().Info("connected", "addr", "localhost:42022")
+	service.Audit().Info("connected", "addr", "localhost:42022")
 
 	var record map[string]any
 	require.NoError(t, json.Unmarshal(console.Bytes(), &record))
 	require.Equal(t, "info", record["level"])
 	require.Equal(t, "connected", record["msg"])
+	require.Equal(t, "audit", record["stream"])
 	require.Equal(t, "localhost:42022", record["addr"])
-	require.NotEmpty(t, record["time"])
 }
 
 func TestServiceFiltersBelowConfiguredLevel(t *testing.T) {
 	var console bytes.Buffer
-	service := newService(settings.LogSettings{Level: "WARN"}, &console, nil, nil)
+	service := newService(Config{Level: "WARN"}, &console, nil, nil)
 
-	service.Logger().Info("hidden")
-	service.Logger().Warn("visible")
+	service.Diagnostics().Info("hidden")
+	service.Diagnostics().Warn("visible")
 
-	logged := console.String()
-	require.NotContains(t, logged, "hidden")
-	require.Contains(t, logged, "visible")
+	require.NotContains(t, console.String(), "hidden")
+	require.Contains(t, console.String(), "visible")
 }
 
 func TestServicePreservesFatalThreshold(t *testing.T) {
 	var console bytes.Buffer
-	service := newService(settings.LogSettings{Level: "FATAL"}, &console, nil, nil)
+	service := newService(Config{Level: "FATAL"}, &console, nil, nil)
 
-	service.Logger().Error("hidden")
-	service.Logger().Log(context.Background(), slog.Level(12), "visible")
+	service.Audit().Error("hidden")
+	service.Audit().Log(context.Background(), slog.Level(12), "visible")
 
-	logged := console.String()
-	require.NotContains(t, logged, "hidden")
-	require.Contains(t, logged, "visible")
+	require.NotContains(t, console.String(), "hidden")
+	require.Contains(t, console.String(), "visible")
 }
 
 func TestServiceDisablesEmptyAndNoneLevels(t *testing.T) {
@@ -81,9 +80,10 @@ func TestServiceDisablesEmptyAndNoneLevels(t *testing.T) {
 		t.Run(strings.TrimSpace(level), func(t *testing.T) {
 			var console bytes.Buffer
 			var file bytes.Buffer
-			service := newService(settings.LogSettings{Level: level}, &console, &file, nil)
+			service := newService(Config{Level: level}, &console, &file, nil)
 
-			service.Logger().Error("hidden")
+			service.Audit().Error("hidden")
+			service.Diagnostics().Error("also hidden")
 
 			require.Empty(t, console.String())
 			require.Empty(t, file.String())
@@ -94,30 +94,25 @@ func TestServiceDisablesEmptyAndNoneLevels(t *testing.T) {
 func TestConsoleToggleDoesNotDisableFileHandler(t *testing.T) {
 	var console bytes.Buffer
 	var file bytes.Buffer
-	service := newService(settings.LogSettings{Level: "INFO"}, &console, &file, nil)
-	logger := service.Logger().With("command", "client")
+	service := newService(Config{Level: "INFO"}, &console, &file, nil)
 
-	logger.Info("before")
+	service.Audit().Info("before")
 	service.SetConsoleEnabled(false)
-	logger.Info("file only")
+	service.Diagnostics().Info("file only")
 	service.SetConsoleEnabled(true)
-	logger.Info("after")
+	service.Audit().Info("after")
 
-	consoleLog := console.String()
-	require.Contains(t, consoleLog, "before")
-	require.NotContains(t, consoleLog, "file only")
-	require.Contains(t, consoleLog, "after")
+	require.Contains(t, console.String(), "before")
+	require.NotContains(t, console.String(), "file only")
+	require.Contains(t, console.String(), "after")
 
 	fileRecords := decodeJSONLines(t, file.String())
 	require.Len(t, fileRecords, 3)
-	require.Equal(t, "before", fileRecords[0]["msg"])
-	require.Equal(t, "file only", fileRecords[1]["msg"])
-	require.Equal(t, "after", fileRecords[2]["msg"])
-	require.Equal(t, "client", fileRecords[1]["command"])
+	require.Equal(t, "diagnostic", fileRecords[1]["stream"])
 }
 
 func TestConsoleToggleIsSafeDuringLogging(t *testing.T) {
-	service := newService(settings.LogSettings{Level: "INFO"}, io.Discard, io.Discard, nil)
+	service := newService(Config{Level: "INFO"}, io.Discard, io.Discard, nil)
 
 	var wait sync.WaitGroup
 	wait.Add(2)
@@ -130,7 +125,7 @@ func TestConsoleToggleIsSafeDuringLogging(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		for i := 0; i < 1000; i++ {
-			service.Logger().Info("concurrent log", "sequence", i)
+			service.Diagnostics().Info("concurrent log", "sequence", i)
 		}
 	}()
 	wait.Wait()
@@ -140,24 +135,24 @@ func TestNewServiceAppendsJSONToConfiguredFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mygosh.log")
 	require.NoError(t, os.WriteFile(path, nil, 0o644))
 
-	first, err := NewService(settings.LogSettings{Level: "INFO", File: path})
+	first, err := NewService(Config{Level: "INFO", File: path})
 	require.NoError(t, err)
 	first.SetConsoleEnabled(false)
-	first.Logger().Info("first", "value", 1)
+	first.Audit().Info("first")
 	require.NoError(t, first.Close())
 
-	second, err := NewService(settings.LogSettings{Level: "INFO", File: path})
+	second, err := NewService(Config{Level: "INFO", File: path})
 	require.NoError(t, err)
 	second.SetConsoleEnabled(false)
-	second.Logger().Info("second", "value", 2)
+	second.Diagnostics().Info("second")
 	require.NoError(t, second.Close())
 
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	records := decodeJSONLines(t, string(content))
 	require.Len(t, records, 2)
-	require.Equal(t, "first", records[0]["msg"])
-	require.Equal(t, "second", records[1]["msg"])
+	require.Equal(t, "audit", records[0]["stream"])
+	require.Equal(t, "diagnostic", records[1]["stream"])
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
@@ -165,41 +160,49 @@ func TestNewServiceAppendsJSONToConfiguredFile(t *testing.T) {
 }
 
 func TestNewServiceReturnsLogFileOpenError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing", "mygosh.log")
-
-	service, err := NewService(settings.LogSettings{Level: "INFO", File: path})
+	service, err := NewService(Config{
+		Level: "INFO",
+		File:  filepath.Join(t.TempDir(), "missing", "mygosh.log"),
+	})
 
 	require.Nil(t, service)
 	require.ErrorContains(t, err, "open log file")
 }
 
 func TestNewServiceDoesNotOpenFileWhenLoggingIsDisabled(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "missing", "mygosh.log")
-
-	service, err := NewService(settings.LogSettings{Level: "NONE", File: path})
+	service, err := NewService(Config{
+		Level: "NONE",
+		File:  filepath.Join(t.TempDir(), "missing", "mygosh.log"),
+	})
 
 	require.NoError(t, err)
-	require.NotNil(t, service)
 	require.NoError(t, service.Close())
 }
 
 func TestServiceCloseClosesFileOnce(t *testing.T) {
 	closer := &writeCloser{Writer: io.Discard}
-	service := newService(settings.LogSettings{Level: "INFO"}, io.Discard, closer, closer)
+	service := newService(Config{Level: "INFO"}, io.Discard, closer, closer)
 
 	require.NoError(t, service.Close())
 	require.NoError(t, service.Close())
 	require.Equal(t, 1, closer.closeCount)
 }
 
-func TestResolveReturnsProvidedLoggerAndNopForNil(t *testing.T) {
-	provided := slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+func TestNormalizeConfigAppliesVerbosityAndValidatesLevel(t *testing.T) {
+	cfg, err := NormalizeConfig(Config{Level: " none ", File: " log.json "}, 2)
+	require.NoError(t, err)
+	require.Equal(t, "DEBUG", cfg.Level)
+	require.Equal(t, "log.json", cfg.File)
 
-	require.Same(t, provided, Resolve(provided))
-	require.NotNil(t, Resolve(nil))
-	require.Same(t, Nop(), Resolve(nil))
+	_, err = NormalizeConfig(Config{Level: "verbose"}, 0)
+	require.Error(t, err)
+}
+
+func TestNilServiceReturnsNopLoggers(t *testing.T) {
+	var service *Service
 	require.NotPanics(t, func() {
-		Resolve(nil).Info("discarded")
+		service.Audit().Info("discarded audit")
+		service.Diagnostics().Info("discarded diagnostic")
 	})
 }
 

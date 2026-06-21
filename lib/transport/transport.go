@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/bincoder"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/flynn/noise"
 	"github.com/rotisserie/eris"
@@ -101,37 +100,29 @@ func (t *Transport) SetWriteDeadline(deadline time.Time) error {
 }
 
 func HandshakeClient(conn net.Conn) (*Transport, error) {
-	return HandshakeClientWithLogger(conn, nil)
-}
-
-func HandshakeClientWithLogger(conn net.Conn, logger *slog.Logger) (*Transport, error) {
 	config, err := createConfig(true)
 	if err != nil {
 		return nil, err
 	}
-	return handshake(conn, config, logger)
+	return handshake(conn, config)
 }
 
 func HandshakeServer(conn net.Conn) (*Transport, error) {
-	return HandshakeServerWithLogger(conn, nil)
-}
-
-func HandshakeServerWithLogger(conn net.Conn, logger *slog.Logger) (*Transport, error) {
 	config, err := createConfig(false)
 	if err != nil {
 		return nil, err
 	}
-	return handshake(conn, config, logger)
+	return handshake(conn, config)
 }
 
-func handshake(conn net.Conn, config noise.Config, logger *slog.Logger) (*Transport, error) {
+func handshake(conn net.Conn, config noise.Config) (*Transport, error) {
 	t := Transport{conn: conn}
 	state, err := noise.NewHandshakeState(config)
 	if err != nil {
 		return &t, eris.Wrap(err, "Failed to create noise handshake state")
 	}
 
-	logger = logging.Resolve(logger)
+	logger := slog.Default().With("component", "transport")
 	logger.Info("running handshake", "initiator", config.Initiator)
 
 	// If not initiating, first read from conn then write

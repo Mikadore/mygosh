@@ -12,7 +12,6 @@ import (
 	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/trust"
 	"github.com/rotisserie/eris"
 )
@@ -45,7 +44,7 @@ type Config struct {
 	AuthorizedKeysPaths []string
 	AccountPolicy       AccountPolicy
 	PermissionPolicy    PermissionPolicy
-	Logger              *slog.Logger
+	AuditLogger         *slog.Logger
 }
 
 type Authz struct {
@@ -53,7 +52,7 @@ type Authz struct {
 	authorizedKeysPaths []string
 	accountPolicy       AccountPolicy
 	permissionPolicy    PermissionPolicy
-	logger              *slog.Logger
+	auditLogger         *slog.Logger
 }
 
 func New(cfg Config) (*Authz, error) {
@@ -75,7 +74,7 @@ func New(cfg Config) (*Authz, error) {
 		authorizedKeysPaths: append([]string(nil), cfg.AuthorizedKeysPaths...),
 		accountPolicy:       cfg.AccountPolicy,
 		permissionPolicy:    cfg.PermissionPolicy,
-		logger:              logging.Resolve(cfg.Logger),
+		auditLogger:         resolveAuditLogger(cfg.AuditLogger),
 	}, nil
 }
 
@@ -126,7 +125,7 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 	if err := credentials.validate(); err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "validate connection credentials")
 	}
-	a.logger.Info(
+	a.auditLogger.Info(
 		"authorized client connection",
 		"requested_username", credentials.RequestedUsername(),
 		"local_username", credentials.Account().Username,
@@ -153,7 +152,11 @@ func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Accoun
 			errs = errors.Join(errs, err)
 			continue
 		}
-		a.logger.Debug("loading authorized_keys", "username", account.Username, "path", resolved)
+		slog.Default().With("component", "server-authz").Debug(
+			"loading authorized_keys",
+			"username", account.Username,
+			"path", resolved,
+		)
 
 		contents, err := securefiles.Read(anchor, relative, securefiles.Policy{
 			OwnerID:         account.Id,
@@ -194,6 +197,13 @@ func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Accoun
 		return matchedSource, nil
 	}
 	return "", eris.Errorf("client public key is not authorized for user %q", account.Username)
+}
+
+func resolveAuditLogger(logger *slog.Logger) *slog.Logger {
+	if logger != nil {
+		return logger
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 func resolveAccountPath(homeDir string, configuredPath string) (resolved string, anchor string, relative string, err error) {

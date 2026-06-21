@@ -10,21 +10,15 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session/sessionpb"
 	"github.com/Mikadore/mygosh/lib/wire"
 	"github.com/rotisserie/eris"
 	"google.golang.org/protobuf/proto"
 )
 
-type Options struct {
-	Logger *slog.Logger
-}
-
 type Prepared struct {
 	config  Config
 	handler Handler
-	logger  *slog.Logger
 }
 
 type globalWaitResult struct {
@@ -127,7 +121,7 @@ type Session struct {
 	handler      Handler
 }
 
-func Prepare(cfg Config, handler Handler, opts Options) (*Prepared, error) {
+func Prepare(cfg Config, handler Handler) (*Prepared, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, eris.Wrap(err, "validate session mux config")
 	}
@@ -135,7 +129,6 @@ func Prepare(cfg Config, handler Handler, opts Options) (*Prepared, error) {
 	return &Prepared{
 		config:  cfg.withDefaults(),
 		handler: normalizeHandler(handler),
-		logger:  logging.Resolve(opts.Logger),
 	}, nil
 }
 
@@ -156,7 +149,7 @@ func (p *Prepared) Bind(parent context.Context, conn wire.FramedConn) (*Session,
 	queueCapacity := int(p.config.Limits.MaxQueuedFramesTotal)
 	s := &Session{
 		conn:                   conn,
-		logger:                 logging.Resolve(p.logger),
+		logger:                 slog.Default().With("component", "session"),
 		config:                 p.config,
 		ctx:                    ctx,
 		cancel:                 cancel,

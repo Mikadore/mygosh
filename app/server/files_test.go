@@ -21,18 +21,18 @@ func TestLoadHostKeyRequiresPrivateMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host_ed25519")
 	require.NoError(t, os.WriteFile(path, []byte(testOpenSSHHostKeyPEM), 0o600))
 
-	keypair, err := loadHostKey(path, nil)
+	keypair, err := loadHostKey(path)
 	require.NoError(t, err)
 	require.NoError(t, keypair.Validate())
 
 	require.NoError(t, os.Chmod(path, 0o644))
-	_, err = loadHostKey(path, nil)
+	_, err = loadHostKey(path)
 	require.ErrorContains(t, err, "read permission")
 }
 
 func TestLoadHostKeyRejectsMalformedKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host_ed25519")
 	require.NoError(t, os.WriteFile(path, []byte("not a private key"), 0o600))
-	_, err := loadHostKey(path, nil)
+	_, err := loadHostKey(path)
 	require.ErrorContains(t, err, "parse host key")
 }

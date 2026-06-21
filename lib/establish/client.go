@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Mikadore/mygosh/lib/auth"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
@@ -21,7 +20,6 @@ type ClientConfig struct {
 	HandshakeTimeout       time.Duration
 	AuthTimeout            time.Duration
 	SessionConfig          session.Config
-	Logger                 *slog.Logger
 }
 
 type Client struct {
@@ -46,19 +44,19 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
-	logger := logging.Resolve(cfg.Logger)
-	prepared, err := session.Prepare(cfg.SessionConfig, nil, session.Options{Logger: logger})
+	logger := slog.Default().With("component", "establish", "role", "client")
+	prepared, err := session.Prepare(cfg.SessionConfig, nil)
 	if err != nil {
 		return nil, err
 	}
 	logger.Debug("starting client connection", "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
-	runtime := newRuntime(ctx, conn, logger)
+	runtime := newRuntime(ctx, conn, "client")
 
 	var secureConn *transport.Transport
 	err = runtime.RunWithTimeout(lifecycleHandshaking, handshakeTimeout, func() error {
 		var err error
-		secureConn, err = transport.HandshakeClientWithLogger(conn, logger)
+		secureConn, err = transport.HandshakeClient(conn)
 		return err
 	})
 	if err != nil {
@@ -78,7 +76,6 @@ func Connect(ctx context.Context, conn net.Conn, cfg ClientConfig) (*Client, err
 			Username:               cfg.Username,
 			ClientIdentityProvider: cfg.ClientIdentityProvider,
 			VerifyServerHostKey:    cfg.VerifyServerHostKey,
-			Logger:                 logger,
 		})
 		return err
 	})

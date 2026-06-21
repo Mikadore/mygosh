@@ -12,7 +12,7 @@ import (
 )
 
 func TestServiceAcceptsOnlyEmptyCommandChannelOpen(t *testing.T) {
-	service, err := NewService(stubLaunchAuthorizer{}, stubRunner{}, nil)
+	service, err := NewService(stubLaunchAuthorizer{}, stubRunner{})
 	require.NoError(t, err)
 
 	decision, err := service.Open(

@@ -15,7 +15,7 @@ import (
 
 func TestBeginAcceptWaitsForDecisionAndAccepts(t *testing.T) {
 	serverHostKey, clientIdentity, clientConn, serverConn := establishmentFixture(t)
-	prepared, err := session.Prepare(session.Config{}, nil, session.Options{})
+	prepared, err := session.Prepare(session.Config{}, nil)
 	require.NoError(t, err)
 
 	pendingCh := make(chan *PendingServer, 1)
@@ -161,7 +161,7 @@ func TestPendingAuthTimeoutIncludesApplicationPolicyDelay(t *testing.T) {
 		t.Fatal("timed out waiting for pending auth deadline")
 	}
 	require.ErrorIs(t, context.Cause(pending.Context()), context.DeadlineExceeded)
-	prepared, err := session.Prepare(session.Config{}, nil, session.Options{})
+	prepared, err := session.Prepare(session.Config{}, nil)
 	require.NoError(t, err)
 	_, err = pending.Accept(prepared)
 	require.ErrorIs(t, err, context.DeadlineExceeded)

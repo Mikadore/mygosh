@@ -88,26 +88,59 @@ Future functional goals include:
 
 ## Configuration
 
-`mygosh.toml` is currently required in the process working directory. Defaults apply to missing fields inside the file; a missing file is an error.
+The server and client use separate configuration contracts. By default,
+`server` loads `mygosh-server.toml` and `connect` loads
+`mygosh-client.toml` from the process working directory. A missing file is an
+error. Use the command-specific `--config` flag to select another path.
 
-Example:
+Server example:
 
 ```toml
-[core]
-host = "localhost"
-port = 42022
+[listen]
+address = "localhost:42022"
+
+[identity]
+host_key = "~/.mygosh/host_ed25519"
+
+[authorization]
+authorized_keys = [
+  "~/.mygosh/authorized_keys",
+  "~/.ssh/authorized_keys",
+]
 
 [log]
 level = "DEBUG"
 json = false
-file = "mygosh.log"
+file = "mygosh-server.log"
+```
+
+Client example:
+
+```toml
+[connection]
+default_port = 42022
+
+[identity]
+private_key = "~/.mygosh/id_ed25519"
+
+[trust]
+known_hosts = "~/.mygosh/known_hosts"
+
+[log]
+level = "DEBUG"
+json = false
+file = "mygosh-client.log"
 ```
 
 Current field behavior:
 
-- `core.host` and `core.port` form the server listen address.
-- The client uses `core.port` when its target omits a port.
-- Handshake/auth timeouts and trust-file paths are not configurable through this file.
+- `listen.address` is the server TCP listen endpoint.
+- `connection.default_port` is used when the client target omits a port.
+- Identity and trust paths are owned by their respective command
+  configuration.
+- Unknown fields are rejected, so client-only settings cannot silently appear
+  in a server file or vice versa.
+- Handshake and authentication timeouts are not yet configurable.
 
 Logging levels are `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, `NONE`, or empty. CLI verbosity overrides the configured level:
 
@@ -119,9 +152,15 @@ mygosh -vv server   # DEBUG
 
 When `log.file` is set, the process appends structured JSON logs to that path and sets its mode to `0600`.
 
+Application audit records use an explicitly passed logger tagged
+`stream=audit`. Library lifecycle diagnostics use the process-wide
+`slog.Default()` logger installed by application composition and tagged
+`stream=diagnostic`. The app owns handlers, destinations, formatting, and
+logger shutdown.
+
 ## Required Key And Trust Files
 
-The current hardcoded defaults are:
+The default configuration paths are:
 
 | Role | Path | Purpose |
 |---|---|---|
@@ -216,6 +255,9 @@ go vet ./...
 ## Repository Guide
 
 - `app/`: current CLI application composition and networking.
+- `app/config/`: strict command-specific client and server configuration.
+- `app/logging/`: audit/diagnostic logger construction and file lifecycle.
+- `app/root/`: diagnostic logger installation and shutdown hooks.
 - `app/commandchannel/`: the only adapter between session channels and command framing.
 - `app/securefiles/`: app-owned anchored traversal and bounded credential/trust reads.
 - `app/server/authz/`: account/key authorization, immutable credentials and permissions, and channel/launch authorization.

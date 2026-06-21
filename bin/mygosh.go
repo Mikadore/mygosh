@@ -9,9 +9,9 @@ import (
 	"syscall"
 
 	"github.com/Mikadore/mygosh/app/client"
+	"github.com/Mikadore/mygosh/app/config"
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/app/server"
-	"github.com/Mikadore/mygosh/lib/settings"
 	"github.com/rotisserie/eris"
 	"github.com/spf13/cobra"
 )
@@ -40,7 +40,6 @@ func main() {
 
 func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 	var verbosity int
-	var cfg settings.Settings
 	var appRoot *root.Root
 
 	cmdRoot := &cobra.Command{
@@ -48,41 +47,48 @@ func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 		Short:         "minimal SSH-like terminal transport experiment",
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			loaded, err := settings.Load(verbosity)
-			if err != nil {
-				return err
-			}
-			cfg = loaded
-			createdRoot, err := root.New(cfg)
-			if err != nil {
-				return err
-			}
-			appRoot = createdRoot
-			return nil
-		},
 	}
 	cmdRoot.PersistentFlags().CountVarP(&verbosity, "verbose", "v", "increase log verbosity (-v INFO, -vv DEBUG)")
 
-	cmdRoot.AddCommand(&cobra.Command{
+	var serverConfigPath string
+	serverCommand := &cobra.Command{
 		Use:     "server",
 		Aliases: []string{"serve"},
 		Short:   "run the mygosh server",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return server.RunServer(ctx, appRoot)
+			cfg, err := config.LoadServer(serverConfigPath, verbosity)
+			if err != nil {
+				return err
+			}
+			appRoot, err = root.New(cfg.Log)
+			if err != nil {
+				return err
+			}
+			return server.RunServer(ctx, appRoot, cfg)
 		},
-	})
+	}
+	serverCommand.Flags().StringVar(&serverConfigPath, "config", config.DefaultServerFile, "server configuration file")
+	cmdRoot.AddCommand(serverCommand)
 
 	var forcePTY bool
 	var disablePTY bool
 	var environment []string
+	var clientConfigPath string
 	connectCommand := &cobra.Command{
 		Use:   "connect [user@]address[:port] [command [args...]]",
 		Short: "connect to a mygosh server",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.RunClient(ctx, appRoot, client.ConnectArgs{
+			cfg, err := config.LoadClient(clientConfigPath, verbosity)
+			if err != nil {
+				return err
+			}
+			appRoot, err = root.New(cfg.Log)
+			if err != nil {
+				return err
+			}
+			return client.RunClient(ctx, appRoot, cfg, client.ConnectArgs{
 				Target:      args[0],
 				Command:     append([]string(nil), args[1:]...),
 				ForcePTY:    forcePTY,
@@ -94,6 +100,7 @@ func newRootCommand(ctx context.Context) (*cobra.Command, func() *root.Root) {
 	connectCommand.Flags().BoolVarP(&forcePTY, "tty", "t", false, "force pseudo-terminal allocation")
 	connectCommand.Flags().BoolVarP(&disablePTY, "no-tty", "T", false, "disable pseudo-terminal allocation")
 	connectCommand.Flags().StringArrayVar(&environment, "env", nil, "forward NAME or NAME=value (repeatable)")
+	connectCommand.Flags().StringVar(&clientConfigPath, "config", config.DefaultClientFile, "client configuration file")
 	connectCommand.MarkFlagsMutuallyExclusive("tty", "no-tty")
 	cmdRoot.AddCommand(connectCommand)
 

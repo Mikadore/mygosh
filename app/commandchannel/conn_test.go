@@ -29,9 +29,9 @@ func TestCompleteCommandExchangeOverSessionData(t *testing.T) {
 		},
 		requests: &sessionRequests,
 	}
-	clientPrepared, err := session.Prepare(session.Config{MaxPacketSize: 64}, nil, session.Options{})
+	clientPrepared, err := session.Prepare(session.Config{MaxPacketSize: 64}, nil)
 	require.NoError(t, err)
-	serverPrepared, err := session.Prepare(session.Config{MaxPacketSize: 64}, serverHandler, session.Options{})
+	serverPrepared, err := session.Prepare(session.Config{MaxPacketSize: 64}, serverHandler)
 	require.NoError(t, err)
 	clientSession, err := clientPrepared.Bind(context.Background(), clientWire)
 	require.NoError(t, err)

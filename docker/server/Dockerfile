@@ -32,7 +32,7 @@ RUN apt-get update \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/mygosh /usr/local/bin/mygosh
-COPY mygosh.toml ./mygosh.toml
+COPY mygosh-server.toml ./mygosh-server.toml
 
 EXPOSE 42022
 

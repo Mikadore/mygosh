@@ -25,7 +25,9 @@ Do not infer that a stated design intent is already implemented. [`REVIEW.md`](R
 The following describes the code as it exists now, not the target architecture:
 
 - One Cobra binary provides `server`/`serve` and `connect`.
-- `mygosh.toml` is required in the current working directory.
+- `mygosh-server.toml` and `mygosh-client.toml` are separate required
+  command-specific configuration files by default. Each command accepts
+  `--config` to select another path.
 - `app/client` owns TCP dialing; `app/server` owns TCP listening and accepting.
 - The server accepts exactly one connection and exits after that connection finishes.
 - `lib/transport.Transport` performs a Noise NN handshake and encrypted length-prefixed frame I/O over a `net.Conn`.
@@ -44,13 +46,23 @@ The following describes the code as it exists now, not the target architecture:
 - `app/server/process` launches explicit Unix identities with PTY or separate pipes, owns process groups and reaping, and performs bounded graceful/forced descendant cleanup.
 - `lib/trust` contains path-independent OpenSSH-format parsers and pure key/host matchers.
 - `lib/strictfiles` provides caller-configurable checked directory/file opens. App-owned `app/securefiles` uses anchored `OpenAt` traversal and bounded reads for every private-key and trust file.
-- The client securely loads `~/.mygosh/id_ed25519` and `~/.mygosh/known_hosts` before dialing.
-- The server securely loads `~/.mygosh/host_ed25519` before listening, resolves the requested username through the injected `lib/account.Resolver`, and securely checks `~/.mygosh/authorized_keys` and `~/.ssh/authorized_keys` in that account's home.
+- The client securely loads its configured private key and `known_hosts` file
+  before dialing; defaults remain `~/.mygosh/id_ed25519` and
+  `~/.mygosh/known_hosts`.
+- The server securely loads its configured host key before listening, resolves
+  the requested username through the injected `lib/account.Resolver`, and
+  securely checks the configured `authorized_keys` paths in that account's
+  home. Defaults remain `~/.mygosh/host_ed25519`,
+  `~/.mygosh/authorized_keys`, and `~/.ssh/authorized_keys`.
 - The client verifies the server signature and host-key policy before using its client signer.
 - The server verifies the client signature before invoking local account/key authorization.
 - After auth, the default client opens one command channel for an interactive shell or shell `-c` exec. Global and session-channel requests remain unsupported.
 - The CLI supports default interactive PTY selection, `-t`, `-T`, repeatable `--env`, resize forwarding, cancellable descriptor-polled input, raw terminal restoration, and remote exit propagation.
 - Terminal and command stream data is carried as raw bytes and tested for byte preservation.
+- `app/logging` owns handlers, output formatting, optional log files, and
+  lifecycle. Application audit loggers are passed explicitly; protocol
+  libraries emit diagnostics through the `slog.Default()` logger installed by
+  `app/root`.
 
 ## Known Architectural And Security Gaps
 
@@ -210,7 +222,10 @@ A process owner must:
 This section is factual; package placement is expected to change during boundary cleanup.
 
 - `bin/`: binary entrypoint and Cobra command setup.
-- `app/root/`: settings/logging construction and shutdown hooks.
+- `app/config/`: strict client/server configuration loading and validation.
+- `app/logging/`: application-owned audit and diagnostic logger construction,
+  outputs, formatting, and file lifecycle.
+- `app/root/`: diagnostic logger installation and shutdown hooks.
 - `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, command CLI behavior, local terminal integration, and exit propagation.
 - `app/commandchannel/`: `session.Channel` to `command.FrameConn` adapter.
 - `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
@@ -230,7 +245,6 @@ This section is factual; package placement is expected to change during boundary
 - `lib/keys/`, `lib/bincoder/`: key and binary encoding helpers.
 - `lib/account/`: NSS-aware account/group snapshot, resolver seam, and login-shell lookup.
 - `lib/tty/`: local raw TTY and cancellable poll-based input mechanics.
-- `lib/settings/`, `lib/logging/`: application configuration and logging infrastructure currently under `lib`.
 - `proto/`: auth, session mux, and command protocol protobuf schemas.
 
 ## Development Rules
@@ -244,7 +258,10 @@ This section is factual; package placement is expected to change during boundary
 - Use deterministic protobuf serialization only for signed/transcript material.
 - Use `github.com/rotisserie/eris` for wrapped errors unless a refactor deliberately standardizes error handling.
 - Use `log/slog`; keep console presentation details out of protocol/security packages.
-- Pass explicit loggers from app composition; do not mutate a global default logger.
+- Application/audit logging is passed explicitly from composition. Protocol
+  libraries use the process-wide diagnostic `slog.Default()` installed and
+  restored by `app/root`; libraries must not configure handlers, outputs,
+  formats, or levels.
 - Keep private keys, authorization paths, account lookup, PAM, and process policy out of transport.
 - Do not target Windows.
 - Do not add SSH wire compatibility, reconnect/resume, ControlMaster-like behavior, or broad algorithm negotiation while the foundation remains unstable.

@@ -23,7 +23,7 @@ already exists.
 | [ ] | P4 | P2 | Process service | Add configurable resource limits, cgroups, and optional sandbox controls |
 | [ ] | W4 | P2 | Authorization | Add monitor-owned request authorization and idempotent resource leases |
 | [ ] | B1 | P2 | Verification | Add adversarial, fuzz, lifecycle, and automated release gates |
-| [ ] | L1 | P3 | APIs | Replace composition-heavy `WithLogger` APIs and misleading package names |
+| [ ] | L1 | P3 | APIs | Rename misleading packages after the dependency boundaries stabilize |
 
 Priority meanings: **P0** blocks a secure functional daemon, **P1** is required
 for a credible v1, **P2** is important hardening/design work, and **P3** is
@@ -159,11 +159,10 @@ preservation.
 
 ### L1 — Simplify composition APIs
 
-Replace role- and logger-heavy constructors such as the remaining
-`WithLogger` entry points with small configurations and explicit application
-logging composition. Rename generic or misleading packages, especially the
-global post-auth `session` mux, after the worker and dependency boundaries are
-stable.
+Keep protocol constructors free of application logger plumbing and retain
+application ownership of diagnostic logger configuration. Rename generic or
+misleading packages, especially the global post-auth `session` mux, after the
+worker and dependency boundaries are stable.
 
 ## Explicitly deferred
 

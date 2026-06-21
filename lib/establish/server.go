@@ -10,7 +10,6 @@ import (
 
 	"github.com/Mikadore/mygosh/lib/auth"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/Mikadore/mygosh/lib/transport"
 	"github.com/rotisserie/eris"
@@ -21,7 +20,6 @@ type ServerConfig struct {
 	HandshakeTimeout time.Duration
 	AuthTimeout      time.Duration
 	SessionConfig    session.Config
-	Logger           *slog.Logger
 }
 
 type Server struct{ *session.Session }
@@ -48,7 +46,6 @@ type PendingServer struct {
 	secureConn  *transport.Transport
 	auth        *auth.PendingServerAuth
 	cfg         ServerConfig
-	logger      *slog.Logger
 	state       pendingState
 	server      *Server
 	transferred bool
@@ -65,15 +62,15 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 
 	handshakeTimeout := resolveTimeout(cfg.HandshakeTimeout, defaultHandshakeTimeout)
 	authTimeout := resolveTimeout(cfg.AuthTimeout, defaultAuthTimeout)
-	logger := logging.Resolve(cfg.Logger)
+	logger := slog.Default().With("component", "establish", "role", "server")
 	logger.Debug("starting server connection", "remote", remoteAddrString(conn), "handshake_timeout", handshakeTimeout, "auth_timeout", authTimeout)
 
-	runtime := newRuntime(ctx, conn, logger)
+	runtime := newRuntime(ctx, conn, "server")
 
 	var secureConn *transport.Transport
 	err := runtime.RunWithTimeout(lifecycleHandshaking, handshakeTimeout, func() error {
 		var err error
-		secureConn, err = transport.HandshakeServerWithLogger(conn, logger)
+		secureConn, err = transport.HandshakeServer(conn)
 		return err
 	})
 	if err != nil {
@@ -94,7 +91,6 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 
 	pendingAuth, err := auth.BeginServer(authCtx, secureConn, auth.ServerConfig{
 		HostKey: cfg.HostKey,
-		Logger:  logger,
 	})
 	if err != nil {
 		stopAuth()
@@ -120,7 +116,6 @@ func BeginAccept(ctx context.Context, conn net.Conn, cfg ServerConfig) (*Pending
 		secureConn: secureConn,
 		auth:       pendingAuth,
 		cfg:        cfg,
-		logger:     logger,
 	}, nil
 }
 
@@ -144,7 +139,7 @@ func (p *PendingServer) Accept(prepared *session.Prepared) (*Server, error) {
 	}
 	if prepared == nil {
 		var err error
-		prepared, err = session.Prepare(p.cfg.SessionConfig, nil, session.Options{Logger: p.logger})
+		prepared, err = session.Prepare(p.cfg.SessionConfig, nil)
 		if err != nil {
 			_ = p.runtime.Fail(err)
 			return nil, err

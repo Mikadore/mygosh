@@ -8,17 +8,13 @@ import (
 
 	"github.com/Mikadore/mygosh/app/securefiles"
 	"github.com/Mikadore/mygosh/lib/keys"
-	"github.com/Mikadore/mygosh/lib/logging"
 	"github.com/rotisserie/eris"
 )
 
-const (
-	defaultHostKeyPath = "~/.mygosh/host_ed25519"
-	privateKeyMaxSize  = 16 << 10
-)
+const privateKeyMaxSize = 16 << 10
 
-func loadHostKey(path string, logger *slog.Logger) (keys.Keypair, error) {
-	logger = logging.Resolve(logger)
+func loadHostKey(path string) (keys.Keypair, error) {
+	logger := slog.Default().With("component", "server-files")
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return keys.Keypair{}, eris.Wrap(err, "resolve current user home")

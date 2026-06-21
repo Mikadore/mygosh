@@ -21,12 +21,8 @@ func JoinHostPublicKeys(left map[string][]keys.PublicKey, right map[string][]key
 
 func clonePublicKeys(publicKeys []keys.PublicKey) []keys.PublicKey {
 	return lo.Map(publicKeys, func(publicKey keys.PublicKey, _ int) keys.PublicKey {
-		return clonePublicKey(publicKey)
+		return publicKey.Clone()
 	})
-}
-
-func clonePublicKey(publicKey keys.PublicKey) keys.PublicKey {
-	return publicKey.Clone()
 }
 
 func sshEd25519PublicKey(publicKey ssh.PublicKey, comment string) (keys.PublicKey, bool, error) {

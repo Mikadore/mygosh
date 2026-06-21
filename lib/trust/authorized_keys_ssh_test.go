@@ -31,8 +31,8 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 	secondExpected := secondKey.PublicKey()
 	secondExpected.Comment = "user-two"
 
-	require.Equal(t, AuthorizedKeys{
-		Entries: []AuthorizedKeyEntry{
+	require.Equal(t, &AuthorizedKeys{
+		entries: []AuthorizedKeyEntry{
 			{
 				Options: []AuthorizedKeyOption{
 					{Name: "command", Value: `"echo hi"`, HasValue: true},
@@ -52,7 +52,7 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 	}, got)
 }
 
-func TestMatchAuthorizedKeyAcceptsOptionBearingEntries(t *testing.T) {
+func TestAuthorizedKeysMatchAcceptsOptionBearingEntries(t *testing.T) {
 	allowedKey, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 	rejectedKey, err := keys.GenerateEd25519()
@@ -61,8 +61,15 @@ func TestMatchAuthorizedKeyAcceptsOptionBearingEntries(t *testing.T) {
 	authorized, err := ParseAuthorizedKeys([]byte(`restrict ` + authorizedKeysLine(t, allowedKey.PublicKey(), "allowed")))
 	require.NoError(t, err)
 
-	require.True(t, MatchAuthorizedKey(authorized, allowedKey.PublicKey()))
-	require.False(t, MatchAuthorizedKey(authorized, rejectedKey.PublicKey()))
+	_, ok := authorized.Match(func(entry *AuthorizedKeyEntry) bool {
+		return entry.Key.Equal(allowedKey.PublicKey())
+	})
+	require.True(t, ok)
+
+	_, ok = authorized.Match(func(entry *AuthorizedKeyEntry) bool {
+		return entry.Key.Equal(rejectedKey.PublicKey())
+	})
+	require.False(t, ok)
 }
 
 func authorizedKeysLine(t *testing.T, publicKey keys.PublicKey, comment string) string {

@@ -36,7 +36,7 @@ func loadClientIdentity(path string, logger *slog.Logger) (keys.Keypair, error) 
 	return keypair, nil
 }
 
-func loadKnownHosts(path string, logger *slog.Logger) (map[string][]keys.PublicKey, string, error) {
+func loadKnownHosts(path string, logger *slog.Logger) (*trust.KnownHosts, string, error) {
 	logger = logging.Resolve(logger)
 	contents, resolved, err := readCurrentUserFile(path, knownHostsMaxSize, true)
 	if err != nil {
@@ -50,13 +50,16 @@ func loadKnownHosts(path string, logger *slog.Logger) (map[string][]keys.PublicK
 	return knownHosts, resolved, nil
 }
 
-func knownHostsVerifier(knownHosts map[string][]keys.PublicKey, source string, logger *slog.Logger) auth.HostKeyVerifier {
+func knownHostsVerifier(knownHosts *trust.KnownHosts, source string, logger *slog.Logger) auth.HostKeyVerifier {
 	logger = logging.Resolve(logger)
 	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error {
-		if len(knownHosts[req.ReferenceIdentity]) == 0 {
+		entry, ok := knownHosts.Match(func(entry *trust.KnownHostEntry) bool {
+			return entry.MatchesValid(req.ReferenceIdentity)
+		})
+		if !ok {
 			return eris.Errorf("no known host keys for reference identity %q", req.ReferenceIdentity)
 		}
-		if !trust.MatchHostKey(knownHosts, req.ReferenceIdentity, req.HostKey) {
+		if !entry.HostKey.Equal(req.HostKey) {
 			return eris.Errorf("unexpected host key fingerprint %s for reference identity %q", req.HostKey.FingerprintSHA256(), req.ReferenceIdentity)
 		}
 		logger.Info(

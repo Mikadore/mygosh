@@ -21,17 +21,34 @@ type AuthorizedKeyEntry struct {
 }
 
 type AuthorizedKeys struct {
-	Entries []AuthorizedKeyEntry
+	entries []AuthorizedKeyEntry
 }
 
-func ParseAuthorizedKeys(contents []byte) (AuthorizedKeys, error) {
+type AuthorizedKeyCallback func(*AuthorizedKeyEntry) bool
+
+func (k *AuthorizedKeys) Match(policy AuthorizedKeyCallback) (*AuthorizedKeyEntry, bool) {
+	if k == nil || policy == nil {
+		return nil, false
+	}
+
+	for i := range k.entries {
+		entry := &k.entries[i]
+		if policy(entry) {
+			return entry, true
+		}
+	}
+
+	return nil, false
+}
+
+func ParseAuthorizedKeys(contents []byte) (*AuthorizedKeys, error) {
 	contents = bytes.TrimSpace(contents)
 
-	var out AuthorizedKeys
+	out := &AuthorizedKeys{}
 	for len(contents) != 0 {
 		pk, comment, options, rest, err := ssh.ParseAuthorizedKey(contents)
 		if err != nil {
-			return AuthorizedKeys{}, eris.Wrap(err, "parse authorized_keys entry")
+			return nil, eris.Wrap(err, "parse authorized_keys entry")
 		}
 		contents = bytes.TrimSpace(rest)
 
@@ -41,7 +58,7 @@ func ParseAuthorizedKeys(contents []byte) (AuthorizedKeys, error) {
 
 		publicKey, ok, err := sshEd25519PublicKey(pk, comment)
 		if err != nil {
-			return AuthorizedKeys{}, eris.Wrap(err, "parse authorized_keys entry")
+			return nil, eris.Wrap(err, "parse authorized_keys entry")
 		}
 		if !ok {
 			continue
@@ -49,25 +66,16 @@ func ParseAuthorizedKeys(contents []byte) (AuthorizedKeys, error) {
 
 		parsedOptions, err := parseAuthorizedKeyOptions(options)
 		if err != nil {
-			return AuthorizedKeys{}, eris.Wrap(err, "parse authorized_keys options")
+			return nil, eris.Wrap(err, "parse authorized_keys options")
 		}
 
-		out.Entries = append(out.Entries, AuthorizedKeyEntry{
+		out.entries = append(out.entries, AuthorizedKeyEntry{
 			Options: parsedOptions,
 			Key:     publicKey.Clone(),
 		})
 	}
 
 	return out, nil
-}
-
-func MatchAuthorizedKey(authorized AuthorizedKeys, presented keys.PublicKey) bool {
-	for _, entry := range authorized.Entries {
-		if entry.Key.Compare(presented) == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func parseAuthorizedKeyOptions(options []string) ([]AuthorizedKeyOption, error) {

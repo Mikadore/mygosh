@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func TestParseKnownHostsIgnoresCommentsAndRevokedEntries(t *testing.T) {
+func TestParseKnownHostsRetainsEntriesAndMatchSkipsRevoked(t *testing.T) {
 	serverOne, err := keys.GenerateEd25519()
 	require.NoError(t, err)
 	serverTwo, err := keys.GenerateEd25519()
@@ -26,14 +26,36 @@ func TestParseKnownHostsIgnoresCommentsAndRevokedEntries(t *testing.T) {
 	got, err := ParseKnownHosts([]byte(contents))
 	require.NoError(t, err)
 
-	expectedKey := serverOne.PublicKey()
-	expectedKey.Comment = ""
+	firstExpected := serverOne.PublicKey()
+	firstExpected.Comment = "ignored-one"
+	secondExpected := serverTwo.PublicKey()
+	secondExpected.Comment = "ignored-two"
 
-	require.Equal(t, map[string][]keys.PublicKey{
-		"server.example.test": {expectedKey},
-		"127.0.0.1":           {expectedKey},
+	require.Equal(t, &KnownHosts{
+		entries: []KnownHostEntry{
+			{
+				Marker:  KnownHostEmptyMarker,
+				Hosts:   []string{"server.example.test", "127.0.0.1"},
+				HostKey: firstExpected,
+			},
+			{
+				Marker:  KnownHostRevoked,
+				Hosts:   []string{"revoked.example.test"},
+				HostKey: secondExpected,
+			},
+		},
 	}, got)
-	require.NotContains(t, got, "revoked.example.test")
+
+	matched, ok := got.Match(func(entry *KnownHostEntry) bool {
+		return entry.MatchesValid("server.example.test")
+	})
+	require.True(t, ok)
+	require.True(t, matched.HostKey.Equal(serverOne.PublicKey()))
+
+	_, ok = got.Match(func(entry *KnownHostEntry) bool {
+		return entry.MatchesValid("revoked.example.test")
+	})
+	require.False(t, ok)
 }
 
 func TestJoinHostPublicKeys(t *testing.T) {

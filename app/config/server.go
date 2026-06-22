@@ -4,6 +4,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Mikadore/mygosh/app/logging"
 	"github.com/rotisserie/eris"
@@ -20,6 +21,7 @@ var defaultAuthorizedKeys = []string{
 type Server struct {
 	ConfigFile    string              `mapstructure:"-"`
 	Listen        ServerListen        `mapstructure:"listen"`
+	Daemon        ServerDaemon        `mapstructure:"daemon"`
 	Identity      ServerIdentity      `mapstructure:"identity"`
 	Authorization ServerAuthorization `mapstructure:"authorization"`
 	Log           logging.Config      `mapstructure:"log"`
@@ -29,12 +31,27 @@ type ServerListen struct {
 	Address string `mapstructure:"address"`
 }
 
+type ServerDaemon struct {
+	MaxConnections      int           `mapstructure:"max_connections"`
+	MaxConnectionsPerIP int           `mapstructure:"max_connections_per_ip"`
+	ShutdownTimeout     time.Duration `mapstructure:"shutdown_timeout"`
+}
+
 type ServerIdentity struct {
 	HostKey string `mapstructure:"host_key"`
 }
 
 type ServerAuthorization struct {
-	AuthorizedKeys []string `mapstructure:"authorized_keys"`
+	AuthorizedKeys []string           `mapstructure:"authorized_keys"`
+	Permissions    *ServerPermissions `mapstructure:"permissions"`
+}
+
+type ServerPermissions struct {
+	AllowShell         bool     `mapstructure:"allow_shell"`
+	AllowExec          bool     `mapstructure:"allow_exec"`
+	AllowPTY           bool     `mapstructure:"allow_pty"`
+	AllowedEnvironment []string `mapstructure:"allowed_environment"`
+	ForcedCommand      string   `mapstructure:"forced_command"`
 }
 
 func LoadServer(path string, verbosity int) (Server, error) {
@@ -46,6 +63,9 @@ func LoadServer(path string, verbosity int) (Server, error) {
 	reader.SetConfigFile(path)
 	reader.SetConfigType("toml")
 	reader.SetDefault("listen.address", "localhost:42022")
+	reader.SetDefault("daemon.max_connections", 32)
+	reader.SetDefault("daemon.max_connections_per_ip", 4)
+	reader.SetDefault("daemon.shutdown_timeout", "5s")
 	reader.SetDefault("identity.host_key", "~/.mygosh/host_ed25519")
 	reader.SetDefault("authorization.authorized_keys", defaultAuthorizedKeys)
 	setLogDefaults(reader)
@@ -63,6 +83,12 @@ func LoadServer(path string, verbosity int) (Server, error) {
 	cfg.Identity.HostKey = strings.TrimSpace(cfg.Identity.HostKey)
 	for i := range cfg.Authorization.AuthorizedKeys {
 		cfg.Authorization.AuthorizedKeys[i] = strings.TrimSpace(cfg.Authorization.AuthorizedKeys[i])
+	}
+	if cfg.Authorization.Permissions != nil {
+		cfg.Authorization.Permissions.ForcedCommand = strings.TrimSpace(cfg.Authorization.Permissions.ForcedCommand)
+		for i := range cfg.Authorization.Permissions.AllowedEnvironment {
+			cfg.Authorization.Permissions.AllowedEnvironment[i] = strings.TrimSpace(cfg.Authorization.Permissions.AllowedEnvironment[i])
+		}
 	}
 
 	logConfig, err := logging.NormalizeConfig(cfg.Log, verbosity)
@@ -91,6 +117,15 @@ func (s Server) Validate() error {
 	if strings.TrimSpace(s.Identity.HostKey) == "" {
 		return eris.New("identity.host_key must not be empty")
 	}
+	if s.Daemon.MaxConnections < 1 || s.Daemon.MaxConnections > 4096 {
+		return eris.New("daemon.max_connections must be between 1 and 4096")
+	}
+	if s.Daemon.MaxConnectionsPerIP < 1 || s.Daemon.MaxConnectionsPerIP > s.Daemon.MaxConnections {
+		return eris.New("daemon.max_connections_per_ip must be between 1 and daemon.max_connections")
+	}
+	if s.Daemon.ShutdownTimeout <= 0 || s.Daemon.ShutdownTimeout > 5*time.Minute {
+		return eris.New("daemon.shutdown_timeout must be greater than zero and at most 5m")
+	}
 	if len(s.Authorization.AuthorizedKeys) == 0 {
 		return eris.New("authorization.authorized_keys must not be empty")
 	}
@@ -99,5 +134,40 @@ func (s Server) Validate() error {
 			return eris.New("authorization.authorized_keys entries must not be empty")
 		}
 	}
+	if s.Authorization.Permissions == nil {
+		return eris.New("authorization.permissions must be configured explicitly")
+	}
+	if err := s.Authorization.Permissions.Validate(); err != nil {
+		return err
+	}
 	return s.Log.Validate()
+}
+
+func (p ServerPermissions) Validate() error {
+	if p.AllowPTY && !p.AllowShell && !p.AllowExec {
+		return eris.New("authorization.permissions.allow_pty requires shell or exec permission")
+	}
+	if p.ForcedCommand != "" && !p.AllowShell && !p.AllowExec {
+		return eris.New("authorization.permissions.forced_command requires shell or exec permission")
+	}
+	if strings.ContainsRune(p.ForcedCommand, '\x00') {
+		return eris.New("authorization.permissions.forced_command contains NUL")
+	}
+	if len(p.ForcedCommand) > 24<<10 {
+		return eris.New("authorization.permissions.forced_command exceeds maximum size")
+	}
+	if len(p.AllowedEnvironment) > 128 {
+		return eris.New("authorization.permissions.allowed_environment has too many entries")
+	}
+	seen := make(map[string]struct{}, len(p.AllowedEnvironment))
+	for _, name := range p.AllowedEnvironment {
+		if name == "" || strings.ContainsAny(name, "=\x00") || len(name) > 256 {
+			return eris.Errorf("authorization.permissions.allowed_environment contains invalid name %q", name)
+		}
+		if _, ok := seen[name]; ok {
+			return eris.Errorf("authorization.permissions.allowed_environment contains duplicate %q", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
 }

@@ -2,23 +2,18 @@ package client
 
 import (
 	"context"
-	"errors"
-	"io"
 	"net"
 	"os"
 	"strings"
-	"sync"
-	"syscall"
 
+	clientcommand "github.com/Mikadore/mygosh/app/client/command"
 	"github.com/Mikadore/mygosh/app/commandchannel"
 	"github.com/Mikadore/mygosh/app/config"
 	"github.com/Mikadore/mygosh/app/root"
 	"github.com/Mikadore/mygosh/lib/auth"
 	commandprotocol "github.com/Mikadore/mygosh/lib/command"
 	"github.com/Mikadore/mygosh/lib/establish"
-	"github.com/Mikadore/mygosh/lib/tty"
 	"github.com/rotisserie/eris"
-	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
@@ -94,82 +89,17 @@ func RunClient(ctx context.Context, appRoot *root.Root, cfg config.Client, args 
 	if err != nil {
 		return err
 	}
-	commandClient, err := commandprotocol.NewClient(frameConn)
-	if err != nil {
-		return err
-	}
-	defer commandClient.Close()
 
 	request, localTerminal, err := buildStartRequest(args)
 	if err != nil {
 		return err
 	}
-	commandCtx, cancelCommand := context.WithCancelCause(ctx)
-	defer cancelCommand(context.Canceled)
-	stopOnCancel := context.AfterFunc(commandCtx, func() {
-		_ = commandClient.Close()
+	return clientcommand.Run(ctx, frameConn, request, clientcommand.Options{
+		Stdin:         os.Stdin,
+		Stdout:        os.Stdout,
+		Stderr:        os.Stderr,
+		LocalTerminal: localTerminal,
 	})
-	defer stopOnCancel()
-
-	var rawTTY *tty.RawTTY
-	if request.PTY != nil && localTerminal {
-		rawTTY, err = tty.HookRaw(commandCtx, os.Stdin)
-		if err != nil {
-			return err
-		}
-		defer rawTTY.Restore() //nolint:errcheck
-	}
-
-	if err := commandClient.Start(commandCtx, request, commandprotocol.OutputSink{
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
-	}); err != nil {
-		return err
-	}
-
-	input, err := tty.NewPollReader(os.Stdin)
-	if err != nil {
-		return err
-	}
-	defer input.Close() //nolint:errcheck
-
-	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
-		if err := forwardInput(commandCtx, input, commandClient); err != nil && context.Cause(commandCtx) == nil {
-			cancelCommand(err)
-		}
-	}()
-	if rawTTY != nil {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for {
-				select {
-				case size, ok := <-rawTTY.Resizes():
-					if !ok {
-						return
-					}
-					if err := commandClient.Resize(commandCtx, commandprotocol.WindowSize{
-						Rows:    uint32(size.Height),
-						Columns: uint32(size.Width),
-					}); err != nil {
-						cancelCommand(err)
-						return
-					}
-				case <-commandCtx.Done():
-					return
-				}
-			}
-		}()
-	}
-
-	waitErr := commandClient.Wait()
-	cancelCommand(waitErr)
-	_ = input.Close()
-	workers.Wait()
-	return normalizeRemoteExit(waitErr)
 }
 
 func localUsername() string {
@@ -241,92 +171,4 @@ func requestedEnvironment(options []string) (map[string]string, error) {
 		environment[name] = value
 	}
 	return environment, nil
-}
-
-func forwardInput(ctx context.Context, input *tty.PollReader, client *commandprotocol.Client) error {
-	buffer := make([]byte, 32<<10)
-	for {
-		n, err := input.Read(ctx, buffer)
-		if n > 0 {
-			if writeErr := client.WriteStdin(ctx, buffer[:n]); writeErr != nil {
-				return writeErr
-			}
-		}
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, syscall.EIO) {
-				closeErr := client.CloseStdin(ctx)
-				if errors.Is(closeErr, context.Canceled) || errors.Is(closeErr, os.ErrClosed) {
-					return nil
-				}
-				return closeErr
-			}
-			if errors.Is(err, os.ErrClosed) || errors.Is(err, context.Canceled) {
-				return nil
-			}
-			if errors.Is(err, syscall.EINTR) {
-				continue
-			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				return err
-			}
-			if errors.Is(err, syscall.EPIPE) {
-				return nil
-			}
-			return err
-		}
-	}
-}
-
-type RemoteExitError struct {
-	Code   int
-	Cause  error
-	silent bool
-}
-
-func (e *RemoteExitError) Error() string {
-	if e == nil || e.Cause == nil {
-		return "remote command failed"
-	}
-	return e.Cause.Error()
-}
-
-func (e *RemoteExitError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.Cause
-}
-
-func (e *RemoteExitError) ExitCode() int {
-	if e == nil {
-		return 255
-	}
-	return e.Code
-}
-
-func (e *RemoteExitError) Silent() bool {
-	return e != nil && e.silent
-}
-
-func normalizeRemoteExit(err error) error {
-	if err == nil {
-		return nil
-	}
-	var status *commandprotocol.ExitStatusError
-	if errors.As(err, &status) {
-		code := status.Status
-		if code < 1 || code > 255 {
-			code = 255
-		}
-		return &RemoteExitError{Code: code, Cause: err, silent: true}
-	}
-	var signal *commandprotocol.ExitSignalError
-	if errors.As(err, &signal) {
-		number := unix.SignalNum(strings.ToUpper(signal.Signal))
-		if number == 0 {
-			return &RemoteExitError{Code: 255, Cause: err}
-		}
-		return &RemoteExitError{Code: 128 + int(number), Cause: err}
-	}
-	return &RemoteExitError{Code: 255, Cause: err}
 }

@@ -49,7 +49,7 @@ The most important current properties are:
 
 The most important current lifecycle limitations are:
 
-- the server accepts exactly one connection and exits when it finishes;
+- the server accepts bounded concurrent connections until shutdown;
 - a session write whose writer has already started cannot be interrupted by
   the caller's context;
 - abrupt session completion does not directly join the separately spawned
@@ -1121,7 +1121,7 @@ added to `session.Session.wg`. On abrupt session shutdown:
 
 The process owner itself has bounded TERM/KILL cleanup, but the top-level
 server does not explicitly join that detached command/process tree before
-`RunServer` returns. In the current one-connection executable, process exit can
+`RunServer` returns. In the current bounded daemon, process exit can
 therefore race with the remaining cleanup goroutines during abrupt shutdown.
 This is one reason the open worker-supervision work requires a terminal
 connection owner that joins service and child cleanup.

@@ -105,23 +105,27 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 		return ConnectionCredentials{}, eris.Wrap(err, "validate resolved account")
 	}
 
-	matchedSource, err := a.matchAuthorizedKey(ctx, account, provenKey)
+	matched, err := a.matchAuthorizedKey(ctx, account, provenKey)
 	if err != nil {
 		return ConnectionCredentials{}, err
 	}
-	if err := a.accountPolicy.AuthorizeAccount(ctx, request, account, matchedSource); err != nil {
+	if err := a.accountPolicy.AuthorizeAccount(ctx, request, account, matched.source); err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "apply account policy")
 	}
-	permissionDecision, err := a.permissionPolicy.ResolvePermissions(ctx, request, account, matchedSource)
+	permissionDecision, err := a.permissionPolicy.ResolvePermissions(ctx, request, account, matched.source)
 	if err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "resolve connection permissions")
+	}
+	permissionDecision, err = applyMatchedKeyConstraints(permissionDecision, matched.constraints)
+	if err != nil {
+		return ConnectionCredentials{}, eris.Wrap(err, "apply authorized-key constraints")
 	}
 	permissions, err := newConnectionPermissions(permissionDecision)
 	if err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "validate connection permissions")
 	}
 
-	credentials := newConnectionCredentials(request, account, matchedSource, permissions)
+	credentials := newConnectionCredentials(request, account, matched.source, matched.constraints, permissions)
 	if err := credentials.validate(); err != nil {
 		return ConnectionCredentials{}, eris.Wrap(err, "validate connection credentials")
 	}
@@ -137,14 +141,18 @@ func (a *Authz) AuthorizeConnection(ctx context.Context, request ConnectionReque
 	return credentials, nil
 }
 
-func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Account, provedKey keys.PublicKey) (string, error) {
+type matchedAuthorizedKey struct {
+	source      string
+	constraints MatchedKeyConstraints
+}
+
+func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Account, provedKey keys.PublicKey) (matchedAuthorizedKey, error) {
 	var errs error
 	foundAuthorizedKeys := false
-	matchedSource := ""
 
 	for _, configuredPath := range a.authorizedKeysPaths {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return matchedAuthorizedKey{}, err
 		}
 
 		resolved, anchor, relative, err := resolveAccountPath(account.HomeDir, configuredPath)
@@ -178,25 +186,30 @@ func (a *Authz) matchAuthorizedKey(ctx context.Context, account usermodel.Accoun
 		if _, ok := authorizedKeysFile.Match(func(*trust.AuthorizedKeyEntry) bool { return true }); ok {
 			foundAuthorizedKeys = true
 		}
-		if matchedSource == "" {
-			if _, ok := authorizedKeysFile.Match(func(entry *trust.AuthorizedKeyEntry) bool {
-				return entry.Key.Equal(provedKey)
-			}); ok {
-				matchedSource = resolved
+		if entry, ok := authorizedKeysFile.Match(func(entry *trust.AuthorizedKeyEntry) bool {
+			return entry.Key.Equal(provedKey)
+		}); ok {
+			if errs != nil {
+				return matchedAuthorizedKey{}, errs
 			}
+			constraints, err := entry.Constraints()
+			if err != nil {
+				return matchedAuthorizedKey{}, eris.Wrapf(err, "resolve authorized_keys constraints from %q", resolved)
+			}
+			return matchedAuthorizedKey{
+				source:      resolved,
+				constraints: newMatchedKeyConstraints(constraints),
+			}, nil
 		}
 	}
 
 	if errs != nil {
-		return "", errs
+		return matchedAuthorizedKey{}, errs
 	}
 	if !foundAuthorizedKeys {
-		return "", eris.Errorf("no authorized keys found for user %q", account.Username)
+		return matchedAuthorizedKey{}, eris.Errorf("no authorized keys found for user %q", account.Username)
 	}
-	if matchedSource != "" {
-		return matchedSource, nil
-	}
-	return "", eris.Errorf("client public key is not authorized for user %q", account.Username)
+	return matchedAuthorizedKey{}, eris.Errorf("client public key is not authorized for user %q", account.Username)
 }
 
 func resolveAuditLogger(logger *slog.Logger) *slog.Logger {

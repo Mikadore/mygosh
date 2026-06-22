@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"slices"
@@ -54,6 +55,14 @@ func (Runner) Start(ctx context.Context, spec Spec) (command.RunningProcess, err
 	if err != nil {
 		return nil, err
 	}
+	slog.Default().With("component", "server-process").Debug(
+		"started command process",
+		"pid", running.cmd.Process.Pid,
+		"uid", spec.UID,
+		"gid", spec.GID,
+		"pty", spec.PTY != nil,
+		"executable", spec.Executable,
+	)
 
 	go running.wait()
 	go func() {
@@ -218,10 +227,19 @@ func (p *runningProcess) Resize(ctx context.Context, size command.WindowSize) er
 	if size.Rows == 0 || size.Rows > 65535 || size.Columns == 0 || size.Columns > 65535 {
 		return eris.New("PTY dimensions are invalid")
 	}
-	return eris.Wrap(pty.Setsize(p.pty, &pty.Winsize{
+	if err := pty.Setsize(p.pty, &pty.Winsize{
 		Rows: uint16(size.Rows),
 		Cols: uint16(size.Columns),
-	}), "resize process PTY")
+	}); err != nil {
+		return eris.Wrap(err, "resize process PTY")
+	}
+	slog.Default().With("component", "server-process").Debug(
+		"resized command PTY",
+		"pid", p.cmd.Process.Pid,
+		"rows", size.Rows,
+		"columns", size.Columns,
+	)
+	return nil
 }
 
 func (p *runningProcess) Wait() command.ExitResult {
@@ -246,6 +264,11 @@ func (p *runningProcess) Terminate(cause error) {
 		}
 		p.terminating = true
 		p.waitMu.Unlock()
+		slog.Default().With("component", "server-process").Debug(
+			"terminating command process group",
+			"pid", p.cmd.Process.Pid,
+			"cause", cause,
+		)
 		go p.terminate(cause)
 	})
 }
@@ -299,6 +322,13 @@ func (p *runningProcess) wait() {
 	p.waitMu.Lock()
 	p.result = result
 	p.waitMu.Unlock()
+	slog.Default().With("component", "server-process").Debug(
+		"command process exited",
+		"pid", p.cmd.Process.Pid,
+		"status", result.Status,
+		"signal", result.Signal,
+		"runtime_failure", result.RuntimeFailure,
+	)
 	close(p.processWaitDone)
 
 	p.waitMu.Lock()

@@ -2,14 +2,14 @@
 
 `mygosh` is an experimental, from-scratch SSH-like client/server written in Go. It is not compatible with the SSH wire protocol.
 
-> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. Authentication, authorization, command execution, connection lifecycle, mux limits, process cleanup, and secure-file boundaries are staged, but trust-format, daemon, PAM, and broader hardening gaps remain. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
+> **Security status:** this is a hobby project and protocol prototype, not a production-ready remote login service. Authentication, explicit authorization policy, bounded daemon admission, command execution, mux limits, process cleanup, trust-file subsets, and secure-file boundaries are implemented. PAM, process separation, resource isolation, and broader hardening remain open. [`REVIEW.md`](REVIEW.md) contains the original review evidence; [`TODO.md`](TODO.md) tracks current completion.
 
 ## What Exists Today
 
 This section describes the current implementation as it is.
 
 - A Cobra CLI with `server`/`serve` and `connect` commands.
-- TCP dialing in `app/client` and TCP listening in `app/server`.
+- TCP dialing in `app/client` and a bounded multi-client daemon in `app/server`.
 - A Noise NN handshake and encrypted framed transport in `lib/transport`.
 - Separate protobuf schemas for authentication and post-auth connection traffic.
 - Ed25519 server and client proofs bound to the Noise channel and auth transcript.
@@ -25,11 +25,14 @@ This section describes the current implementation as it is.
 - Separate stdout/stderr for non-PTY commands, merged PTY output, terminal resize, stdin half-close, environment filtering, and remote exit propagation.
 - A Unix process owner with explicit credentials, process-group cleanup, bounded TERM/KILL shutdown, and exactly-once reaping.
 - Poll-based cancellable client input and restoration of local raw terminal state.
+- An app-owned command client in `app/client/command`; `lib/command` retains transport-neutral schemas, codecs, contracts, and the server protocol engine.
 - Bounded, descriptor-checked loading of OpenSSH Ed25519 private keys, `known_hosts`, and `authorized_keys`.
+- Exact-host `known_hosts` verification with multiple accepted keys and key-specific revocation.
+- Enforced `authorized_keys` constraints for `command=`, `no-pty`, and `restrict`.
 - NSS-aware username, UID, GID, supplementary-group, home, and login-shell lookup through `lib/account`.
 - Structured `slog` logging with optional console and JSON logfile output.
 
-The current server accepts exactly one connection, runs that connection, and exits.
+The server accepts multiple connections until shutdown, with configurable global and per-source-IP admission limits.
 
 ### Dependency clarification
 
@@ -39,7 +42,7 @@ The current server accepts exactly one connection, runs that connection, and exi
 
 The default app path currently performs:
 
-1. TCP connect/accept.
+1. TCP connect and bounded daemon admission.
 2. Noise NN handshake.
 3. Server signature proof.
 4. Client verification of the presented server key against `known_hosts`.
@@ -56,9 +59,9 @@ The default app path currently performs:
 
 The most important current limitations are:
 
-- trust-file options, markers, revocation, wildcard/hashed-host, and malformed-entry semantics remain incomplete;
-- the server still accepts only one connection and uses a hardcoded demo command permission policy;
+- trust-file compatibility is deliberately narrow: certificates, hashed/wildcard/negated hosts, host-plus-port identities, and most `authorized_keys` options are rejected;
 - command execution has no PAM session, cgroup, sandbox, or configurable resource-limit integration;
+- authenticated post-auth runtimes still share the daemon process rather than running in disposable account workers;
 - there is no port forwarding, reconnect/resume, or SSH compatibility.
 
 This list is intentionally abbreviated. See [`REVIEW.md`](REVIEW.md#findings) for evidence and design recommendations.
@@ -79,12 +82,7 @@ The target design is:
 - one bounded reader/dispatcher and one bounded writer own connection I/O;
 - a process runtime owns the complete process group and always reaps it.
 
-Future functional goals include:
-
-- configurable command and environment policy;
-- PAM account/auth and session seams;
-- a bounded multi-client daemon;
-- port forwarding after the channel and permission layers are hardened.
+Future functional goals include PAM account/session integration, disposable account workers, process resource isolation, and eventually port forwarding after destination-specific authorization is designed.
 
 ## Configuration
 
@@ -99,6 +97,11 @@ Server example:
 [listen]
 address = "localhost:42022"
 
+[daemon]
+max_connections = 32
+max_connections_per_ip = 4
+shutdown_timeout = "5s"
+
 [identity]
 host_key = "~/.mygosh/host_ed25519"
 
@@ -107,6 +110,13 @@ authorized_keys = [
   "~/.mygosh/authorized_keys",
   "~/.ssh/authorized_keys",
 ]
+
+[authorization.permissions]
+allow_shell = true
+allow_exec = true
+allow_pty = true
+allowed_environment = ["TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"]
+# forced_command = "/usr/local/bin/restricted-command"
 
 [log]
 level = "DEBUG"
@@ -135,6 +145,9 @@ file = "mygosh-client.log"
 Current field behavior:
 
 - `listen.address` is the server TCP listen endpoint.
+- `daemon.max_connections` and `daemon.max_connections_per_ip` bound accepted connections from handshake through cleanup.
+- `daemon.shutdown_timeout` bounds the final wait for active connection handlers after cancellation.
+- `authorization.permissions` is required and deny-by-default. It controls shell, exec, PTY, environment names, and an optional forced command.
 - `connection.default_port` is used when the client target omits a port.
 - Identity and trust paths are owned by their respective command
   configuration.
@@ -172,11 +185,34 @@ The default configuration paths are:
 
 The `~` for server authorization files is expanded against the requested account's resolved home directory.
 
-Current trust-file support is a strict and incomplete subset. In particular, `authorized_keys` options are parsed and retained but not yet enforced, host matching is exact, and marker/revocation behavior is not complete. Files are opened beneath app-selected anchors without following lower-path symlinks, are ownership/mode/type checked, and are bounded to 16 KiB for private keys or 8 MiB for trust files.
+Current trust-file support is a strict subset:
+
+- `known_hosts` accepts exact plain hostnames or IP addresses and multiple Ed25519 keys per identity;
+- a matching `@revoked` host/key entry always rejects that key;
+- certificate authorities, hashed, wildcard, negated, and `[host]:port` identities are rejected;
+- `authorized_keys` accepts bare Ed25519 keys plus `command=`, `no-pty`, and `restrict`;
+- unsupported, duplicate, malformed, or contradictory authorization options reject the file;
+- key constraints may only narrow configured server permissions.
+
+Files are opened beneath app-selected anchors without following lower-path symlinks, are ownership/mode/type checked, and are bounded to 16 KiB for private keys or 8 MiB for trust files.
+
+### Local demo key setup
+
+The following creates separate host and client keys for a same-user local demo:
+
+```sh
+install -d -m 0700 ~/.mygosh
+ssh-keygen -q -t ed25519 -N '' -f ~/.mygosh/host_ed25519
+ssh-keygen -q -t ed25519 -N '' -f ~/.mygosh/id_ed25519
+cp ~/.mygosh/id_ed25519.pub ~/.mygosh/authorized_keys
+awk '{print "localhost " $1 " " $2}' \
+  ~/.mygosh/host_ed25519.pub > ~/.mygosh/known_hosts
+chmod 0600 ~/.mygosh/authorized_keys ~/.mygosh/known_hosts
+```
 
 ## Run
 
-Start the one-connection server:
+Start the daemon:
 
 ```sh
 go run ./bin server
@@ -219,7 +255,7 @@ Request allowlisted environment forwarding:
 go run ./bin connect --env LANG --env COLORTERM=true localhost:42022
 ```
 
-The current demo server permits command channels, shell, exec, PTY, and `TERM`, `COLORTERM`, `LANG`, `LC_ALL`, and `LC_CTYPE`. Authorization remains deny-by-default outside that explicit composition policy.
+The sample server configuration explicitly permits shell, exec, PTY, and `TERM`, `COLORTERM`, `LANG`, `LC_ALL`, and `LC_CTYPE`. Removing those settings narrows access; there is no hidden permissive policy.
 
 For the current two-pane smoke test:
 
@@ -227,7 +263,7 @@ For the current two-pane smoke test:
 ./run-tmux.sh
 ```
 
-The helper starts the one-connection server and one client in adjacent tmux panes.
+The helper starts the daemon, one interactive client, and a concurrent non-PTY command client in three tmux panes. After either client exits, reconnect without restarting the server to verify the daemon lifecycle.
 
 ## Build And Test
 
@@ -252,9 +288,12 @@ go test -race ./...
 go vet ./...
 ```
 
+When running process-lifecycle tests inside Docker, include `--init` so terminated grandchildren are reaped instead of remaining visible as container zombies.
+
 ## Repository Guide
 
 - `app/`: current CLI application composition and networking.
+- `app/client/command/`: app-owned command client state, terminal lifecycle, and remote-exit mapping.
 - `app/config/`: strict command-specific client and server configuration.
 - `app/logging/`: audit/diagnostic logger construction and file lifecycle.
 - `app/root/`: diagnostic logger installation and shutdown hooks.

@@ -1,6 +1,11 @@
 [listen]
 address = "localhost:42022"
 
+[daemon]
+max_connections = 32
+max_connections_per_ip = 4
+shutdown_timeout = "5s"
+
 [identity]
 host_key = "~/.mygosh/host_ed25519"
 
@@ -9,6 +14,12 @@ authorized_keys = [
   "~/.mygosh/authorized_keys",
   "~/.ssh/authorized_keys",
 ]
+
+[authorization.permissions]
+allow_shell = true
+allow_exec = true
+allow_pty = true
+allowed_environment = ["TERM", "COLORTERM", "LANG", "LC_ALL", "LC_CTYPE"]
 
 [log]
 # One of: DEBUG INFO WARN ERROR FATAL NONE

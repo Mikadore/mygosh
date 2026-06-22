@@ -11,35 +11,38 @@ import (
 type credentialIdentity struct{}
 
 type ConnectionCredentials struct {
-	authenticationMethod string
-	keyFingerprint       string
-	requestedUsername    string
-	peerAddress          string
-	provedKey            keys.PublicKey
-	account              usermodel.Account
-	matchedSource        string
-	permissions          ConnectionPermissions
-	identityToken        *credentialIdentity
+	authenticationMethod  string
+	keyFingerprint        string
+	requestedUsername     string
+	peerAddress           string
+	provedKey             keys.PublicKey
+	account               usermodel.Account
+	matchedSource         string
+	matchedKeyConstraints MatchedKeyConstraints
+	permissions           ConnectionPermissions
+	identityToken         *credentialIdentity
 }
 
 func newConnectionCredentials(
 	request ConnectionRequest,
 	account usermodel.Account,
 	matchedSource string,
+	matchedKeyConstraints MatchedKeyConstraints,
 	permissions ConnectionPermissions,
 ) ConnectionCredentials {
 	verified := request.VerifiedClient
 	provedKey := verified.ProvenKey()
 	return ConnectionCredentials{
-		authenticationMethod: AuthenticationMethodPublicKey,
-		keyFingerprint:       provedKey.FingerprintSHA256(),
-		requestedUsername:    verified.RequestedUsername(),
-		peerAddress:          request.PeerAddress,
-		provedKey:            provedKey.Clone(),
-		account:              usermodel.CloneAccount(account),
-		matchedSource:        matchedSource,
-		permissions:          cloneConnectionPermissions(permissions),
-		identityToken:        &credentialIdentity{},
+		authenticationMethod:  AuthenticationMethodPublicKey,
+		keyFingerprint:        provedKey.FingerprintSHA256(),
+		requestedUsername:     verified.RequestedUsername(),
+		peerAddress:           request.PeerAddress,
+		provedKey:             provedKey.Clone(),
+		account:               usermodel.CloneAccount(account),
+		matchedSource:         matchedSource,
+		matchedKeyConstraints: matchedKeyConstraints,
+		permissions:           cloneConnectionPermissions(permissions),
+		identityToken:         &credentialIdentity{},
 	}
 }
 
@@ -71,6 +74,10 @@ func (c ConnectionCredentials) MatchedSource() string {
 	return c.matchedSource
 }
 
+func (c ConnectionCredentials) MatchedKeyConstraints() MatchedKeyConstraints {
+	return c.matchedKeyConstraints
+}
+
 func (c ConnectionCredentials) Permissions() ConnectionPermissions {
 	return cloneConnectionPermissions(c.permissions)
 }
@@ -100,6 +107,9 @@ func (c ConnectionCredentials) validate() error {
 	}
 	if c.matchedSource == "" {
 		return eris.New("matched policy source is required")
+	}
+	if err := c.matchedKeyConstraints.validate(); err != nil {
+		return eris.Wrap(err, "matched authorized-key constraints")
 	}
 	if err := c.permissions.validate(); err != nil {
 		return eris.Wrap(err, "connection permissions")

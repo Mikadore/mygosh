@@ -1,7 +1,6 @@
 package client
 
 import (
-	"errors"
 	"os"
 	"testing"
 
@@ -54,23 +53,6 @@ func TestRequestedEnvironment(t *testing.T) {
 	require.ErrorContains(t, err, "is not set")
 	_, err = requestedEnvironment([]string{"LANG=C", "LANG=en_US"})
 	require.ErrorContains(t, err, "more than once")
-}
-
-func TestNormalizeRemoteExit(t *testing.T) {
-	err := normalizeRemoteExit(&commandprotocol.ExitStatusError{Status: 42})
-	var remote *RemoteExitError
-	require.ErrorAs(t, err, &remote)
-	require.Equal(t, 42, remote.ExitCode())
-	require.True(t, remote.Silent())
-
-	err = normalizeRemoteExit(&commandprotocol.ExitSignalError{Signal: "SIGTERM"})
-	require.ErrorAs(t, err, &remote)
-	require.Equal(t, 143, remote.ExitCode())
-	require.False(t, remote.Silent())
-
-	err = normalizeRemoteExit(errors.New("runtime"))
-	require.ErrorAs(t, err, &remote)
-	require.Equal(t, 255, remote.ExitCode())
 }
 
 func TestRequestedEnvironmentReadsCurrentProcess(t *testing.T) {

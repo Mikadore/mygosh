@@ -3,144 +3,14 @@ package command
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/Mikadore/mygosh/lib/command/commandpb"
 	"github.com/stretchr/testify/require"
 )
-
-func TestClientServerExecPreservesChunkedOutputAndExit(t *testing.T) {
-	clientConn, serverConn := frameConnPair(48)
-	terminalBytes := []byte{0x00, 0x1b, '[', '3', '1', 'm', 0xff, '\r', '\n'}
-	process := newFakeProcess(ExitResult{})
-	process.stdout = io.NopCloser(bytes.NewReader(bytes.Repeat(terminalBytes, 64)))
-	process.stderr = io.NopCloser(bytes.NewReader([]byte("stderr")))
-	starter := StarterFunc(func(_ context.Context, request StartRequest) (RunningProcess, error) {
-		require.Equal(t, StartExec, request.Kind)
-		require.Equal(t, "printf hello", request.Command)
-		require.Equal(t, map[string]string{"LANG": "C.UTF-8"}, request.Environment)
-		return process, nil
-	})
-
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- Serve(serverConn, starter)
-	}()
-
-	client, err := NewClient(clientConn)
-	require.NoError(t, err)
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	require.NoError(t, client.Start(context.Background(), StartRequest{
-		Kind:        StartExec,
-		Command:     "printf hello",
-		Environment: map[string]string{"LANG": "C.UTF-8"},
-	}, OutputSink{Stdout: &stdout, Stderr: &stderr}))
-	require.NoError(t, client.Wait())
-	require.NoError(t, <-serverErr)
-	require.Equal(t, bytes.Repeat(terminalBytes, 64), stdout.Bytes())
-	require.Equal(t, "stderr", stderr.String())
-}
-
-func TestClientServerStdinEOFAndPTYResize(t *testing.T) {
-	clientConn, serverConn := frameConnPair(128)
-	process := newWaitingFakeProcess()
-	process.finishOnEOF = false
-	starter := StarterFunc(func(_ context.Context, request StartRequest) (RunningProcess, error) {
-		require.Equal(t, StartShell, request.Kind)
-		require.NotNil(t, request.PTY)
-		return process, nil
-	})
-	serverErr := make(chan error, 1)
-	go func() {
-		serverErr <- Serve(serverConn, starter)
-	}()
-
-	client, err := NewClient(clientConn)
-	require.NoError(t, err)
-	require.NoError(t, client.Start(context.Background(), StartRequest{
-		Kind: StartShell,
-		PTY:  &PTYRequest{Terminal: "xterm", Rows: 24, Columns: 80},
-	}, OutputSink{Stdout: io.Discard, Stderr: io.Discard}))
-	require.NoError(t, client.WriteStdin(context.Background(), []byte{0x00, 0xff, 'x'}))
-	require.NoError(t, client.Resize(context.Background(), WindowSize{Rows: 40, Columns: 120}))
-	require.NoError(t, client.CloseStdin(context.Background()))
-	<-process.eofReceived
-	require.ErrorContains(t, client.WriteStdin(context.Background(), []byte("late")), "stdin after EOF")
-	process.finish()
-	require.NoError(t, client.Wait())
-	require.NoError(t, <-serverErr)
-
-	process.mu.Lock()
-	defer process.mu.Unlock()
-	require.Equal(t, []byte{0x00, 0xff, 'x'}, process.stdin.Bytes())
-	require.Equal(t, []WindowSize{{Rows: 40, Columns: 120}}, process.resizes)
-	require.Equal(t, 1, process.eofCount)
-}
-
-func TestClientReportsTypedTerminalResults(t *testing.T) {
-	tests := []struct {
-		name   string
-		result ExitResult
-		check  func(*testing.T, error)
-	}{
-		{name: "status", result: ExitResult{Status: 23}, check: func(t *testing.T, err error) {
-			var target *ExitStatusError
-			require.ErrorAs(t, err, &target)
-		}},
-		{name: "signal", result: ExitResult{Signal: "SIGTERM"}, check: func(t *testing.T, err error) {
-			var target *ExitSignalError
-			require.ErrorAs(t, err, &target)
-		}},
-		{name: "runtime", result: ExitResult{RuntimeFailure: "failed"}, check: func(t *testing.T, err error) {
-			var target *RuntimeError
-			require.ErrorAs(t, err, &target)
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			clientConn, serverConn := frameConnPair(128)
-			go func() {
-				_ = Serve(serverConn, StarterFunc(func(context.Context, StartRequest) (RunningProcess, error) {
-					return newFakeProcess(test.result), nil
-				}))
-			}()
-			client, err := NewClient(clientConn)
-			require.NoError(t, err)
-			require.NoError(t, client.Start(context.Background(), StartRequest{
-				Kind:    StartExec,
-				Command: "false",
-			}, OutputSink{Stdout: io.Discard, Stderr: io.Discard}))
-			err = client.Wait()
-			require.Error(t, err)
-			test.check(t, err)
-		})
-	}
-}
-
-func TestStartRejectionIsGenericAndTyped(t *testing.T) {
-	clientConn, serverConn := frameConnPair(128)
-	go func() {
-		_ = Serve(serverConn, StarterFunc(func(context.Context, StartRequest) (RunningProcess, error) {
-			return nil, errors.New("sensitive local detail")
-		}))
-	}()
-	client, err := NewClient(clientConn)
-	require.NoError(t, err)
-	err = client.Start(context.Background(), StartRequest{
-		Kind:    StartExec,
-		Command: "true",
-	}, OutputSink{Stdout: io.Discard, Stderr: io.Discard})
-	var rejection *StartRejectedError
-	require.ErrorAs(t, err, &rejection)
-	require.Equal(t, genericStartRejectCode, rejection.Code)
-	require.NotContains(t, rejection.Message, "sensitive")
-}
 
 func TestMalformedInitialFrameReceivesRejection(t *testing.T) {
 	clientConn, serverConn := frameConnPair(128)
@@ -197,24 +67,6 @@ func TestPostStartProtocolFailureTerminatesAndSendsRuntimeExit(t *testing.T) {
 	process.mu.Lock()
 	require.True(t, process.terminated)
 	process.mu.Unlock()
-}
-
-func TestClientRejectsOutputBeforeStartAcceptance(t *testing.T) {
-	clientConn, serverConn := frameConnPair(128)
-	go func() {
-		_, _ = serverConn.ReceiveFrame(context.Background())
-		_ = sendServerMessage(serverConn, &commandpb.ServerFrame{
-			Kind: &commandpb.ServerFrame_Stdout{Stdout: &commandpb.Stdout{Data: []byte("early")}},
-		})
-	}()
-	client, err := NewClient(clientConn)
-	require.NoError(t, err)
-	err = client.Start(context.Background(), StartRequest{
-		Kind:    StartExec,
-		Command: "true",
-	}, OutputSink{Stdout: io.Discard, Stderr: io.Discard})
-	var protocolErr *ProtocolError
-	require.ErrorAs(t, err, &protocolErr)
 }
 
 func sendClientMessage(conn FrameConn, message *commandpb.ClientFrame) error {
@@ -398,18 +250,4 @@ func (p *fakeProcess) finish() {
 	p.waitOnce.Do(func() {
 		close(p.wait)
 	})
-}
-
-func TestBlockedStartSendHonorsCancellation(t *testing.T) {
-	clientConn, peer := frameConnPair(128)
-	defer peer.Close() //nolint:errcheck
-	client, err := NewClient(clientConn)
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	err = client.Start(ctx, StartRequest{Kind: StartExec, Command: "true"}, OutputSink{
-		Stdout: io.Discard,
-		Stderr: io.Discard,
-	})
-	require.ErrorIs(t, err, context.DeadlineExceeded)
 }

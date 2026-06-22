@@ -114,7 +114,7 @@ func TestAuthorizeConnectionRejectsMismatchAndMalformedFile(t *testing.T) {
 	})
 }
 
-func TestAuthorizeConnectionAcceptsAuthorizedKeyWithOptions(t *testing.T) {
+func TestAuthorizeConnectionAppliesAuthorizedKeyConstraints(t *testing.T) {
 	clientKey, verified := verifiedFixture(t, "alice")
 	account := testAccount()
 	path := filepath.Join(t.TempDir(), "authorized_keys")
@@ -125,12 +125,89 @@ func TestAuthorizeConnectionAcceptsAuthorizedKeyWithOptions(t *testing.T) {
 			return account, nil
 		}),
 		AuthorizedKeysPaths: []string{path},
+		PermissionPolicy: PermissionPolicyFunc(func(
+			context.Context,
+			ConnectionRequest,
+			usermodel.Account,
+			string,
+		) (PermissionDecision, error) {
+			return PermissionDecision{
+				AllowCommand: true,
+				AllowShell:   true,
+				AllowExec:    true,
+				AllowPTY:     true,
+			}, nil
+		}),
 	})
 	require.NoError(t, err)
 
 	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
 	require.NoError(t, err)
 	require.Equal(t, path, credentials.MatchedSource())
+	require.Equal(t, "locked-down", credentials.MatchedKeyConstraints().ForcedCommand())
+	require.True(t, credentials.MatchedKeyConstraints().NoPTY())
+	require.True(t, credentials.MatchedKeyConstraints().Restricted())
+	require.Equal(t, "locked-down", credentials.Permissions().ForcedCommand())
+	require.False(t, credentials.Permissions().AllowPTY())
+}
+
+func TestAuthorizeConnectionUsesFirstMatchingConfiguredSource(t *testing.T) {
+	clientKey, verified := verifiedFixture(t, "alice")
+	account := testAccount()
+	first := filepath.Join(t.TempDir(), "authorized_keys")
+	second := filepath.Join(t.TempDir(), "authorized_keys")
+	require.NoError(t, os.WriteFile(first, []byte(`command="first" `+authorizedKeysLine(t, clientKey.PublicKey())+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(second, []byte(`command="second" `+authorizedKeysLine(t, clientKey.PublicKey())+"\n"), 0o600))
+
+	authorization, err := New(Config{
+		Resolver: usermodel.ResolverFunc(func(context.Context, string) (usermodel.Account, error) {
+			return account, nil
+		}),
+		AuthorizedKeysPaths: []string{first, second},
+		PermissionPolicy: PermissionPolicyFunc(func(
+			context.Context,
+			ConnectionRequest,
+			usermodel.Account,
+			string,
+		) (PermissionDecision, error) {
+			return PermissionDecision{AllowCommand: true, AllowExec: true}, nil
+		}),
+	})
+	require.NoError(t, err)
+
+	credentials, err := authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
+	require.NoError(t, err)
+	require.Equal(t, first, credentials.MatchedSource())
+	require.Equal(t, "first", credentials.Permissions().ForcedCommand())
+}
+
+func TestAuthorizeConnectionRejectsForcedCommandConflict(t *testing.T) {
+	clientKey, verified := verifiedFixture(t, "alice")
+	path := filepath.Join(t.TempDir(), "authorized_keys")
+	require.NoError(t, os.WriteFile(path, []byte(`command="from-key" `+authorizedKeysLine(t, clientKey.PublicKey())+"\n"), 0o600))
+
+	authorization, err := New(Config{
+		Resolver: usermodel.ResolverFunc(func(context.Context, string) (usermodel.Account, error) {
+			return testAccount(), nil
+		}),
+		AuthorizedKeysPaths: []string{path},
+		PermissionPolicy: PermissionPolicyFunc(func(
+			context.Context,
+			ConnectionRequest,
+			usermodel.Account,
+			string,
+		) (PermissionDecision, error) {
+			return PermissionDecision{
+				AllowCommand:  true,
+				AllowExec:     true,
+				ForcedCommand: "from-config",
+			}, nil
+		}),
+	})
+	require.NoError(t, err)
+
+	_, err = authorization.AuthorizeConnection(context.Background(), ConnectionRequest{VerifiedClient: verified})
+	require.ErrorContains(t, err, "forced commands conflict")
 }
 
 func TestAuthorizeConnectionEnforcesAuthorizedKeysFilePolicy(t *testing.T) {

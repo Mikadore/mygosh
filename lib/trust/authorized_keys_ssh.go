@@ -2,6 +2,7 @@ package trust
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 
 	"github.com/Mikadore/mygosh/lib/keys"
@@ -18,6 +19,19 @@ type AuthorizedKeyOption struct {
 type AuthorizedKeyEntry struct {
 	Options []AuthorizedKeyOption
 	Key     keys.PublicKey
+}
+
+type AuthorizedKeyConstraints struct {
+	ForcedCommand string
+	NoPTY         bool
+	Restricted    bool
+}
+
+func (e *AuthorizedKeyEntry) Constraints() (AuthorizedKeyConstraints, error) {
+	if e == nil {
+		return AuthorizedKeyConstraints{}, eris.New("authorized_keys entry is required")
+	}
+	return parseAuthorizedKeyConstraints(e.Options)
 }
 
 type AuthorizedKeys struct {
@@ -68,6 +82,9 @@ func ParseAuthorizedKeys(contents []byte) (*AuthorizedKeys, error) {
 		if err != nil {
 			return nil, eris.Wrap(err, "parse authorized_keys options")
 		}
+		if _, err := parseAuthorizedKeyConstraints(parsedOptions); err != nil {
+			return nil, eris.Wrap(err, "validate authorized_keys options")
+		}
 
 		out.entries = append(out.entries, AuthorizedKeyEntry{
 			Options: parsedOptions,
@@ -76,6 +93,52 @@ func ParseAuthorizedKeys(contents []byte) (*AuthorizedKeys, error) {
 	}
 
 	return out, nil
+}
+
+func parseAuthorizedKeyConstraints(options []AuthorizedKeyOption) (AuthorizedKeyConstraints, error) {
+	var constraints AuthorizedKeyConstraints
+	seen := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		if _, ok := seen[option.Name]; ok {
+			return AuthorizedKeyConstraints{}, eris.Errorf("duplicate authorized_keys option %q", option.Name)
+		}
+		seen[option.Name] = struct{}{}
+
+		switch option.Name {
+		case "command":
+			if !option.HasValue {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys command option requires a value")
+			}
+			command, err := strconv.Unquote(option.Value)
+			if err != nil {
+				return AuthorizedKeyConstraints{}, eris.Wrap(err, "decode authorized_keys command option")
+			}
+			if strings.TrimSpace(command) == "" {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys command option must not be empty")
+			}
+			if strings.ContainsRune(command, '\x00') {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys command option contains NUL")
+			}
+			if len(command) > 24<<10 {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys command option exceeds maximum size")
+			}
+			constraints.ForcedCommand = command
+		case "no-pty":
+			if option.HasValue {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys no-pty option must not have a value")
+			}
+			constraints.NoPTY = true
+		case "restrict":
+			if option.HasValue {
+				return AuthorizedKeyConstraints{}, eris.New("authorized_keys restrict option must not have a value")
+			}
+			constraints.Restricted = true
+			constraints.NoPTY = true
+		default:
+			return AuthorizedKeyConstraints{}, eris.Errorf("unsupported authorized_keys option %q", option.Name)
+		}
+	}
+	return constraints, nil
 }
 
 func parseAuthorizedKeyOptions(options []string) ([]AuthorizedKeyOption, error) {

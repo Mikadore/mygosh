@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	clientcommand "github.com/Mikadore/mygosh/app/client/command"
 	commandprotocol "github.com/Mikadore/mygosh/lib/command"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/stretchr/testify/require"
@@ -46,28 +48,30 @@ func TestCompleteCommandExchangeOverSessionData(t *testing.T) {
 	require.NoError(t, err)
 	rejectedConn, err := New(rejectedChannel)
 	require.NoError(t, err)
-	rejectedClient, err := commandprotocol.NewClient(rejectedConn)
+	input, err := os.Open(os.DevNull)
 	require.NoError(t, err)
-	err = rejectedClient.Start(context.Background(), commandprotocol.StartRequest{
+	defer input.Close() //nolint:errcheck
+	err = clientcommand.Run(context.Background(), rejectedConn, commandprotocol.StartRequest{
 		Kind:    commandprotocol.StartExec,
 		Command: "reject",
-	}, commandprotocol.OutputSink{Stdout: io.Discard, Stderr: io.Discard})
-	var rejection *commandprotocol.StartRejectedError
+	}, clientcommand.Options{
+		Stdin: input, Stdout: io.Discard, Stderr: io.Discard,
+	})
+	var rejection *clientcommand.StartRejectedError
 	require.ErrorAs(t, err, &rejection)
 
 	commandChannel, err := clientSession.OpenChannel(context.Background(), commandprotocol.ChannelType, nil)
 	require.NoError(t, err)
 	commandConn, err := New(commandChannel)
 	require.NoError(t, err)
-	client, err := commandprotocol.NewClient(commandConn)
-	require.NoError(t, err)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	require.NoError(t, client.Start(context.Background(), commandprotocol.StartRequest{
+	require.NoError(t, clientcommand.Run(context.Background(), commandConn, commandprotocol.StartRequest{
 		Kind:    commandprotocol.StartExec,
 		Command: "ok",
-	}, commandprotocol.OutputSink{Stdout: &stdout, Stderr: &stderr}))
-	require.NoError(t, client.Wait())
+	}, clientcommand.Options{
+		Stdin: input, Stdout: &stdout, Stderr: &stderr,
+	}))
 	require.Equal(t, []byte{0x00, 0xff, 'x'}, stdout.Bytes())
 	require.Equal(t, "err", stderr.String())
 	require.Zero(t, sessionRequests.Load(), "command protocol must not use session requests")

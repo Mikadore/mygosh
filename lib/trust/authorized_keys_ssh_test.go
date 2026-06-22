@@ -19,7 +19,7 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 	contents := strings.Join([]string{
 		"# leading comment",
 		`command="echo hi",no-pty ` + authorizedKeysLine(t, firstKey.PublicKey(), "user-one"),
-		`environment="LANG=C.UTF-8",environment="LC_ALL=C",restrict ` + authorizedKeysLine(t, secondKey.PublicKey(), "user-two"),
+		`restrict ` + authorizedKeysLine(t, secondKey.PublicKey(), "user-two"),
 		"",
 	}, "\n")
 
@@ -42,14 +42,31 @@ func TestParseAuthorizedKeysRetainsOptions(t *testing.T) {
 			},
 			{
 				Options: []AuthorizedKeyOption{
-					{Name: "environment", Value: `"LANG=C.UTF-8"`, HasValue: true},
-					{Name: "environment", Value: `"LC_ALL=C"`, HasValue: true},
 					{Name: "restrict"},
 				},
 				Key: secondExpected,
 			},
 		},
 	}, got)
+
+	first, ok := got.Match(func(entry *AuthorizedKeyEntry) bool {
+		return entry.Key.Equal(firstKey.PublicKey())
+	})
+	require.True(t, ok)
+	constraints, err := first.Constraints()
+	require.NoError(t, err)
+	require.Equal(t, AuthorizedKeyConstraints{
+		ForcedCommand: "echo hi",
+		NoPTY:         true,
+	}, constraints)
+
+	second, ok := got.Match(func(entry *AuthorizedKeyEntry) bool {
+		return entry.Key.Equal(secondKey.PublicKey())
+	})
+	require.True(t, ok)
+	constraints, err = second.Constraints()
+	require.NoError(t, err)
+	require.Equal(t, AuthorizedKeyConstraints{NoPTY: true, Restricted: true}, constraints)
 }
 
 func TestAuthorizedKeysMatchAcceptsOptionBearingEntries(t *testing.T) {
@@ -70,6 +87,28 @@ func TestAuthorizedKeysMatchAcceptsOptionBearingEntries(t *testing.T) {
 		return entry.Key.Equal(rejectedKey.PublicKey())
 	})
 	require.False(t, ok)
+}
+
+func TestParseAuthorizedKeysRejectsUnsupportedAndInvalidOptions(t *testing.T) {
+	key, err := keys.GenerateEd25519()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name    string
+		options string
+		want    string
+	}{
+		{name: "unsupported", options: `environment="LANG=C"`, want: "unsupported"},
+		{name: "duplicate", options: `no-pty,no-pty`, want: "duplicate"},
+		{name: "no pty value", options: `no-pty="yes"`, want: "must not have"},
+		{name: "empty command", options: `command=""`, want: "must not be empty"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ParseAuthorizedKeys([]byte(test.options + " " + authorizedKeysLine(t, key.PublicKey(), "")))
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 func authorizedKeysLine(t *testing.T, publicKey keys.PublicKey, comment string) string {

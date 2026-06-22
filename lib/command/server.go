@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -61,6 +62,12 @@ func (s *server) serve() error {
 		_ = s.sendStartResult(false)
 		return protocolErrorf("invalid start request: %v", err)
 	}
+	slog.Default().With("component", "command-protocol", "role", "server").Debug(
+		"received command start",
+		"kind", request.Kind,
+		"pty", request.PTY != nil,
+		"environment_count", len(request.Environment),
+	)
 
 	process, err := s.starter.Start(s.conn.Context(), request)
 	if err != nil {
@@ -197,16 +204,23 @@ func (s *server) receiveInput(ctx context.Context, process RunningProcess, hasPT
 			if err := process.CloseStdin(); err != nil {
 				return eris.Wrap(err, "close process stdin")
 			}
+			slog.Default().With("component", "command-protocol", "role", "server").Debug("received command stdin EOF")
 		case *commandpb.ClientFrame_WindowChange:
 			if !hasPTY {
 				return protocolErrorf("window change requires PTY")
 			}
-			if err := process.Resize(ctx, WindowSize{
+			size := WindowSize{
 				Rows:    kind.WindowChange.GetRows(),
 				Columns: kind.WindowChange.GetColumns(),
-			}); err != nil {
+			}
+			if err := process.Resize(ctx, size); err != nil {
 				return eris.Wrap(err, "resize process PTY")
 			}
+			slog.Default().With("component", "command-protocol", "role", "server").Debug(
+				"applied terminal resize",
+				"rows", size.Rows,
+				"columns", size.Columns,
+			)
 		default:
 			return protocolErrorf("unsupported client frame %T", message.GetKind())
 		}

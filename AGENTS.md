@@ -29,7 +29,7 @@ The following describes the code as it exists now, not the target architecture:
   command-specific configuration files by default. Each command accepts
   `--config` to select another path.
 - `app/client` owns TCP dialing; `app/server` owns TCP listening and accepting.
-- The server accepts exactly one connection and exits after that connection finishes.
+- The server runs a bounded multi-client accept loop with global and per-source-IP admission limits, temporary accept-error backoff, per-connection panic containment, connection IDs, and bounded graceful shutdown.
 - `lib/transport.Transport` performs a Noise NN handshake and encrypted length-prefixed frame I/O over a `net.Conn`.
 - Auth traffic uses the protobuf `auth.AuthFrame`; post-auth traffic uses `session.Envelope`.
 - `lib/wire` defines transport-neutral `Framer`/`FramedConn` contracts and performs protobuf marshaling plus protovalidate validation.
@@ -37,7 +37,7 @@ The following describes the code as it exists now, not the target architecture:
 - `BeginAccept` returns a pending server establishment after client proof verification. Its context keeps the complete auth timeout active while app policy runs, and its one-shot `Accept`, `Reject`, and `Close` methods do not expose a mux before acceptance.
 - Establishment-owned lifecycle management tracks pre-auth phases and transfers close ownership to `Session` only after the post-auth mux is bound.
 - `lib/auth` verifies server and client signatures, runs the auth wire state machine, and returns an immutable `VerifiedClient` plus a one-shot accept/reject decision. It does not import Unix accounts or authorize client keys.
-- `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, runs account and permission policy seams, and returns immutable connection credentials with deny-by-default connection permissions before wire auth success.
+- `app/server/authz.Authz` resolves accounts, securely reads and matches `authorized_keys`, enforces the supported `command=`, `no-pty`, and `restrict` constraints, runs account and configured permission policy seams, and returns immutable connection credentials with deny-by-default connection permissions before wire auth success.
 - `app/server/services.Registry` binds one credential snapshot to registered channel services. Production composition registers the command service.
 - `lib/session.Session` is the channel/global-request multiplexer. It is prepared separately, bound to an authenticated `wire.FramedConn`, starts its workers after explicit activation, enforces explicit channel states and hard connection/per-channel limits, and still does not itself interpret authenticated credentials.
 - `lib/command` implements a directional protobuf command protocol over an injected framed connection. It owns command ordering, dynamic data chunking, one client receive loop, serialized writes, and typed start/exit/protocol errors without importing session, accounts, authz, TTY, filesystem, or process packages.
@@ -58,6 +58,7 @@ The following describes the code as it exists now, not the target architecture:
 - The server verifies the client signature before invoking local account/key authorization.
 - After auth, the default client opens one command channel for an interactive shell or shell `-c` exec. Global and session-channel requests remain unsupported.
 - The CLI supports default interactive PTY selection, `-t`, `-T`, repeatable `--env`, resize forwarding, cancellable descriptor-polled input, raw terminal restoration, and remote exit propagation.
+- `app/client/command` owns the command client state machine, terminal/input/resize lifecycle, and remote exit mapping; `lib/command` retains shared wire contracts/codecs and the server protocol engine.
 - Terminal and command stream data is carried as raw bytes and tested for byte preservation.
 - `app/logging` owns handlers, output formatting, optional log files, and
   lifecycle. Application audit loggers are passed explicitly; protocol
@@ -68,11 +69,11 @@ The following describes the code as it exists now, not the target architecture:
 
 These are current defects or incomplete boundaries. Do not preserve them merely because existing code uses them:
 
-- Trust-file marker, option, revocation, host matching, and malformed-entry semantics are incomplete.
+- Trust-file compatibility is deliberately narrow: unsupported certificates, hashed/wildcard/negated hosts, host-plus-port identities, and unsupported `authorized_keys` options fail closed.
 - General key and account model values still expose mutable slices, although `VerifiedClient` and `ConnectionCredentials` clone mutable data at their boundaries and accessors return copies.
 - Dial endpoint, host verification identity, client-supplied server name, and audit identity are conflated.
-- The production permission policy is currently an explicit hardcoded demo policy rather than configuration, `authorized_keys` constraints, or PAM.
-- The server still accepts only one connection, and command processes have no PAM session, cgroup, sandbox, or configurable resource-limit integration.
+- Command processes have no PAM session, cgroup, sandbox, or configurable resource-limit integration.
+- Authenticated sessions still run in the daemon process rather than a disposable account worker.
 
 See [`REVIEW.md`](REVIEW.md#findings) for evidence and [`TODO.md`](TODO.md) for the checklist.
 
@@ -227,6 +228,7 @@ This section is factual; package placement is expected to change during boundary
   outputs, formatting, and file lifecycle.
 - `app/root/`: diagnostic logger installation and shutdown hooks.
 - `app/client/`: target parsing, secure client-key/known-host loading, TCP dialing, command CLI behavior, local terminal integration, and exit propagation.
+- `app/client/command/`: app-owned command client state machine, terminal lifecycle, stream forwarding, and remote exit mapping.
 - `app/commandchannel/`: `session.Channel` to `command.FrameConn` adapter.
 - `app/securefiles/`: app-owned anchored traversal and bounded-read policy over `lib/strictfiles`.
 - `app/server/`: secure host-key loading, TCP listener, staged establishment wiring, and demo command policy composition.
@@ -308,4 +310,4 @@ Manual smoke testing currently uses:
 ./run-tmux.sh
 ```
 
-The current smoke path expects the key/trust files documented in [`README.md`](README.md), one accepted connection, successful auth, and an interactive remote shell. Treat successful smoke behavior as demo verification, not evidence of production security.
+The current smoke path expects the key/trust files documented in [`README.md`](README.md), concurrent interactive and non-PTY clients, successful auth, and an interactive remote shell. Treat successful smoke behavior as demo verification, not evidence of production security.

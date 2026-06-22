@@ -16,11 +16,13 @@ if tmux has-session -t "$session" 2>/dev/null; then
 fi
 
 server_cmd='printf "\033]0;mygosh server\007"; echo "server: go run ./bin serve"; go run ./bin serve; status=$?; echo; echo "server exited with status $status"; exec "${SHELL:-/bin/bash}"'
-client_cmd='printf "\033]0;mygosh client\007"; sleep 0.5; echo "client: go run ./bin connect localhost:42022"; go run ./bin connect localhost:42022; status=$?; echo; echo "client exited with status $status"; exec "${SHELL:-/bin/bash}"'
+client_cmd='printf "\033]0;mygosh interactive client\007"; sleep 0.5; echo "client: go run ./bin connect localhost:42022"; go run ./bin connect localhost:42022; status=$?; echo; echo "client exited with status $status"; exec "${SHELL:-/bin/bash}"'
+command_cmd='printf "\033]0;mygosh command client\007"; sleep 1; echo "client: go run ./bin connect -T localhost:42022 uname -a"; go run ./bin connect -T localhost:42022 uname -a; status=$?; echo; echo "command client exited with status $status"; exec "${SHELL:-/bin/bash}"'
 
 tmux new-session -d -s "$session" -n mygosh -c "$root" "$server_cmd"
 tmux split-window -h -t "$session:0" -c "$root" "$client_cmd"
-tmux select-layout -t "$session:0" even-horizontal >/dev/null
+tmux split-window -v -t "$session:0.1" -c "$root" "$command_cmd"
+tmux select-layout -t "$session:0" tiled >/dev/null
 tmux select-pane -t "$session:0.0"
 
 if [[ -n "${TMUX:-}" ]]; then

@@ -49,11 +49,6 @@ type WindowSize struct {
 	Columns uint32
 }
 
-type OutputSink struct {
-	Stdout io.Writer
-	Stderr io.Writer
-}
-
 type ExitResult struct {
 	Status         int
 	Signal         string
@@ -84,54 +79,6 @@ func (f StarterFunc) Start(ctx context.Context, request StartRequest) (RunningPr
 		return nil, eris.New("command starter is required")
 	}
 	return f(ctx, cloneStartRequest(request))
-}
-
-type StartRejectedError struct {
-	Code    string
-	Message string
-}
-
-func (e *StartRejectedError) Error() string {
-	if e == nil {
-		return "command start rejected"
-	}
-	if e.Message == "" {
-		return "command start rejected: " + e.Code
-	}
-	return "command start rejected: " + e.Message
-}
-
-type ExitStatusError struct {
-	Status int
-}
-
-func (e *ExitStatusError) Error() string {
-	if e == nil {
-		return "remote command exited unsuccessfully"
-	}
-	return eris.Errorf("remote command exited with status %d", e.Status).Error()
-}
-
-type ExitSignalError struct {
-	Signal string
-}
-
-func (e *ExitSignalError) Error() string {
-	if e == nil {
-		return "remote command terminated by signal"
-	}
-	return "remote command terminated by signal " + e.Signal
-}
-
-type RuntimeError struct {
-	Message string
-}
-
-func (e *RuntimeError) Error() string {
-	if e == nil || e.Message == "" {
-		return "remote command failed"
-	}
-	return "remote command failed: " + e.Message
 }
 
 type ProtocolError struct {

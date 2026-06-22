@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"sync"
 
-	"github.com/Mikadore/mygosh/lib/command/commandpb"
+	commandprotocol "github.com/Mikadore/mygosh/lib/command"
 	"github.com/rotisserie/eris"
 )
 
@@ -20,26 +21,34 @@ const (
 	clientClosed
 )
 
-type Client struct {
-	conn FrameConn
+type outputSink struct {
+	stdout io.Writer
+	stderr io.Writer
+}
+
+type client struct {
+	conn commandprotocol.FrameConn
 
 	mu       sync.Mutex
 	writeMu  sync.Mutex
 	state    clientState
 	hasPTY   bool
 	stdinEOF bool
-	sink     OutputSink
+	sink     outputSink
 	started  chan error
 	done     chan struct{}
 	waitErr  error
 	close    sync.Once
 }
 
-func NewClient(conn FrameConn) (*Client, error) {
-	if err := validateFrameConn(conn); err != nil {
-		return nil, err
+func newClient(conn commandprotocol.FrameConn) (*client, error) {
+	if conn == nil {
+		return nil, eris.New("command frame connection is required")
 	}
-	return &Client{
+	if conn.MaxSendFrameSize() <= 0 {
+		return nil, eris.New("command maximum send frame size must be greater than zero")
+	}
+	return &client{
 		conn:    conn,
 		state:   clientIdle,
 		started: make(chan error, 1),
@@ -47,9 +56,9 @@ func NewClient(conn FrameConn) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Start(ctx context.Context, request StartRequest, sink OutputSink) error {
+func (c *client) start(ctx context.Context, request commandprotocol.StartRequest, sink outputSink) error {
 	ctx = normalizeContext(ctx)
-	frame, err := encodeStart(request)
+	frame, err := commandprotocol.EncodeClientStart(request, c.conn.MaxSendFrameSize())
 	if err != nil {
 		return err
 	}
@@ -65,7 +74,7 @@ func (c *Client) Start(ctx context.Context, request StartRequest, sink OutputSin
 	c.mu.Unlock()
 
 	go c.receiveLoop()
-	if err := c.sendMessage(ctx, frame); err != nil {
+	if err := c.sendEncoded(ctx, frame); err != nil {
 		c.finish(eris.Wrap(err, "send command start"))
 		return err
 	}
@@ -79,7 +88,7 @@ func (c *Client) Start(ctx context.Context, request StartRequest, sink OutputSin
 	}
 }
 
-func (c *Client) WriteStdin(ctx context.Context, data []byte) error {
+func (c *client) writeStdin(ctx context.Context, data []byte) error {
 	ctx = normalizeContext(ctx)
 	if len(data) == 0 {
 		return nil
@@ -95,13 +104,7 @@ func (c *Client) WriteStdin(ctx context.Context, data []byte) error {
 	}
 	c.mu.Unlock()
 
-	frames, err := chunkedFrames(data, c.conn.MaxSendFrameSize(), func(chunk []byte) *commandpb.ClientFrame {
-		return &commandpb.ClientFrame{
-			Kind: &commandpb.ClientFrame_Stdin{
-				Stdin: &commandpb.Stdin{Data: append([]byte(nil), chunk...)},
-			},
-		}
-	})
+	frames, err := commandprotocol.EncodeClientStdin(data, c.conn.MaxSendFrameSize())
 	if err != nil {
 		return err
 	}
@@ -114,7 +117,7 @@ func (c *Client) WriteStdin(ctx context.Context, data []byte) error {
 	return nil
 }
 
-func (c *Client) CloseStdin(ctx context.Context) error {
+func (c *client) closeStdin(ctx context.Context) error {
 	ctx = normalizeContext(ctx)
 	c.mu.Lock()
 	if c.state != clientRunning {
@@ -128,12 +131,18 @@ func (c *Client) CloseStdin(ctx context.Context) error {
 	c.stdinEOF = true
 	c.mu.Unlock()
 
-	return c.sendMessage(ctx, &commandpb.ClientFrame{
-		Kind: &commandpb.ClientFrame_StdinEof{StdinEof: &commandpb.StdinEof{}},
-	})
+	frame, err := commandprotocol.EncodeClientStdinEOF(c.conn.MaxSendFrameSize())
+	if err != nil {
+		return err
+	}
+	if err := c.sendEncoded(ctx, frame); err != nil {
+		return err
+	}
+	slog.Default().With("component", "client-command").Debug("sent command stdin EOF")
+	return nil
 }
 
-func (c *Client) Resize(ctx context.Context, size WindowSize) error {
+func (c *client) resize(ctx context.Context, size commandprotocol.WindowSize) error {
 	ctx = normalizeContext(ctx)
 	c.mu.Lock()
 	if c.state != clientRunning || !c.hasPTY {
@@ -142,14 +151,14 @@ func (c *Client) Resize(ctx context.Context, size WindowSize) error {
 	}
 	c.mu.Unlock()
 
-	return c.sendMessage(ctx, &commandpb.ClientFrame{
-		Kind: &commandpb.ClientFrame_WindowChange{
-			WindowChange: &commandpb.WindowChange{Rows: size.Rows, Columns: size.Columns},
-		},
-	})
+	frame, err := commandprotocol.EncodeClientWindowChange(size, c.conn.MaxSendFrameSize())
+	if err != nil {
+		return err
+	}
+	return c.sendEncoded(ctx, frame)
 }
 
-func (c *Client) Wait() error {
+func (c *client) wait() error {
 	if c == nil {
 		return eris.New("command client is required")
 	}
@@ -159,7 +168,7 @@ func (c *Client) Wait() error {
 	return c.waitErr
 }
 
-func (c *Client) Close() error {
+func (c *client) closeClient() error {
 	if c == nil {
 		return nil
 	}
@@ -167,7 +176,7 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) receiveLoop() {
+func (c *client) receiveLoop() {
 	for {
 		frame, err := c.conn.ReceiveFrame(c.conn.Context())
 		if err != nil {
@@ -177,85 +186,74 @@ func (c *Client) receiveLoop() {
 			c.finish(eris.Wrap(err, "receive command frame"))
 			return
 		}
-		var message commandpb.ServerFrame
-		if err := unmarshalMessage(frame, &message); err != nil {
+		event, err := commandprotocol.DecodeServerEvent(frame)
+		if err != nil {
 			c.finish(protocolErrorf("invalid server frame: %v", err))
 			return
 		}
-		if err := c.handleServerFrame(&message); err != nil {
+		if err := c.handleServerEvent(event); err != nil {
 			c.finish(err)
 			return
 		}
 	}
 }
 
-func (c *Client) handleServerFrame(frame *commandpb.ServerFrame) error {
+func (c *client) handleServerEvent(event commandprotocol.ServerEvent) error {
 	c.mu.Lock()
 	state := c.state
 	sink := c.sink
+	hasPTY := c.hasPTY
 	c.mu.Unlock()
 
-	switch kind := frame.GetKind().(type) {
-	case *commandpb.ServerFrame_StartResult:
+	switch event.Kind {
+	case commandprotocol.ServerEventStartResult:
 		if state != clientStarting {
 			return protocolErrorf("duplicate or out-of-order start result")
 		}
-		result := kind.StartResult
-		if result.GetAccepted() {
-			if result.GetCode() != "" || result.GetMessage() != "" {
-				return protocolErrorf("accepted start result contains rejection details")
-			}
+		if event.Accepted {
 			c.mu.Lock()
 			c.state = clientRunning
 			c.mu.Unlock()
 			c.started <- nil
 			return nil
 		}
-		err := &StartRejectedError{Code: result.GetCode(), Message: result.GetMessage()}
+		slog.Default().With("component", "client-command").Debug(
+			"command start rejected",
+			"code", event.Code,
+		)
+		err := &StartRejectedError{Code: event.Code, Message: event.Message}
 		c.started <- err
 		return err
-	case *commandpb.ServerFrame_Stdout:
+	case commandprotocol.ServerEventStdout:
 		if state != clientRunning {
 			return protocolErrorf("stdout before start acceptance or after exit")
 		}
-		if sink.Stdout == nil {
+		if sink.stdout == nil {
 			return protocolErrorf("stdout sink is not configured")
 		}
-		if _, err := sink.Stdout.Write(kind.Stdout.GetData()); err != nil {
+		if _, err := sink.stdout.Write(event.Data); err != nil {
 			return eris.Wrap(err, "write command stdout")
 		}
 		return nil
-	case *commandpb.ServerFrame_Stderr:
+	case commandprotocol.ServerEventStderr:
 		if state != clientRunning {
 			return protocolErrorf("stderr before start acceptance or after exit")
 		}
-		if c.hasPTY {
+		if hasPTY {
 			return protocolErrorf("stderr is not legal for a PTY command")
 		}
-		if sink.Stderr == nil {
+		if sink.stderr == nil {
 			return protocolErrorf("stderr sink is not configured")
 		}
-		if _, err := sink.Stderr.Write(kind.Stderr.GetData()); err != nil {
+		if _, err := sink.stderr.Write(event.Data); err != nil {
 			return eris.Wrap(err, "write command stderr")
 		}
 		return nil
-	case *commandpb.ServerFrame_Exit:
+	case commandprotocol.ServerEventExit:
 		if state != clientRunning {
 			return protocolErrorf("duplicate or out-of-order exit")
 		}
-		var waitErr error
-		switch result := kind.Exit.GetResult().(type) {
-		case *commandpb.Exit_Status:
-			if result.Status != 0 {
-				waitErr = &ExitStatusError{Status: int(result.Status)}
-			}
-		case *commandpb.Exit_Signal:
-			waitErr = &ExitSignalError{Signal: result.Signal}
-		case *commandpb.Exit_RuntimeFailure:
-			waitErr = &RuntimeError{Message: result.RuntimeFailure.GetMessage()}
-		default:
-			return protocolErrorf("exit result is required")
-		}
+		waitErr := terminalResult(event.Exit)
 		c.mu.Lock()
 		c.state = clientExited
 		c.waitErr = waitErr
@@ -263,25 +261,17 @@ func (c *Client) handleServerFrame(frame *commandpb.ServerFrame) error {
 		c.finish(waitErr)
 		return nil
 	default:
-		return protocolErrorf("unsupported server frame %T", frame.GetKind())
+		return protocolErrorf("unsupported server event %d", event.Kind)
 	}
 }
 
-func (c *Client) sendMessage(ctx context.Context, message *commandpb.ClientFrame) error {
-	frame, err := marshalMessage(message, c.conn.MaxSendFrameSize())
-	if err != nil {
-		return err
-	}
-	return c.sendEncoded(ctx, frame)
-}
-
-func (c *Client) sendEncoded(ctx context.Context, frame []byte) error {
+func (c *client) sendEncoded(ctx context.Context, frame []byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	return c.conn.SendFrame(ctx, frame)
 }
 
-func (c *Client) finish(err error) {
+func (c *client) finish(err error) {
 	c.close.Do(func() {
 		c.mu.Lock()
 		if c.waitErr == nil {
@@ -300,4 +290,15 @@ func (c *Client) finish(err error) {
 		_ = c.conn.Close()
 		close(c.done)
 	})
+}
+
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func protocolErrorf(format string, args ...any) error {
+	return &commandprotocol.ProtocolError{Message: eris.Errorf(format, args...).Error()}
 }

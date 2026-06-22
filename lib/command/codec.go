@@ -86,6 +86,108 @@ func encodeStart(request StartRequest) (*commandpb.ClientFrame, error) {
 	}, nil
 }
 
+// EncodeClientStart validates and encodes one command start frame.
+func EncodeClientStart(request StartRequest, maximum int) ([]byte, error) {
+	message, err := encodeStart(request)
+	if err != nil {
+		return nil, err
+	}
+	return marshalMessage(message, maximum)
+}
+
+// EncodeClientStdin validates and chunks command input into client frames.
+func EncodeClientStdin(data []byte, maximum int) ([][]byte, error) {
+	return chunkedFrames(data, maximum, func(chunk []byte) *commandpb.ClientFrame {
+		return &commandpb.ClientFrame{
+			Kind: &commandpb.ClientFrame_Stdin{
+				Stdin: &commandpb.Stdin{Data: append([]byte(nil), chunk...)},
+			},
+		}
+	})
+}
+
+// EncodeClientStdinEOF encodes the one-shot client stdin EOF frame.
+func EncodeClientStdinEOF(maximum int) ([]byte, error) {
+	return marshalMessage(&commandpb.ClientFrame{
+		Kind: &commandpb.ClientFrame_StdinEof{StdinEof: &commandpb.StdinEof{}},
+	}, maximum)
+}
+
+// EncodeClientWindowChange encodes a PTY window-size update.
+func EncodeClientWindowChange(size WindowSize, maximum int) ([]byte, error) {
+	return marshalMessage(&commandpb.ClientFrame{
+		Kind: &commandpb.ClientFrame_WindowChange{
+			WindowChange: &commandpb.WindowChange{Rows: size.Rows, Columns: size.Columns},
+		},
+	}, maximum)
+}
+
+type ServerEventKind uint8
+
+const (
+	ServerEventStartResult ServerEventKind = iota + 1
+	ServerEventStdout
+	ServerEventStderr
+	ServerEventExit
+)
+
+// ServerEvent is the protobuf-independent result of decoding one server frame.
+type ServerEvent struct {
+	Kind     ServerEventKind
+	Accepted bool
+	Code     string
+	Message  string
+	Data     []byte
+	Exit     ExitResult
+}
+
+// DecodeServerEvent validates and decodes one server-to-client command frame.
+func DecodeServerEvent(frame []byte) (ServerEvent, error) {
+	var message commandpb.ServerFrame
+	if err := unmarshalMessage(frame, &message); err != nil {
+		return ServerEvent{}, err
+	}
+
+	switch kind := message.GetKind().(type) {
+	case *commandpb.ServerFrame_StartResult:
+		result := kind.StartResult
+		if result.GetAccepted() && (result.GetCode() != "" || result.GetMessage() != "") {
+			return ServerEvent{}, protocolErrorf("accepted start result contains rejection details")
+		}
+		return ServerEvent{
+			Kind:     ServerEventStartResult,
+			Accepted: result.GetAccepted(),
+			Code:     result.GetCode(),
+			Message:  result.GetMessage(),
+		}, nil
+	case *commandpb.ServerFrame_Stdout:
+		return ServerEvent{
+			Kind: ServerEventStdout,
+			Data: append([]byte(nil), kind.Stdout.GetData()...),
+		}, nil
+	case *commandpb.ServerFrame_Stderr:
+		return ServerEvent{
+			Kind: ServerEventStderr,
+			Data: append([]byte(nil), kind.Stderr.GetData()...),
+		}, nil
+	case *commandpb.ServerFrame_Exit:
+		event := ServerEvent{Kind: ServerEventExit}
+		switch result := kind.Exit.GetResult().(type) {
+		case *commandpb.Exit_Status:
+			event.Exit.Status = int(result.Status)
+		case *commandpb.Exit_Signal:
+			event.Exit.Signal = result.Signal
+		case *commandpb.Exit_RuntimeFailure:
+			event.Exit.RuntimeFailure = result.RuntimeFailure.GetMessage()
+		default:
+			return ServerEvent{}, protocolErrorf("exit result is required")
+		}
+		return event, nil
+	default:
+		return ServerEvent{}, protocolErrorf("unsupported server frame %T", message.GetKind())
+	}
+}
+
 func decodeStart(start *commandpb.Start) (StartRequest, error) {
 	if start == nil {
 		return StartRequest{}, eris.New("start frame is required")

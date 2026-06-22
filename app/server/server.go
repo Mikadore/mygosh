@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 
 	"github.com/Mikadore/mygosh/app/config"
@@ -13,6 +14,7 @@ import (
 	serverservices "github.com/Mikadore/mygosh/app/server/services"
 	usermodel "github.com/Mikadore/mygosh/lib/account"
 	"github.com/Mikadore/mygosh/lib/establish"
+	"github.com/Mikadore/mygosh/lib/keys"
 	"github.com/Mikadore/mygosh/lib/session"
 	"github.com/rotisserie/eris"
 )
@@ -43,18 +45,14 @@ func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error
 			usermodel.Account,
 			string,
 		) (serverauthz.PermissionDecision, error) {
+			permissions := cfg.Authorization.Permissions
 			return serverauthz.PermissionDecision{
-				AllowCommand: true,
-				AllowShell:   true,
-				AllowExec:    true,
-				AllowPTY:     true,
-				AllowedEnvironment: []string{
-					"TERM",
-					"COLORTERM",
-					"LANG",
-					"LC_ALL",
-					"LC_CTYPE",
-				},
+				AllowCommand:       permissions.AllowShell || permissions.AllowExec,
+				AllowShell:         permissions.AllowShell,
+				AllowExec:          permissions.AllowExec,
+				AllowPTY:           permissions.AllowPTY,
+				ForcedCommand:      permissions.ForcedCommand,
+				AllowedEnvironment: append([]string(nil), permissions.AllowedEnvironment...),
 			}, nil
 		}),
 		AuditLogger: logger,
@@ -67,28 +65,34 @@ func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error
 	if err != nil {
 		return eris.Wrapf(err, "listen on %s", addr)
 	}
-	stopClosingListener := context.AfterFunc(ctx, func() {
-		_ = listener.Close()
-	})
-	defer stopClosingListener()
-	//TODO: implement comprehensive connection lifecycle
-	// and integrate connection closing/termination with
-	// logging and application error handling
-	//nolint:errcheck
-	defer listener.Close()
 	logger.Info("listening", "addr", listener.Addr())
 
-	conn, err := listener.Accept()
+	commandService, err := servercommand.NewService(authorization, serverprocess.Runner{})
 	if err != nil {
-		if cause := context.Cause(ctx); cause != nil {
-			return cause
-		}
-		return eris.Wrap(err, "accept connection")
+		return eris.Wrap(err, "configure command service")
 	}
-	logger.Info("accepted connection", "remote", conn.RemoteAddr())
+
+	return runDaemon(ctx, listener, cfg.Daemon, logger, func(connectionCtx context.Context, conn net.Conn, connectionID string) error {
+		return serveConnection(connectionCtx, conn, connectionID, serverHostKey, authorization, commandService, logger)
+	})
+}
+
+func serveConnection(
+	ctx context.Context,
+	conn net.Conn,
+	connectionID string,
+	hostKey keys.Keypair,
+	authorization *serverauthz.Authz,
+	commandService *servercommand.Service,
+	logger *slog.Logger,
+) error {
+	connectionLogger := logger.With(
+		"connection_id", connectionID,
+		"remote", conn.RemoteAddr(),
+	)
 
 	pending, err := establish.BeginAccept(ctx, conn, establish.ServerConfig{
-		HostKey: serverHostKey,
+		HostKey: hostKey,
 	})
 	if err != nil {
 		return eris.Wrap(err, "establish session")
@@ -100,16 +104,11 @@ func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error
 		PeerAddress:    conn.RemoteAddr().String(),
 	})
 	if err != nil {
-		logger.Error("connection authorization failed", "err", err)
+		connectionLogger.Error("connection authorization failed", "err", err)
 		rejectErr := pending.Reject()
 		return errors.Join(eris.Wrap(err, "authorize connection"), rejectErr)
 	}
 
-	commandService, err := servercommand.NewService(authorization, serverprocess.Runner{})
-	if err != nil {
-		_ = pending.Reject()
-		return eris.Wrap(err, "configure command service")
-	}
 	registry, err := serverservices.NewRegistry(credentials, authorization, commandService)
 	if err != nil {
 		_ = pending.Reject()
@@ -125,9 +124,10 @@ func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error
 	if err != nil {
 		return eris.Wrap(err, "accept authenticated connection")
 	}
+	defer established.Close() //nolint:errcheck
 
 	account := credentials.Account()
-	logger.Info(
+	connectionLogger.Info(
 		"authenticated client",
 		"requested_username", credentials.RequestedUsername(),
 		"local_username", account.Username,
@@ -136,6 +136,6 @@ func RunServer(ctx context.Context, appRoot *root.Root, cfg config.Server) error
 		"source", credentials.MatchedSource(),
 		"fingerprint", credentials.KeyFingerprint(),
 	)
-	logger.Info("authenticated session established", "post_auth_mode", "command")
+	connectionLogger.Info("authenticated session established", "post_auth_mode", "command")
 	return established.Wait()
 }

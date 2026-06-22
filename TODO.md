@@ -9,9 +9,6 @@ already exists.
 
 | Done | ID | Priority | Area | Task |
 |---|---|---:|---|---|
-| [ ] | E1 | P0 | Server app | Replace the one-connection demo with a bounded daemon accept loop |
-| [ ] | T2 | P1 | Trust/files | Define and enforce supported `authorized_keys` and `known_hosts` semantics |
-| [ ] | C3 | P1 | Authorization | Replace the hardcoded demo command policy with production policy inputs |
 | [ ] | U1 | P1 | Accounts | Add PAM account checks and correctly owned PAM session lifecycle |
 | [ ] | R2 | P1 | Architecture | Finish enforcing one-way app, protocol, security, and Unix-platform dependencies |
 | [ ] | W1 | P1 | Worker boundary | Move each authenticated post-auth runtime into a disposable account worker |
@@ -30,30 +27,6 @@ for a credible v1, **P2** is important hardening/design work, and **P3** is
 cleanup after the boundaries are stable.
 
 ## Task notes
-
-### E1 — Build a real server accept loop
-
-Load long-lived configuration and host keys before listening, then accept
-multiple clients with global and per-source concurrency controls, temporary
-accept-error backoff, per-connection panic containment, monitor-generated
-connection IDs, and graceful shutdown. TCP lifecycle and admission policy
-remain application responsibilities.
-
-### T2 — Define trust-file semantics
-
-Choose and document the supported subset of OpenSSH `authorized_keys` and
-`known_hosts` formats, including options, revocation and certificate-authority
-markers, hashed and wildcard hosts, malformed entries, and host-plus-port
-identities. Unsupported security-significant syntax must fail explicitly or
-produce enforced constraints instead of being silently skipped.
-
-### C3 — Replace the demo authorization policy
-
-Replace the production server's hardcoded allow-shell, allow-exec, allow-PTY,
-and environment allowlist with deny-by-default configuration and constraints
-derived from trusted authorization inputs. Preserve request-specific checks
-before allocating a PTY or starting a process, including forced-command, PTY,
-and environment restrictions.
 
 ### U1 — Integrate PAM policy and sessions
 

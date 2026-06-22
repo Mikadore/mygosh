@@ -52,14 +52,14 @@ func knownHostsVerifier(knownHosts *trust.KnownHosts, source string, logger *slo
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return auth.HostKeyVerifierFunc(func(_ context.Context, req auth.HostKeyVerificationRequest) error {
-		entry, ok := knownHosts.Match(func(entry *trust.KnownHostEntry) bool {
-			return entry.MatchesValid(req.ReferenceIdentity)
-		})
-		if !ok {
-			return eris.Errorf("no known host keys for reference identity %q", req.ReferenceIdentity)
-		}
-		if !entry.HostKey.Equal(req.HostKey) {
+		switch knownHosts.MatchHostKey(req.ReferenceIdentity, req.HostKey) {
+		case trust.HostKeyAccepted:
+		case trust.HostKeyRevoked:
+			return eris.Errorf("host key fingerprint %s is revoked for reference identity %q", req.HostKey.FingerprintSHA256(), req.ReferenceIdentity)
+		case trust.HostKeyMismatch:
 			return eris.Errorf("unexpected host key fingerprint %s for reference identity %q", req.HostKey.FingerprintSHA256(), req.ReferenceIdentity)
+		default:
+			return eris.Errorf("no known host keys for reference identity %q", req.ReferenceIdentity)
 		}
 		logger.Info(
 			"known_hosts matched server identity",
